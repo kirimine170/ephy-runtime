@@ -6,6 +6,23 @@ Phase 1 の実装に加えて、Phase 2 の入口と Go + Wails デスクトッ�
 
 EphyのIdentity，Profile，Memory，Growth及びInstance Lifecycleの設計は，[`docs/design/`](docs/design/README.md)を正本とする．設計判断と理由は，[`docs/adr/`](docs/adr/README.md)で管理する．
 
+## 最初の会話
+
+配置を移動した場合も含め，まずruntimeとmodelを確認してから，標準stackを1コマンドで起動する．
+
+```bash
+./scripts/phase1.sh check
+./scripts/phase1.sh
+```
+
+WailsのChat画面で「こんにちは，自己紹介して」と送信し，stream応答が返れば会話経路は利用可能である．終了時は次を実行する．
+
+```bash
+./scripts/phase1.sh stop
+```
+
+会話MVPの範囲，完了条件，優先順は[`docs/CONVERSATION_MVP.md`](docs/CONVERSATION_MVP.md)を参照する．
+
 ## 含まれるもの
 
 - FastAPI ベースの Gateway
