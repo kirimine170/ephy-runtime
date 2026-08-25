@@ -23,6 +23,12 @@ status_line() {
 
 echo "workspace: ${ROOT_DIR}"
 status_line "llama-server" "${LLAMA_SERVER_BIN}"
+if probe_llama_server; then
+  echo "[ok]   llama-server runtime: dynamic libraries are loadable"
+else
+  echo "[fail] llama-server runtime: executable exists but cannot load its dynamic libraries" >&2
+  exit 1
+fi
 status_line "fast model" "${FAST_MODEL_PATH}"
 status_line "work model" "${WORK_MODEL_PATH}"
 status_line "code model" "${CODE_MODEL_PATH}"

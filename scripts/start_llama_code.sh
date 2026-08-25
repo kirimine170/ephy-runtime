@@ -7,7 +7,7 @@ MODEL_PATH="$(resolve_code_model_path || true)"
 require_llama_server
 require_file "${MODEL_PATH}" "code model"
 
-exec "${LLAMA_SERVER_BIN}" \
+exec_llama_server \
   -m "${MODEL_PATH}" \
   --host 127.0.0.1 \
   --port 8083 \

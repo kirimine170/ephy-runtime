@@ -27,6 +27,7 @@ QDRANT_HTTP_HOST="${QDRANT_HTTP_HOST:-127.0.0.1}"
 QDRANT_HTTP_PORT="${QDRANT_HTTP_PORT:-6333}"
 QDRANT_GRPC_PORT="${QDRANT_GRPC_PORT:-6334}"
 LLAMA_SERVER_BIN="${ROOT_DIR}/llama.cpp/build/bin/llama-server"
+LLAMA_SERVER_LIB_DIR="$(dirname "${LLAMA_SERVER_BIN}")"
 MODEL_ROOT_DIR="${ROOT_DIR}/llama.cpp/models"
 
 FAST_MODEL_DEFAULT="${ROOT_DIR}/llama.cpp/models/qwen3-8b-gguf/Qwen3-8B-Q6_K.gguf"
@@ -182,6 +183,29 @@ require_llama_server() {
     echo "llama-server not found: ${LLAMA_SERVER_BIN}" >&2
     exit 1
   fi
+}
+
+configure_llama_server_library_path() {
+  case "$(uname -s)" in
+    Darwin)
+      export DYLD_LIBRARY_PATH="${LLAMA_SERVER_LIB_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+      ;;
+    Linux)
+      export LD_LIBRARY_PATH="${LLAMA_SERVER_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+      ;;
+  esac
+}
+
+probe_llama_server() {
+  (
+    configure_llama_server_library_path
+    "${LLAMA_SERVER_BIN}" --version >/dev/null 2>&1
+  )
+}
+
+exec_llama_server() {
+  configure_llama_server_library_path
+  exec "${LLAMA_SERVER_BIN}" "$@"
 }
 
 require_file() {
