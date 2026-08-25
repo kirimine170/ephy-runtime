@@ -78,7 +78,7 @@ class RagService:
         ".pytest_cache",
         ".mypy_cache",
     }
-    _LW_DATA_DIRNAME = "LW_data"
+    _EPHY_DATA_DIRNAME = "EPHY_data"
     _CHAT_GROUNDING_MIN_SCORE = 0.2
     _CHAT_GROUNDING_MAX_SOURCES = 5
     _EMBED_BATCH_SIZE = 16
@@ -105,7 +105,7 @@ class RagService:
                 raise ValueError(f"Path does not exist: {raw_path}")
             copied_pairs = self._copy_ingest_source(path=path, recursive=payload.recursive, project=payload.project)
             replace_roots.add(str(path.resolve()))
-            replace_roots.add(str(self._build_lw_data_destination(path.resolve(), payload.project).resolve()))
+            replace_roots.add(str(self._build_ephy_data_destination(path.resolve(), payload.project).resolve()))
             for file_path, original_source_path in copied_pairs:
                 indexed_documents += 1
                 copied_files.append(str(file_path.resolve()))
@@ -128,7 +128,7 @@ class RagService:
             "total_chunks": total_chunks,
             "collection": self._config.vector_db.collection,
             "provider": self._config.vector_db.provider,
-            "lw_data_root": str(self._lw_data_root().resolve()),
+            "ephy_data_root": str(self._ephy_data_root().resolve()),
             "copied_files": copied_files,
         }
 
@@ -343,7 +343,7 @@ class RagService:
         project: str | None,
     ) -> list[tuple[Path, str]]:
         source_root = path.resolve()
-        destination_root = self._build_lw_data_destination(source_root, project)
+        destination_root = self._build_ephy_data_destination(source_root, project)
         if destination_root.exists():
             shutil.rmtree(destination_root)
         destination_root.mkdir(parents=True, exist_ok=True)
@@ -366,18 +366,18 @@ class RagService:
             copied_pairs.append((destination_path, str(file_path.resolve())))
         return copied_pairs
 
-    def _build_lw_data_destination(self, source_root: Path, project: str | None) -> Path:
+    def _build_ephy_data_destination(self, source_root: Path, project: str | None) -> Path:
         root_label = self._slugify_path_component(source_root.name or "root")
         source_hash = hashlib.sha1(str(source_root).encode("utf-8")).hexdigest()[:12]
         project_label = self._slugify_path_component(project or "default")
-        return self._lw_data_root() / project_label / f"{root_label}-{source_hash}"
+        return self._ephy_data_root() / project_label / f"{root_label}-{source_hash}"
 
     @classmethod
-    def _lw_data_root(cls) -> Path:
-        override = os.getenv("LW_DATA_ROOT", "").strip()
+    def _ephy_data_root(cls) -> Path:
+        override = os.getenv("EPHY_RUNTIME_DATA_ROOT", "").strip()
         if override:
             return Path(override)
-        return ROOT_DIR.parent / cls._LW_DATA_DIRNAME
+        return ROOT_DIR.parent / cls._EPHY_DATA_DIRNAME
 
     @staticmethod
     def _slugify_path_component(value: str) -> str:

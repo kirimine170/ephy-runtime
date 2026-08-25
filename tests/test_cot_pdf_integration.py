@@ -9,21 +9,21 @@ from packages.rag_core.service import RagService
 
 
 def _managed_cot_paper() -> Path | None:
-    matches = sorted((ROOT_DIR.parent / "LW_data" / "papers").glob("**/2201.11903v6.pdf"))
+    matches = sorted((ROOT_DIR.parent / "EPHY_data" / "papers").glob("**/2201.11903v6.pdf"))
     return matches[0] if matches else None
 
 
 def test_real_cot_pdf_extracts_and_is_searchable(monkeypatch, tmp_path) -> None:
     paper = _managed_cot_paper()
     if paper is None:
-        pytest.skip("managed CoT paper is not available in LW_data")
+        pytest.skip("managed CoT paper is not available in EPHY_data")
 
     sections = load_document_sections(paper)
     assert len(sections) == 43
     assert sections[0][0] == ["Page 1"]
     assert "Chain-of-Thought Prompting Elicits Reasoning" in sections[0][1]
 
-    monkeypatch.setenv("LW_DATA_ROOT", str(tmp_path / "LW_data"))
+    monkeypatch.setenv("EPHY_RUNTIME_DATA_ROOT", str(tmp_path / "EPHY_data"))
     service = RagService(
         config=AppConfig(
             rag=RagConfig(embedding_provider="local_hash", embedding_dimensions=64),
@@ -41,5 +41,5 @@ def test_real_cot_pdf_extracts_and_is_searchable(monkeypatch, tmp_path) -> None:
         and "Chain-of-Thought Prompting Elicits Reasoning" in item["chunk_text"]
         for item in result["results"]
     )
-    assert result["results"][0]["source_path"].startswith(str((tmp_path / "LW_data").resolve()))
+    assert result["results"][0]["source_path"].startswith(str((tmp_path / "EPHY_data").resolve()))
     assert result["results"][0]["original_source_path"] == str(paper.resolve())

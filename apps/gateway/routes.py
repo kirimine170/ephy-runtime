@@ -82,7 +82,7 @@ def build_router() -> APIRouter:
         config = request.app.state.app_config
         return {
             "status": "ok",
-            "service": "local-llm-workbench-gateway",
+            "service": "ephy-runtime-gateway",
             "configured_models": sorted(config.models.keys()),
             "web_search_enabled": config.web_search.enabled,
         }

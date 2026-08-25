@@ -12,5 +12,11 @@ exec "${LLAMA_SERVER_BIN}" \
   --host 127.0.0.1 \
   --port 8083 \
   --ctx-size 32768 \
-  --alias qwen3-coder-30b-a3b \
-  --n-gpu-layers 99
+  --alias qwen3.8-27b \
+  --n-gpu-layers 99 \
+  --flash-attn on \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --jinja \
+  --reasoning-format deepseek \
+  --reasoning-preserve

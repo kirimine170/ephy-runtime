@@ -29,7 +29,7 @@ def test_auto_routing_prefers_code_for_implementation_requests() -> None:
 
     assert decision.mode == "code"
     assert decision.model_alias == "code"
-    assert decision.selected_model.model == "qwen3-coder-30b-a3b"
+    assert decision.selected_model.model == "qwen3.8-27b"
 
 
 def test_auto_routing_prefers_work_for_long_non_code_requests() -> None:

@@ -4,6 +4,12 @@ import argparse
 import json
 import sys
 
+from packages.agent_core import (
+    AgentRunStatus,
+    DEFAULT_MODEL as DEFAULT_QWEN38_MODEL,
+    LlamaCppCodingAgent,
+    LlamaCppRequestError,
+)
 from packages.config_core.loader import load_app_config
 from packages.karte_core.service import export_karte_bundle, import_karte_bundle
 from packages.runtime_core.smoke import SmokeRunner
@@ -16,7 +22,7 @@ from packages.router_core.router import ModelRouter
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="local-llm-workbench")
+    parser = argparse.ArgumentParser(prog="ephy-runtime")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     ingest = subparsers.add_parser("ingest")
@@ -73,10 +79,24 @@ def build_parser() -> argparse.ArgumentParser:
     karte_export.add_argument("--source-query")
     karte_export.add_argument("--tags", nargs="*", default=[])
 
+    agent = subparsers.add_parser("agent", help="Run the local Qwen3.8 coding-agent PoC")
+    agent.add_argument("task")
+    agent.add_argument("--workspace", default=".")
+    agent.add_argument("--model", default=DEFAULT_QWEN38_MODEL)
+    agent.add_argument("--llama-url", default="http://127.0.0.1:8083/v1")
+    agent.add_argument("--max-steps", type=int, default=24)
+    agent.add_argument("--temperature", type=float, default=0.2)
+    agent.add_argument("--reasoning-effort", choices=("low", "medium", "high", "max"), default="medium")
+    agent.add_argument("--read-only", action="store_true")
+    agent.add_argument("--yes", action="store_true", help="Approve every mutation without an interactive prompt")
+
     return parser
 
 
 async def run_async(args: argparse.Namespace) -> int:
+    if args.command == "agent":
+        return await _run_agent(args)
+
     config = load_app_config()
     rag_service = RagService(config=config)
 
@@ -186,6 +206,67 @@ async def run_async(args: argparse.Namespace) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 
+    return 1
+
+
+async def _run_agent(args: argparse.Namespace) -> int:
+    def report_event(name: str, payload: dict[str, object]) -> None:
+        if name == "model_start":
+            print(f"[agent] model turn {payload['turn']}...", file=sys.stderr, flush=True)
+        elif name == "tool_start":
+            print(f"[agent] tool: {payload['tool']}", file=sys.stderr, flush=True)
+        elif name == "tool_result":
+            print(
+                f"[agent] tool result: {payload['tool']} -> {payload['status']}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    agent = LlamaCppCodingAgent(
+        model=args.model,
+        base_url=args.llama_url,
+        max_steps=args.max_steps,
+        include_mutations=not args.read_only,
+        reasoning_effort=args.reasoning_effort,
+        temperature=args.temperature,
+        event_handler=report_event,
+    )
+    try:
+        session = await agent.start(args.task, args.workspace)
+        while session.status == AgentRunStatus.APPROVAL_REQUIRED:
+            pending = session.pending_approval
+            if pending is None:
+                raise RuntimeError("approval state is inconsistent")
+            print(
+                json.dumps(
+                    {
+                        "approval_required": pending.public_tool_name,
+                        "preview": pending.plan.preview,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                file=sys.stderr,
+            )
+            approved = args.yes
+            if not approved and sys.stdin.isatty():
+                answer = input("Approve this one action? [y/N] ").strip().casefold()
+                approved = answer in {"y", "yes"}
+            if not approved:
+                agent.deny(session)
+                break
+            session = await agent.approve_and_resume(session)
+    except (LlamaCppRequestError, OSError, ValueError) as exc:
+        print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False, indent=2))
+        return 1
+    finally:
+        await agent.aclose()
+
+    print(json.dumps(session.summary(agent.model), ensure_ascii=False, indent=2))
+    if session.status == AgentRunStatus.COMPLETED:
+        return 0
+    if session.status in {AgentRunStatus.APPROVAL_REQUIRED, AgentRunStatus.APPROVAL_DENIED}:
+        return 2
     return 1
 
 

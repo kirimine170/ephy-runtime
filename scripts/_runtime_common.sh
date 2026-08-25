@@ -31,7 +31,7 @@ MODEL_ROOT_DIR="${ROOT_DIR}/llama.cpp/models"
 
 FAST_MODEL_DEFAULT="${ROOT_DIR}/llama.cpp/models/qwen3-8b-gguf/Qwen3-8B-Q6_K.gguf"
 WORK_MODEL_DEFAULT="${ROOT_DIR}/llama.cpp/models/qwen3-30b-a3b-gguf/Qwen3-30B-A3B-Q4_K_M.gguf"
-CODE_MODEL_DEFAULT="${ROOT_DIR}/llama.cpp/models/qwen3-coder-30b-a3b-gguf/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"
+CODE_MODEL_DEFAULT="${ROOT_DIR}/llama.cpp/models/qwen3.8-27b-gguf/Qwen3.8-27B-Q4_K_M.gguf"
 EMBEDDING_MODEL_DEFAULT="${ROOT_DIR}/llama.cpp/models/qwen3-embedding-0.6b-gguf/Qwen3-Embedding-0.6B-Q8_0.gguf"
 RUNTIME_READY_TIMEOUT_SECONDS="${RUNTIME_READY_TIMEOUT_SECONDS:-180}"
 RUNTIME_READY_INTERVAL_SECONDS="${RUNTIME_READY_INTERVAL_SECONDS:-1}"
@@ -89,7 +89,7 @@ use_default_settings:
       - duckduckgo
 general:
   debug: false
-  instance_name: Local LLM Workbench Search
+  instance_name: Ephy Runtime Search
 search:
   safe_search: 1
   autocomplete: ''
@@ -169,7 +169,7 @@ resolve_work_model_path() {
 
 resolve_code_model_path() {
   resolve_existing_path "${CODE_MODEL_PATH:-}" "${CODE_MODEL_DEFAULT}" || \
-    find_model_by_pattern 'Qwen3-Coder-30B-A3B*.gguf'
+    find_model_by_pattern 'Qwen3.8-27B*.gguf'
 }
 
 resolve_embedding_model_path() {

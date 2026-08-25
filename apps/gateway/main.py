@@ -43,5 +43,5 @@ async def lifespan(app: FastAPI):
         await adapter.aclose()
 
 
-app = FastAPI(title="Local LLM Workbench Gateway", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Ephy Runtime Gateway", version="0.1.0", lifespan=lifespan)
 app.include_router(build_router())

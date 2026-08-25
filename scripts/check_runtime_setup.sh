@@ -99,7 +99,7 @@ recommended commands:
   compatibility aliases:
     ./scripts/full_feature.sh
     ./scripts/run_full_feature.sh
-    ./scripts/start_local_llm_workbench.sh
+    ./scripts/start_ephy_runtime.sh
 
   command summary:
     ./scripts/print_startup_commands.sh

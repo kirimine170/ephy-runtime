@@ -17,7 +17,7 @@ def test_load_app_config_contains_phase1_models() -> None:
 
 
 def test_load_app_config_applies_local_overrides(tmp_path, monkeypatch) -> None:
-    monkeypatch.delenv("LOCAL_LLM_WORKBENCH_DISABLE_LOCAL_CONFIG", raising=False)
+    monkeypatch.delenv("EPHY_RUNTIME_DISABLE_LOCAL_CONFIG", raising=False)
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
     (config_dir / "models.yaml").write_text(

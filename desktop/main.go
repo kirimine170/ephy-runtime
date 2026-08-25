@@ -15,7 +15,7 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:     "Local LLM Workbench",
+		Title:     "Ephy Runtime",
 		Width:     1320,
 		Height:    920,
 		MinWidth:  1024,

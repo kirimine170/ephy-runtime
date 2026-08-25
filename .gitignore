@@ -34,7 +34,7 @@ data/index/*
 data/logs/
 data/runtime/
 tmp/
-LW_data/
+EPHY_data/
 .qdrant-initialized
 .coverage
 coverage.out

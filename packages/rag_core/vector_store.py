@@ -246,7 +246,7 @@ class QdrantVectorStore(VectorStore):
 
 
 def build_vector_store(config: VectorDBConfig, client: httpx.Client | None = None) -> VectorStore:
-    store_path_override = os.getenv("LOCAL_LLM_WORKBENCH_INDEX_PATH", "").strip()
+    store_path_override = os.getenv("EPHY_RUNTIME_INDEX_PATH", "").strip()
     use_default_store = config.store_path == "data/index/local_docs.json"
     store_path = Path(store_path_override) if store_path_override and use_default_store else ROOT_DIR / config.store_path
     local_store = JsonChunkStore(store_path, prune_missing_sources=use_default_store)

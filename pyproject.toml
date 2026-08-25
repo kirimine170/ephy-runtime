@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "local-llm-workbench"
+name = "ephy-runtime"
 version = "0.1.0"
-description = "Phase 1 gateway for a local LLM workbench."
+description = "Local LLM runtime and workbench."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -33,4 +33,4 @@ include-package-data = true
 include = ["apps*", "packages*"]
 
 [project.scripts]
-local-llm-workbench = "apps.worker.cli:main"
+ephy-runtime = "apps.worker.cli:main"

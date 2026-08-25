@@ -47,7 +47,7 @@ cd ${ROOT_DIR}
 ./scripts/start_full_feature.sh
 ./scripts/full_feature.sh
 ./scripts/run_full_feature.sh
-./scripts/start_local_llm_workbench.sh
+./scripts/start_ephy_runtime.sh
 ./scripts/start_complete_stack.sh
 
 # Docker-independent phase1 stack: fast/work/code/embedding + local qdrant + gateway + Wails
@@ -109,5 +109,5 @@ EOF
 
 print_model_command "${FAST_MODEL_PATH}" 8081 32768 "qwen3-8b"
 print_model_command "${WORK_MODEL_PATH}" 8082 32768 "qwen3-30b-a3b"
-print_model_command "${CODE_MODEL_PATH}" 8083 32768 "qwen3-coder-30b-a3b"
+print_model_command "${CODE_MODEL_PATH}" 8083 32768 "qwen3.8-27b"
 print_model_command "${EMBEDDING_MODEL_PATH}" 8090 8192 "qwen3-embedding-0.6b" "--embedding"

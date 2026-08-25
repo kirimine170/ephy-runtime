@@ -1,4 +1,4 @@
-# Local LLM Workbench
+# Ephy Runtime
 
 Phase 1 の実装に加えて、Phase 2 の入口と Go + Wails デスクトップ UI の土台を用意した。
 
@@ -116,7 +116,24 @@ curl -X POST http://127.0.0.1:8000/v1/rag/source \
 python -m apps.worker.cli search "vector search" --project lab
 ```
 
-`local-llm-workbench` の entrypoint を使いたい場合は、`setuptools` が入った仮想環境で `pip install -e .` をやり直す。
+`ephy-runtime` の entrypoint を使いたい場合は、`setuptools` が入った仮想環境で `pip install -e .` をやり直す。
+
+## Qwen3.8 coding-agent PoC
+
+Qwen3.8-27Bのdownload，選定理由，安全境界，評価方法は[`docs/QWEN38_AGENT_POC.md`](docs/QWEN38_AGENT_POC.md)を参照する．最短手順は次である．
+
+```bash
+./scripts/setup_qwen38.sh
+./scripts/start_llama_code.sh
+./scripts/run_cli.sh agent \
+  "repositoryを調査してtest戦略を報告して．" \
+  --workspace . \
+  --read-only
+```
+
+`--read-only`を外すと，file writeとprocess実行を一操作ずつpreviewし，user承認後だけ実行する．隔離した使い捨てworkspaceでは`--yes`による自動承認も利用できる．
+
+Wailsの`code` modeも同じ`llama-server`の`http://127.0.0.1:8083/v1`へ接続し，backend modelとして`qwen3.8-27b`を使う．通常はWailsのruntime操作または`./scripts/phase1.sh`がbackendを起動するため，`start_llama_code.sh`の手動実行は単体確認時だけでよい．
 
 実 backend の接続確認だけをまとめて回すなら:
 
@@ -179,7 +196,7 @@ cd ..
 ./scripts/start_wails.sh
 ```
 
-Chat 画面中央ペイン、または `Library > Import Documents` パネルに Markdown / PDF / code file / directory を Drag & Drop すると、そのまま ingest が走る。drop 時の `project` と `tags` は Library 側 ingest form の現在値を使う。ingest 前に元ファイルは workspace と同じ階層の `LW_data/` へコピーされ、RAG 用の保管領域として再利用される。
+Chat 画面中央ペイン、または `Library > Import Documents` パネルに Markdown / PDF / code file / directory を Drag & Drop すると、そのまま ingest が走る。drop 時の `project` と `tags` は Library 側 ingest form の現在値を使う。ingest 前に元ファイルは workspace と同じ階層の `EPHY_data/` へコピーされ、RAG 用の保管領域として再利用される。
 
 ## Secure Web Search
 
@@ -284,7 +301,7 @@ backend起動時は fast / work / code / embedding の各 `/health` と Qdrant `
 
 ```bash
 ./scripts/start_full_feature.sh
-./scripts/start_local_llm_workbench.sh
+./scripts/start_ephy_runtime.sh
 ./scripts/start_complete_stack.sh
 ```
 
@@ -357,7 +374,7 @@ full feature 用の local override だけ先に当てたい場合は:
 
 - `llama.cpp/models/qwen3-8b-gguf/Qwen3-8B-Q6_K.gguf`
 - `llama.cpp/models/qwen3-30b-a3b-gguf/Qwen3-30B-A3B-Q4_K_M.gguf`
-- `llama.cpp/models/qwen3-coder-30b-a3b-gguf/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf`
+- `llama.cpp/models/qwen3.8-27b-gguf/Qwen3.8-27B-Q4_K_M.gguf`
 - `llama.cpp/models/qwen3-embedding-0.6b-gguf/Qwen3-Embedding-0.6B-Q8_0.gguf`
 
 たとえば `models/qwen3-8b-q4_k_m.gguf` はこの workspace には存在しないので、手動起動するなら次の実在パスを使う:
@@ -512,9 +529,9 @@ answer付きevalでは，source hit，keyword，latency，token使用量に加�
 
 ## Document Ingest
 
-Markdown / txt / PDF / docx / HTML / CSV / TSV / JSON に加えて、Git repository 配下の code / config file も ingest 対象に含められる。PDF は実行時に `pypdf` が必要で、docx / HTML / CSV / TSV / JSON / code file は追加依存なしで読む。ディレクトリを ingest する場合は再帰的に走査して index を更新し、元ファイルは `LW_data/` 配下へ正規化コピーしてから読み込む。
+Markdown / txt / PDF / docx / HTML / CSV / TSV / JSON に加えて、Git repository 配下の code / config file も ingest 対象に含められる。PDF は実行時に `pypdf` が必要で、docx / HTML / CSV / TSV / JSON / code file は追加依存なしで読む。ディレクトリを ingest する場合は再帰的に走査して index を更新し、元ファイルは `EPHY_data/` 配下へ正規化コピーしてから読み込む。
 
-PDF はページ単位でテキストを抽出し、`Page N` を chunk metadata に保持する。`source_path` はアプリが管理する `LW_data/` 内のコピーを指し、drop 元は `original_source_path` として保持される。画像だけの scanned PDF は OCR 対象外のため、抽出可能なテキストがなければ ingest を明示的に失敗させる。
+PDF はページ単位でテキストを抽出し、`Page N` を chunk metadata に保持する。`source_path` はアプリが管理する `EPHY_data/` 内のコピーを指し、drop 元は `original_source_path` として保持される。画像だけの scanned PDF は OCR 対象外のため、抽出可能なテキストがなければ ingest を明示的に失敗させる。
 
 Qwen3 embedding server は長いPDFを連続処理した際の Metal backend の安定性を優先し、embedding 専用プロセスのみ CPU で起動する。ingest は複数 chunk をまとめて embedding API に送り、index と query で同一の embedding backend を必須とする。
 

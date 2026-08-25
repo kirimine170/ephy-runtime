@@ -193,13 +193,13 @@ def test_rag_service_ingests_directory_with_markdown_and_pdf(monkeypatch, tmp_pa
     assert str(paper.resolve()) in source_paths
 
 
-def test_rag_service_copies_ingested_files_into_lw_data(monkeypatch, tmp_path) -> None:
+def test_rag_service_copies_ingested_files_into_ephy_data(monkeypatch, tmp_path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
     note = docs_dir / "note.md"
     note.write_text("# Note\n\nEmployee roster", encoding="utf-8")
-    lw_data_root = tmp_path / "LW_data"
-    monkeypatch.setenv("LW_DATA_ROOT", str(lw_data_root))
+    ephy_data_root = tmp_path / "EPHY_data"
+    monkeypatch.setenv("EPHY_RUNTIME_DATA_ROOT", str(ephy_data_root))
 
     config = AppConfig(
         rag=RagConfig(embedding_provider="local_hash", embedding_dimensions=32),
@@ -209,10 +209,10 @@ def test_rag_service_copies_ingested_files_into_lw_data(monkeypatch, tmp_path) -
     ingest = service.ingest(IngestRequest(paths=[str(docs_dir)], project="archive"))
 
     copied_files = ingest["copied_files"]
-    assert ingest["lw_data_root"] == str(lw_data_root.resolve())
+    assert ingest["ephy_data_root"] == str(ephy_data_root.resolve())
     assert ingest["indexed_documents"] == 1
     assert len(copied_files) == 1
-    assert copied_files[0].startswith(str(lw_data_root.resolve()))
+    assert copied_files[0].startswith(str(ephy_data_root.resolve()))
     assert Path(copied_files[0]).read_text(encoding="utf-8") == note.read_text(encoding="utf-8")
 
 

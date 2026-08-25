@@ -144,15 +144,15 @@ const CHAT_MODE_MAX_TOKENS = {
   rag: 2048,
   code: 3072,
 };
-const PRESET_CATALOG_FILTER_KEY = 'local-llm-workbench:preset-catalog-filter';
-const PRESET_CATALOG_SORT_KEY = 'local-llm-workbench:preset-catalog-sort';
-const EVAL_DATASET_TREND_FILTER_KEY = 'local-llm-workbench:eval-dataset-trend-filter';
-const EVAL_DATASET_TREND_SORT_KEY = 'local-llm-workbench:eval-dataset-trend-sort';
-const REGRESSION_WATCH_SOURCE_HIT_DROP_KEY = 'local-llm-workbench:regression-watch-source-hit-drop';
-const REGRESSION_WATCH_INCLUDE_PRESET_KEY = 'local-llm-workbench:regression-watch-include-preset';
-const REGRESSION_WATCH_INCLUDE_DATASET_KEY = 'local-llm-workbench:regression-watch-include-dataset';
-const REGRESSION_WATCH_PROFILES_KEY = 'local-llm-workbench:regression-watch-profiles';
-const BATCH_PRESET_SELECTION_KEY = 'local-llm-workbench:batch-preset-selection';
+const PRESET_CATALOG_FILTER_KEY = 'ephy-runtime:preset-catalog-filter';
+const PRESET_CATALOG_SORT_KEY = 'ephy-runtime:preset-catalog-sort';
+const EVAL_DATASET_TREND_FILTER_KEY = 'ephy-runtime:eval-dataset-trend-filter';
+const EVAL_DATASET_TREND_SORT_KEY = 'ephy-runtime:eval-dataset-trend-sort';
+const REGRESSION_WATCH_SOURCE_HIT_DROP_KEY = 'ephy-runtime:regression-watch-source-hit-drop';
+const REGRESSION_WATCH_INCLUDE_PRESET_KEY = 'ephy-runtime:regression-watch-include-preset';
+const REGRESSION_WATCH_INCLUDE_DATASET_KEY = 'ephy-runtime:regression-watch-include-dataset';
+const REGRESSION_WATCH_PROFILES_KEY = 'ephy-runtime:regression-watch-profiles';
+const BATCH_PRESET_SELECTION_KEY = 'ephy-runtime:batch-preset-selection';
 const SAVED_REQUEST_KIND_CONFIGS = [
   {
     kind: 'route',
@@ -348,9 +348,9 @@ app.innerHTML = `
   >
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">LW</div>
+        <div class="brand-mark">ER</div>
         <div>
-          <div class="brand-title">Local LLM Workbench</div>
+          <div class="brand-title">Ephy Runtime</div>
           <div class="brand-subtitle">Chat-first workspace</div>
         </div>
         <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Hide sidebar">Hide</button>
@@ -380,7 +380,7 @@ app.innerHTML = `
                   <span class="gmail-hamburger"></span>
                 </button>
                 <div class="chat-toolbar-brand">
-                  <div class="gmail-brand-mark">LW</div>
+                  <div class="gmail-brand-mark">ER</div>
                 </div>
                 <select id="chat-history-select" class="text-input chat-toolbar-select chat-toolbar-current" aria-label="Current Chat">
                   <option value="">Current Chat</option>
@@ -6634,7 +6634,7 @@ async function runIngestPaths(paths, {project = '', tags = [], sourceLabel = 'fo
       response?.indexed_documents != null ? `indexed_documents=${response.indexed_documents}` : '',
       response?.indexed_chunks != null ? `indexed_chunks=${response.indexed_chunks}` : '',
       response?.total_chunks != null ? `total_chunks=${response.total_chunks}` : '',
-      response?.lw_data_root ? `lw_data_root=${response.lw_data_root}` : '',
+      response?.ephy_data_root ? `ephy_data_root=${response.ephy_data_root}` : '',
     ].filter(Boolean).join(', ');
     latestIngestExport = {
       kind: 'ingest',
@@ -6646,7 +6646,7 @@ async function runIngestPaths(paths, {project = '', tags = [], sourceLabel = 'fo
         `- source: ${sourceLabel}`,
         `- provider: ${response?.provider || '-'}`,
         `- collection: ${response?.collection || '-'}`,
-        `- lw_data_root: ${response?.lw_data_root || '-'}`,
+        `- ephy_data_root: ${response?.ephy_data_root || '-'}`,
         `- copied_files: ${Array.isArray(response?.copied_files) ? response.copied_files.length : '-'}`,
         `- indexed_documents: ${response?.indexed_documents ?? '-'}`,
         `- indexed_chunks: ${response?.indexed_chunks ?? '-'}`,

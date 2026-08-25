@@ -100,7 +100,7 @@ def _merge_dicts(base: dict, override: dict) -> dict:
 
 def _load_yaml_with_optional_local(name: str) -> dict:
     payload = _read_yaml(CONFIG_DIR / f"{name}.yaml")
-    if os.getenv("LOCAL_LLM_WORKBENCH_DISABLE_LOCAL_CONFIG") == "1":
+    if os.getenv("EPHY_RUNTIME_DISABLE_LOCAL_CONFIG") == "1":
         return payload
     local_path = CONFIG_DIR / f"{name}.local.yaml"
     if local_path.exists():
@@ -111,7 +111,7 @@ def _load_yaml_with_optional_local(name: str) -> dict:
 def _load_optional_yaml_with_optional_local(name: str) -> dict:
     base_path = CONFIG_DIR / f"{name}.yaml"
     payload = _read_yaml(base_path) if base_path.exists() else {}
-    if os.getenv("LOCAL_LLM_WORKBENCH_DISABLE_LOCAL_CONFIG") == "1":
+    if os.getenv("EPHY_RUNTIME_DISABLE_LOCAL_CONFIG") == "1":
         return payload
     local_path = CONFIG_DIR / f"{name}.local.yaml"
     if local_path.exists():
