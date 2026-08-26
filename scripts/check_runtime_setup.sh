@@ -23,11 +23,18 @@ status_line() {
 
 echo "workspace: ${ROOT_DIR}"
 status_line "llama-server" "${LLAMA_SERVER_BIN}"
-if probe_llama_server; then
+CHECK_STATUS=0
+if [[ ! -f "${LLAMA_SERVER_BIN}" ]]; then
+  echo "[miss] llama-server runtime: executable is missing" >&2
+  CHECK_STATUS=1
+elif [[ ! -x "${LLAMA_SERVER_BIN}" ]]; then
+  echo "[fail] llama-server runtime: file is not executable" >&2
+  CHECK_STATUS=1
+elif probe_llama_server; then
   echo "[ok]   llama-server runtime: dynamic libraries are loadable"
 else
   echo "[fail] llama-server runtime: executable exists but cannot load its dynamic libraries" >&2
-  exit 1
+  CHECK_STATUS=1
 fi
 status_line "fast model" "${FAST_MODEL_PATH}"
 status_line "work model" "${WORK_MODEL_PATH}"
@@ -110,3 +117,4 @@ recommended commands:
   command summary:
     ./scripts/print_startup_commands.sh
 EOF
+exit "${CHECK_STATUS}"
