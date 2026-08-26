@@ -9,5 +9,7 @@
 | [ADR-0003](ADR-0003-model-is-not-source-of-identity.md) | ModelをIdentityの正本にしない | Accepted |
 | [ADR-0004](ADR-0004-restore-and-fork-are-different.md) | restoreとforkを分ける | Accepted |
 | [ADR-0005](ADR-0005-private-instance-data-is-not-committed.md) | 0号固有dataをrepositoryへ保存しない | Accepted |
+| [ADR-0006](ADR-0006-local-worker-cli-is-not-remote-node.md) | local worker CLIとremote nodeを分離する | Accepted |
+| [ADR-0007](ADR-0007-karte-adapter-is-compatibility-layer.md) | Karte JSON adapterを互換layerとして扱う | Accepted |
 
 新しい判断は，連番のADRとして追加する．既存ADRの判断を変更する場合は本文を上書きせず，新しいADRで置換関係を示す．
