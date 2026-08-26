@@ -2,10 +2,32 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"testing"
 )
+
+func TestPackagedAppFindsRuntimeRoot(t *testing.T) {
+	root := t.TempDir()
+	for _, directory := range []string{"configs", "scripts", "desktop/build/bin/desktop.app/Contents/MacOS"} {
+		if err := os.MkdirAll(filepath.Join(root, directory), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"configs/models.yaml", "scripts/start_gateway.sh"} {
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if actual := findRuntimeRoot(filepath.Join(root, "desktop/build/bin/desktop.app/Contents/MacOS")); actual != root {
+		t.Fatal(actual)
+	}
+	if actual := findRuntimeRoot(t.TempDir()); actual != "" {
+		t.Fatal("unrelated directory accepted", actual)
+	}
+}
 
 func TestShutdownStopsOwnedProcessesAndRejectsNewStarts(t *testing.T) {
 	a := newTestAppWithWorkspace(t)

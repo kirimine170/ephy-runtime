@@ -50,3 +50,5 @@ fast modelを使う最小smokeとWails Chat導線を自動化する．起動，h
 モデル選択は[MODEL_MANAGER.md](MODEL_MANAGER.md)，Profileの境界は[EPHY_PROFILE_RUNTIME.md](EPHY_PROFILE_RUNTIME.md)を参照してください．
 
 Desktopを終了すると，そのDesktop自身が起動したFast／Work／Code／embedding／Gateway／watchへ終了を通知します．他のlauncherが起動したprocessやQdrant／SearXNGは停止しません．終了中の新規起動は拒否します．
+
+ビルド済みappをFinderから開いた場合も，実行ファイルの親directoryからRuntime rootを検出します．開発serverを常駐させず使う場合は，`desktop`で`wails build -skipbindings`を実行し，生成されたappを開いてください．`EPHY_START_CONVERSATION=1`を渡して起動すると最小stackも自動起動します．

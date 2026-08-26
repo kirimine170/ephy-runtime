@@ -6076,12 +6076,38 @@ func appendBounded(lines []string, line string) []string {
 func detectWorkspaceRoot() string {
 	wd, err := os.Getwd()
 	if err != nil {
-		return "."
+		wd = "."
+	}
+	if root := findRuntimeRoot(wd); root != "" {
+		return root
+	}
+	if executable, err := os.Executable(); err == nil {
+		if root := findRuntimeRoot(filepath.Dir(executable)); root != "" {
+			return root
+		}
 	}
 	if filepath.Base(wd) == "desktop" {
 		return filepath.Dir(wd)
 	}
 	return wd
+}
+
+func findRuntimeRoot(start string) string {
+	directory, err := filepath.Abs(start)
+	if err != nil {
+		return ""
+	}
+	for {
+		if fileExists(filepath.Join(directory, "configs", "models.yaml")) &&
+			fileExists(filepath.Join(directory, "scripts", "start_gateway.sh")) {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return ""
+		}
+		directory = parent
+	}
 }
 
 func fileExists(path string) bool {
