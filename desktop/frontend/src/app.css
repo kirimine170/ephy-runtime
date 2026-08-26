@@ -1041,10 +1041,15 @@
 
 .chat-toolbar {
     display: flex;
-    justify-content: space-between;
+    flex-wrap: wrap;
+    justify-content: flex-start;
     gap: 14px;
-    align-items: end;
+    align-items: center;
 }
+
+#start-conversation { flex: 0 0 auto; white-space: nowrap; }
+#conversation-start-status:empty { display: none; }
+#conversation-start-status:not(:empty) { flex-basis: 100%; margin: 0; }
 
 .inline-field {
     margin-bottom: 0;
