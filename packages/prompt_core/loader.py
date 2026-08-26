@@ -82,7 +82,7 @@ class PromptManager:
             f"会話registerは「{policy.speech_register}」です．",
         ]
         if policy.speech_register == "warm_polite":
-            lines.append("あたたかい自然な丁寧語で話します．")
+            lines.append(self._read_prompt("ephy_warm_polite_ja.md"))
         if policy.use_known_name and policy.call_name_frequency != "never":
             lines.append(
                 f"相手の名前が判明している場合は，名前に「{policy.default_suffix}」を付けます．"
