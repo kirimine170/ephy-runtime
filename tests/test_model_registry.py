@@ -142,6 +142,15 @@ def test_download_rejects_low_disk_before_network(tmp_path, monkeypatch):
                                          sha256="0" * 64, size_bytes=100, revision="rev")
 
 
+def test_download_dry_run_reports_space_without_mutation(tmp_path, monkeypatch):
+    monkeypatch.setattr("packages.model_registry.service.shutil.disk_usage", lambda _: SimpleNamespace(free=500))
+    report = ModelRegistry(tmp_path).plan_download(model_id="base", url="https://example.org/model.gguf",
+                                                   sha256="0" * 64, size_bytes=100, revision="rev")
+    assert report["required_disk_bytes"] == 100 + 64 * 1024 * 1024
+    assert report["free_disk_bytes"] == 500 and report["has_space"] is False
+    assert not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("url", ["http://example.org/model", "https://user:password@example.org/model", "https://example.org/model?token=example"])
 def test_download_does_not_store_credentials_or_use_plain_http(tmp_path, url):
     with pytest.raises(ValueError, match="credential-free"):

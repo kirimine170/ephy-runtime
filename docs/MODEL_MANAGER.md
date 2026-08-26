@@ -33,6 +33,8 @@ Settingsの`Model & LoRA`で開発者モードを有効にすると，Fast／Wor
 
 downloadは`download --id ID --url HTTPS_URL --sha256 SHA256 --size-bytes BYTES --revision REVISION`で行います．保存先は`models/registry/`です．空き容量を事前確認し，size／SHA-256／GGUF headerが一致した場合だけ公開します．既存ファイルは上書きせず，中断時の一時ファイルを破棄します．再開ではなく再取得する方針です．認証情報やquery parameterを含むURLは受け付けません．
 
+`download`へ`--dry-run`を付けると，ネットワーク通信やファイル作成なしで，必要容量・空き容量・保存先・再開方針を確認できます．取得後も空き容量を再検査します．
+
 ## 検証用UI
 
 `desktop/frontend/model-manager-preview.html`は合成catalogだけを扱う画面fixtureです．実設定やprocessは変更せず，production buildのentryにも含めません．

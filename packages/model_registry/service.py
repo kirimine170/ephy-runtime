@@ -221,9 +221,9 @@ class ModelRegistry:
                                "max_context": model.context_size}
         return overrides
 
-    def download(self, *, model_id: str, url: str, sha256: str, size_bytes: int,
-                 revision: str, opener=None) -> ModelArtifact:
-        # No shell, credentials, implicit revisions, automatic resume, or overwrite．
+    def plan_download(self, *, model_id: str, url: str, sha256: str, size_bytes: int,
+                      revision: str) -> dict:
+        # No network or directory creation during dry-run．
         parsed = urlparse(url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query:
             raise ValueError("Use a credential-free HTTPS URL without query parameters")
@@ -232,12 +232,27 @@ class ModelRegistry:
         if any(r.id == model_id for r in [*self.registry().models, *self.registry().adapters]):
             raise ValueError("Model ID already exists")
         directory = self.root / "models/registry"
-        directory.mkdir(parents=True, exist_ok=True)
         destination = directory / f"{model_id}.gguf"
         if destination.exists():
             raise ValueError("Destination already exists; import or use a new ID")
-        if shutil.disk_usage(directory).free < size_bytes + 64 * 1024 * 1024:
+        existing = directory
+        while not existing.exists():
+            existing = existing.parent
+        free = shutil.disk_usage(existing).free
+        required = size_bytes + 64 * 1024 * 1024
+        return {"model_id": model_id, "destination": str(destination), "size_bytes": size_bytes,
+                "required_disk_bytes": required, "free_disk_bytes": free, "has_space": free >= required,
+                "revision": revision, "sha256": sha256, "resume_policy": "restart"}
+
+    def download(self, *, model_id: str, url: str, sha256: str, size_bytes: int,
+                 revision: str, opener=None) -> ModelArtifact:
+        plan = self.plan_download(model_id=model_id, url=url, sha256=sha256,
+                                  size_bytes=size_bytes, revision=revision)
+        if not plan["has_space"]:
             raise ValueError("Insufficient free disk space")
+        destination = Path(plan["destination"])
+        directory = destination.parent
+        directory.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{model_id}.", suffix=".part", dir=directory)
         try:
             transport = opener or build_opener(HTTPSOnlyRedirect())
@@ -252,6 +267,8 @@ class ModelRegistry:
                 os.fsync(output.fileno())
             if total != size_bytes or digest_file(Path(temporary)) != sha256:
                 raise ValueError("Downloaded size or checksum mismatch")
+            if shutil.disk_usage(directory).free < 64 * 1024 * 1024:
+                raise ValueError("Insufficient free disk space after download")
             inspect_artifact(Path(temporary))
             os.link(temporary, destination)  # Atomic no-overwrite publication．
             return self.import_model(destination, model_id=model_id, source=url, revision=revision)

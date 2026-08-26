@@ -50,6 +50,7 @@ def main():
     for name in ("id", "url", "sha256", "revision"):
         download.add_argument(f"--{name}", required=True)
     download.add_argument("--size-bytes", type=int, required=True)
+    download.add_argument("--dry-run", action="store_true")
     launch = commands.add_parser("launch")
     launch.add_argument("--role", choices=list(PORTS), required=True)
     launch.add_argument("--server", type=Path, required=True)
@@ -77,8 +78,11 @@ def main():
             else:
                 result = registry.select(args.role, selection, expected_revision=args.expected_revision)
         elif args.command == "download":
-            result = registry.download(model_id=args.id, url=args.url, sha256=args.sha256,
-                                       size_bytes=args.size_bytes, revision=args.revision).model_dump()
+            method = registry.plan_download if args.dry_run else registry.download
+            result = method(model_id=args.id, url=args.url, sha256=args.sha256,
+                            size_bytes=args.size_bytes, revision=args.revision)
+            if not args.dry_run:
+                result = result.model_dump()
         else:
             command = launch_command(registry, args.role, args.server, args.fallback_path, args.fallback_alias)
             if args.dry_run:
