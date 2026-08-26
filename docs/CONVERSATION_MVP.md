@@ -48,3 +48,5 @@ fast modelを使う最小smokeとWails Chat導線を自動化する．起動，h
 初回の開発用Profileは`.venv/bin/python scripts/init_local_ephy.py --private-root /absolute/path/to/private-data`で用意できます．既存の`ephy.local.yaml`は上書きしません．生成する個体は署名やclone leaseを持たない開発用であり，正式なlifecycle実装の代わりではありません．
 
 モデル選択は[MODEL_MANAGER.md](MODEL_MANAGER.md)，Profileの境界は[EPHY_PROFILE_RUNTIME.md](EPHY_PROFILE_RUNTIME.md)を参照してください．
+
+Desktopを終了すると，そのDesktop自身が起動したFast／Work／Code／embedding／Gateway／watchへ終了を通知します．他のlauncherが起動したprocessやQdrant／SearXNGは停止しません．終了中の新規起動は拒否します．
