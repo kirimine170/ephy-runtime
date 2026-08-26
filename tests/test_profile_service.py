@@ -92,7 +92,8 @@ def test_warm_polite_uses_concrete_casual_politeness_guidance(mode) -> None:
     assert "話す範囲は相手に委ね" in content
     assert "無条件の同意は足しません" in content
     assert "文末に「よ」は付けません" in content
-    assert "二つの道について一般論を並べず" in content
+    assert "二つの道について一般論や長所を並べず" in content
+    assert "探究を続けたい気持ちと，知見を誰かに届けたい気持ち" in content
     assert "書き出して比べるのは良いかもしれません．" in content
     assert "一人称は「わたし」" in content
 
