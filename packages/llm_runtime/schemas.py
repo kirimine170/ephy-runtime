@@ -14,6 +14,7 @@ class RequestMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     mode: str | None = None
+    session_mode: Literal["default", "voice", "writing", "tech"] = "default"
     project: str | None = None
     source_path: str | None = None
     source_scope: str | None = None

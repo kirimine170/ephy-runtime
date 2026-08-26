@@ -6,6 +6,7 @@ from packages.config_core.loader import ROOT_DIR
 from packages.identity_core.schemas import IdentityManifest
 from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage
 from packages.profile_core.schemas import EphyProfile
+from packages.profile_core.runtime import EphyContext
 from packages.profile_core.service import ProfileService, SessionMode
 
 
@@ -16,8 +17,9 @@ EPHY_PROFILE_POLICY_MARKER = "Ephy Profile Policy"
 
 
 class PromptManager:
-    def __init__(self, prompts_dir: Path | None = None) -> None:
+    def __init__(self, prompts_dir: Path | None = None, *, ephy_context: EphyContext | None = None) -> None:
         self._prompts_dir = prompts_dir or PROMPTS_DIR
+        self._ephy_context = ephy_context
 
     def get_mode_system_prompt(self, mode: str) -> str | None:
         prompt_map = {
@@ -46,7 +48,13 @@ class PromptManager:
 
     def apply_output_policies(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         updated_request = self.apply_language_policy(request)
-        return self.apply_response_style_policy(updated_request)
+        updated_request = self.apply_response_style_policy(updated_request)
+        if self._ephy_context is not None:
+            updated_request = self.apply_ephy_profile(
+                updated_request, self._ephy_context.identity, self._ephy_context.profile,
+                session_mode=request.metadata.session_mode if request.metadata else "default",
+            )
+        return updated_request
 
     def apply_language_policy(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         return self._insert_system_policy(request, "language_ja.md", LANGUAGE_POLICY_MARKER)
@@ -73,19 +81,47 @@ class PromptManager:
             f"既定の出力言語は「{policy.language}」です．",
             f"会話registerは「{policy.speech_register}」です．",
         ]
-        if policy.use_known_name:
+        if policy.speech_register == "warm_polite":
+            lines.append("あたたかい自然な丁寧語で話します．")
+        if policy.use_known_name and policy.call_name_frequency != "never":
             lines.append(
                 f"相手の名前が判明している場合は，名前に「{policy.default_suffix}」を付けます．"
             )
+            lines.append("呼びかけは必要な場面に限り，毎回は繰り返しません．")
+        else:
+            lines.append("相手の名前を使った呼びかけは控えます．")
         if policy.concise_by_default:
             lines.append("通常は簡潔に回答します．")
+        for enabled, instruction in (
+            (policy.friendly, "親しみを持って接します．"),
+            (policy.respectful, "相手を尊重します．"),
+            (policy.direct, "質問への答えを先に述べます．"),
+            (not profile.style.excessive_formality, "過剰にかしこまった表現は避けます．"),
+            (not profile.style.excessive_familiarity, "過度になれなれしい表現は避けます．"),
+            (not profile.style.excessive_headings, "見出しを乱用しません．"),
+            (not profile.style.excessive_bullets, "箇条書きを乱用しません．"),
+        ):
+            if enabled:
+                lines.append(instruction)
         if policy.prefer_concrete_confirmation:
             lines.append("不明点は，具体的な解釈を示して確認します．")
-        return self._insert_system_text(request, "\n".join(lines), EPHY_PROFILE_POLICY_MARKER)
+        overlays = {
+            "voice": "音声向けに短い文で話し，読み上げに不要な装飾を避けます．",
+            "writing": "文章作成では指定された文体と成果物の形式を優先します．",
+            "tech": "技術的な説明では正確さを優先し，前提と確認結果を区別します．",
+        }
+        if session_mode in overlays:
+            lines.append(overlays[session_mode])
+        # A caller-supplied marker must never suppress the server-owned Profile．
+        cleaned = request.model_copy(update={"messages": [
+            message for message in request.messages
+            if not (message.role == "system" and EPHY_PROFILE_POLICY_MARKER in str(message.content))
+        ]})
+        return self._insert_system_text(cleaned, "\n".join(lines), EPHY_PROFILE_POLICY_MARKER)
 
     def build_rag_messages(self, question: str, context: str) -> list[ChatMessage]:
         system_prompt = self._read_prompt("rag_answer.md")
-        return [
+        messages = [
             ChatMessage(role="system", content=system_prompt),
             ChatMessage(role="system", content=self._read_prompt("language_ja.md")),
             ChatMessage(role="system", content=self._read_prompt("response_style_ja.md")),
@@ -95,6 +131,7 @@ class PromptManager:
             ),
             ChatMessage(role="user", content=question),
         ]
+        return self.apply_output_policies(ChatCompletionRequest(messages=messages)).messages
 
     def apply_grounding_context(self, request: ChatCompletionRequest, context: str) -> ChatCompletionRequest:
         return self.apply_untrusted_context(request, local_context=context)
