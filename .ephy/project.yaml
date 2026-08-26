@@ -1,0 +1,20 @@
+schema_version: 1
+
+project:
+  id: "ephy-runtime"
+  family: "ephy"
+  type: "core"
+  status: "active"
+  visibility: "public"
+  description: "Local-first agent runtime for model routing，RAG，tools，evaluation，and desktop interaction"
+
+relations:
+  parent: "ephy"
+  depends_on: []
+  integrates_with: ["karte", "karte-renderer"]
+  runs_on: []
+
+data_policy:
+  classification: "internal"
+  personal_data_in_git: "prohibited"
+  secrets_in_git: "prohibited"
