@@ -30,6 +30,7 @@ type App struct {
 
 	mu                 sync.Mutex
 	modelLifecycleMu   sync.Mutex
+	closing            bool
 	workspaceRoot      string
 	fastCmd            *exec.Cmd
 	fastRunning        bool
@@ -2600,6 +2601,10 @@ func (a *App) StopCode() (*RuntimeStatus, error) {
 
 func (a *App) StartGateway() (*RuntimeStatus, error) {
 	a.mu.Lock()
+	if a.closing {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("Desktop is shutting down")
+	}
 	if a.gatewayRunning {
 		a.mu.Unlock()
 		return a.GetRuntimeStatus(), nil
@@ -2682,6 +2687,10 @@ func (a *App) StopGateway() (*RuntimeStatus, error) {
 
 func (a *App) StartEmbedding() (*RuntimeStatus, error) {
 	a.mu.Lock()
+	if a.closing {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("Desktop is shutting down")
+	}
 	if a.embeddingRunning {
 		a.mu.Unlock()
 		return a.GetRuntimeStatus(), nil
@@ -2820,6 +2829,10 @@ func (a *App) Smoke(request SmokeRequest) (*SmokeResponse, error) {
 
 func (a *App) StartWatch(request WatchRequest) (*RuntimeStatus, error) {
 	a.mu.Lock()
+	if a.closing {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("Desktop is shutting down")
+	}
 	if a.watchRunning {
 		a.mu.Unlock()
 		return a.GetRuntimeStatus(), nil
@@ -5436,6 +5449,10 @@ func (a *App) startModelProcess(scriptRelativePath string, label string, cmdRef 
 
 func (a *App) startModelProcessLocked(scriptRelativePath string, label string, cmdRef **exec.Cmd, runningRef *bool, appendFn func(string), captureFn func(io.ReadCloser), waitFn func(*exec.Cmd)) (*RuntimeStatus, error) {
 	a.mu.Lock()
+	if a.closing {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("Desktop is shutting down")
+	}
 	if *runningRef {
 		a.mu.Unlock()
 		return a.GetRuntimeStatus(), nil
@@ -6059,12 +6076,38 @@ func appendBounded(lines []string, line string) []string {
 func detectWorkspaceRoot() string {
 	wd, err := os.Getwd()
 	if err != nil {
-		return "."
+		wd = "."
+	}
+	if root := findRuntimeRoot(wd); root != "" {
+		return root
+	}
+	if executable, err := os.Executable(); err == nil {
+		if root := findRuntimeRoot(filepath.Dir(executable)); root != "" {
+			return root
+		}
 	}
 	if filepath.Base(wd) == "desktop" {
 		return filepath.Dir(wd)
 	}
 	return wd
+}
+
+func findRuntimeRoot(start string) string {
+	directory, err := filepath.Abs(start)
+	if err != nil {
+		return ""
+	}
+	for {
+		if fileExists(filepath.Join(directory, "configs", "models.yaml")) &&
+			fileExists(filepath.Join(directory, "scripts", "start_gateway.sh")) {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return ""
+		}
+		directory = parent
+	}
 }
 
 func fileExists(path string) bool {
