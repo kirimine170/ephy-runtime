@@ -74,6 +74,12 @@ def test_identity_rejects_negative_ordinal() -> None:
         _validator("identity_manifest.schema.json").validate(manifest)
 
 
+def test_identity_allows_omitted_parent_instance_id() -> None:
+    manifest = _load_yaml(EXAMPLE_DIR / "identity.example.yaml")
+    del manifest["identity"]["parent_instance_id"]
+    _validator("identity_manifest.schema.json").validate(manifest)
+
+
 def test_identity_rejects_embedded_owner_data() -> None:
     manifest = _load_yaml(EXAMPLE_DIR / "identity.example.yaml")
     manifest["ownership"]["owner_data_embedded"] = True
