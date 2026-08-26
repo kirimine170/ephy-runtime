@@ -748,6 +748,8 @@
 }
 
 .chat-toolbar-select {
+    width: auto;
+    flex: 0 1 150px;
     min-width: 0;
     margin: 0;
     border-radius: 999px;
@@ -758,10 +760,12 @@
 }
 
 .chat-toolbar-current {
+    flex-basis: 180px;
     font-weight: 600;
 }
 
 .chat-toolbar-topk {
+    flex-basis: 104px;
     min-width: 104px;
 }
 
