@@ -1,5 +1,7 @@
 # Local LLM Workbench
 
+Ephyの会話起動は[Conversation MVP](docs/CONVERSATION_MVP.md)，開発者向けmodel／LoRA選択は[Model Manager](docs/MODEL_MANAGER.md)を参照してください．
+
 Phase 1 の実装に加えて、Phase 2 の入口と Go + Wails デスクトップ UI の土台を用意した。
 
 タスク管理、会話方針、Git運用、標準testは [`docs/WORKFLOW.md`](docs/WORKFLOW.md) を参照する。

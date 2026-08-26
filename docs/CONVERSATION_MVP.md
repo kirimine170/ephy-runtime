@@ -41,3 +41,10 @@ fast modelを使う最小smokeとWails Chat導線を自動化する．起動，h
 - ephy-worker，physical CI，Karteとの本接続．
 
 これらは最初の安定したローカル会話を確認した後に進める．
+# 会話用の最小起動
+
+`./scripts/start_conversation.sh`はDesktopを開き，Desktop自身がFastとGatewayだけを起動します．Chatの`Ephyを起動`ボタンからも同じ操作ができます．既定の会話modeはQuickです．Work／Code／embeddingは必要になったときに起動してください．この起動方法なら開発者画面からモデルを切り替えられます．
+
+初回の開発用Profileは`.venv/bin/python scripts/init_local_ephy.py --private-root /absolute/path/to/private-data`で用意できます．既存の`ephy.local.yaml`は上書きしません．生成する個体は署名やclone leaseを持たない開発用であり，正式なlifecycle実装の代わりではありません．
+
+モデル選択は[MODEL_MANAGER.md](MODEL_MANAGER.md)，Profileの境界は[EPHY_PROFILE_RUNTIME.md](EPHY_PROFILE_RUNTIME.md)を参照してください．

@@ -162,6 +162,12 @@ def load_app_config() -> AppConfig:
     rag_payload = _load_yaml_with_optional_local("rag")
     web_payload = _load_optional_yaml_with_optional_local("web")
     ephy_payload = _load_optional_yaml_with_optional_local("ephy")
+    if os.getenv("LOCAL_LLM_WORKBENCH_DISABLE_LOCAL_CONFIG") != "1":
+        from packages.model_registry.service import ModelRegistry
+
+        models_payload = _merge_dicts(models_payload, {
+            "models": ModelRegistry(CONFIG_DIR.parent).model_overrides(),
+        })
     return AppConfig(
         models=models_payload.get("models", {}),
         routes=routes_payload.get("routes", {}),

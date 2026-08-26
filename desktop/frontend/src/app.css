@@ -1362,3 +1362,11 @@
         position: static;
     }
 }
+.developer-toggle { display: flex; align-items: center; gap: 0.65rem; font-weight: 650; }
+.developer-model-controls { border: 0; padding: 0; margin: 1rem 0 0; min-width: 0; }
+.developer-model-controls:disabled { opacity: 0.58; }
+.developer-model-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+.developer-model-grid label { display: grid; gap: 0.45rem; min-width: 0; }
+.developer-model-grid select { min-width: 0; width: 100%; }
+.developer-import { margin-top: 1.25rem; }
+.developer-import summary { cursor: pointer; }
