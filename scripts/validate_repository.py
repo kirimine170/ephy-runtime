@@ -99,10 +99,10 @@ SENSITIVE_PATTERNS = {
     ),
 }
 
-# This existing security test intentionally contains fixed fake token and PEM
-# markers to verify outbound-query blocking. The file is executable test input，
-# not a credential source; all other repository text remains scanned.
-SENSITIVE_PATTERN_ALLOWLIST = {"tests/test_web_search_security.py"}
+NON_META_PARENT_RULE = {
+    "if": {"properties": {"project": {"properties": {"type": {"const": "meta"}}}}},
+    "else": {"properties": {"relations": {"properties": {"parent": {"$ref": "#/$defs/projectId"}}}}},
+}
 
 
 def parse_value(raw: str) -> Any:
@@ -253,6 +253,8 @@ def validate_metadata(path: Path) -> list[str]:
         errors.append("project.yaml: project.description must be a non-empty string")
 
     parent = relations.get("parent")
+    if parent is None and project.get("type") != "meta":
+        errors.append("project.yaml: null relations.parent is only allowed for meta projects")
     if parent is not None:
         validate_id(parent, "relations.parent", errors)
     project_id = project.get("id")
@@ -359,6 +361,8 @@ def validate_schema(path: Path) -> list[str]:
             errors.append(f"project.schema.json: {field} enum differs from tooling")
     if project_id.get("pattern") != PROJECT_ID_PATTERN.pattern:
         errors.append("project.schema.json: project ID pattern differs from tooling")
+    if NON_META_PARENT_RULE not in schema.get("allOf", []):
+        errors.append("project.schema.json: non-meta projects must require a parent ID")
     if project_id_list.get("uniqueItems") is not True:
         errors.append("project.schema.json: relationship lists must use uniqueItems")
     parent_variants = relations.get("parent", {}).get("oneOf", [])
@@ -380,8 +384,6 @@ def validate_sensitive_patterns(
 ) -> list[str]:
     errors: list[str] = []
     for relative, content in text_files:
-        if relative in SENSITIVE_PATTERN_ALLOWLIST:
-            continue
         for label, pattern in SENSITIVE_PATTERNS.items():
             if pattern.search(content):
                 errors.append(f"{relative}: contains a value resembling {label}")

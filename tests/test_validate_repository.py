@@ -102,6 +102,21 @@ class ValidateRepositoryTests(unittest.TestCase):
             ["parent graph: cycle detected: ephy-a -> ephy-b -> ephy-c -> ephy-a"],
         )
 
+    def test_only_meta_projects_allow_null_parent(self) -> None:
+        metadata_path = self.repository / ".ephy" / "project.yaml"
+        metadata = re.sub(r'^  parent: .+$', '  parent: null', metadata_path.read_text(), flags=re.MULTILINE)
+        for project_type, expected in (("core", 1), ("meta", 0)):
+            metadata_path.write_text(re.sub(r'^  type: .+$', f'  type: "{project_type}"', metadata, flags=re.MULTILINE))
+            result = self.run_validator()
+            self.assertEqual(result.returncode, expected, result.stderr)
+
+    def test_security_test_is_not_exempt_from_secret_scan(self) -> None:
+        security_test = self.repository / "tests" / "test_web_search_security.py"
+        security_test.write_text(security_test.read_text() + '\n# ' + 'AKIA' + 'A' * 16 + '\n')
+        result = self.run_validator("--check-sensitive-patterns")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tests/test_web_search_security.py: contains a value resembling AWS access key", result.stderr)
+
     def test_missing_readme_section_is_detected(self) -> None:
         readme_path = self.repository / "README.md"
         readme = readme_path.read_text(encoding="utf-8")

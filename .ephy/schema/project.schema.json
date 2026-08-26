@@ -125,6 +125,12 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"project": {"properties": {"type": {"const": "meta"}}}}},
+      "else": {"properties": {"relations": {"properties": {"parent": {"$ref": "#/$defs/projectId"}}}}}
+    }
+  ],
   "$defs": {
     "projectId": {
       "type": "string",
