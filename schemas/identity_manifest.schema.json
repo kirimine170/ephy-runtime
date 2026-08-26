@@ -21,7 +21,6 @@
         "individual_name",
         "ordinal",
         "instance_id",
-        "parent_instance_id",
         "created_at",
         "status"
       ],

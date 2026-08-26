@@ -58,6 +58,20 @@ configs/*.bak.*
 *.key
 *.pem
 *.secret
+*.p12
+*.pfx
+*.jks
+
+# Sensitive captures and additional model artifacts
+captures/
+camera-captures/
+master-images/
+training-data/
+weights/
+*.ckpt
+*.pt
+*.pth
+*.onnx
 
 # OS / editor
 .DS_Store
