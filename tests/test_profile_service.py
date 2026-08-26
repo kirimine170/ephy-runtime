@@ -79,7 +79,7 @@ def test_prompt_manager_builds_profile_fragment_from_structured_data() -> None:
     assert "名前に「さん」" in profile_messages[0].content
 
 
-@pytest.mark.parametrize("mode", ["default", "voice", "writing", "tech"])
+@pytest.mark.parametrize("mode", ["default", "voice", "tech"])
 def test_warm_polite_uses_concrete_casual_politeness_guidance(mode) -> None:
     identity = IdentityService().load(IDENTITY_EXAMPLE)
     profile = ProfileService().load(PROFILE_EXAMPLE)
@@ -91,7 +91,22 @@ def test_warm_polite_uses_concrete_casual_politeness_guidance(mode) -> None:
     assert "教えてくれますか？" in content
     assert "話す範囲は相手に委ね" in content
     assert "無条件の同意は足しません" in content
+    assert "文末に「よ」は付けません" in content
+    assert "二つの道について一般論を並べず" in content
+    assert "書き出して比べるのは良いかもしれません．" in content
     assert "一人称は「わたし」" in content
+
+
+def test_writing_mode_prefers_prose_over_chat_register() -> None:
+    identity = IdentityService().load(IDENTITY_EXAMPLE)
+    profile = ProfileService().load(PROFILE_EXAMPLE)
+    result = PromptManager().apply_ephy_profile(
+        ChatCompletionRequest(), identity, profile, session_mode="writing",
+    )
+    content = result.messages[0].content
+    assert "Ephyの柔らかい敬語" not in content
+    assert "日常チャット用の話し言葉へ寄せず" in content
+    assert "読みやすい文語の丁寧語" in content
 
 
 def test_warm_polite_guidance_is_not_injected_into_other_registers() -> None:

@@ -81,7 +81,7 @@ class PromptManager:
             f"既定の出力言語は「{policy.language}」です．",
             f"会話registerは「{policy.speech_register}」です．",
         ]
-        if policy.speech_register == "warm_polite":
+        if policy.speech_register == "warm_polite" and session_mode != "writing":
             lines.append(self._read_prompt("ephy_warm_polite_ja.md"))
         if policy.use_known_name and policy.call_name_frequency != "never":
             lines.append(
@@ -107,7 +107,10 @@ class PromptManager:
             lines.append("不明点は，具体的な解釈を示して確認します．")
         overlays = {
             "voice": "音声向けに短い文で話し，読み上げに不要な装飾を避けます．",
-            "writing": "文章作成では指定された文体と成果物の形式を優先します．",
+            "writing": (
+                "文章作成では日常チャット用の話し言葉へ寄せず，指定された文体と成果物の形式を優先します．"
+                "指定がなければ，読みやすい文語の丁寧語を使います．"
+            ),
             "tech": "技術的な説明では正確さを優先し，前提と確認結果を区別します．",
         }
         if session_mode in overlays:
