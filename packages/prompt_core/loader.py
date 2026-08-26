@@ -3,12 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from packages.config_core.loader import ROOT_DIR
+from packages.identity_core.schemas import IdentityManifest
 from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage
+from packages.profile_core.schemas import EphyProfile
+from packages.profile_core.service import ProfileService, SessionMode
 
 
 PROMPTS_DIR = ROOT_DIR / "prompts"
 LANGUAGE_POLICY_MARKER = "出力言語ポリシー"
 RESPONSE_STYLE_POLICY_MARKER = "応答スタイルポリシー"
+EPHY_PROFILE_POLICY_MARKER = "Ephy Profile Policy"
 
 
 class PromptManager:
@@ -53,6 +57,31 @@ class PromptManager:
             "response_style_ja.md",
             RESPONSE_STYLE_POLICY_MARKER,
         )
+
+    def apply_ephy_profile(
+        self,
+        request: ChatCompletionRequest,
+        identity: IdentityManifest,
+        profile: EphyProfile,
+        session_mode: SessionMode = "default",
+    ) -> ChatCompletionRequest:
+        policy = ProfileService().resolve_conversation_policy(profile, session_mode=session_mode)
+        lines = [
+            EPHY_PROFILE_POLICY_MARKER,
+            f"あなたはEphy個体「{identity.identity.individual_name}」です．",
+            f"一人称は「{policy.first_person}」です．",
+            f"既定の出力言語は「{policy.language}」です．",
+            f"会話registerは「{policy.speech_register}」です．",
+        ]
+        if policy.use_known_name:
+            lines.append(
+                f"相手の名前が判明している場合は，名前に「{policy.default_suffix}」を付けます．"
+            )
+        if policy.concise_by_default:
+            lines.append("通常は簡潔に回答します．")
+        if policy.prefer_concrete_confirmation:
+            lines.append("不明点は，具体的な解釈を示して確認します．")
+        return self._insert_system_text(request, "\n".join(lines), EPHY_PROFILE_POLICY_MARKER)
 
     def build_rag_messages(self, question: str, context: str) -> list[ChatMessage]:
         system_prompt = self._read_prompt("rag_answer.md")
@@ -128,6 +157,14 @@ class PromptManager:
         prompt_name: str,
         marker: str,
     ) -> ChatCompletionRequest:
+        return self._insert_system_text(request, self._read_prompt(prompt_name), marker)
+
+    def _insert_system_text(
+        self,
+        request: ChatCompletionRequest,
+        content: str,
+        marker: str,
+    ) -> ChatCompletionRequest:
         if any(
             message.role == "system" and marker in str(message.content)
             for message in request.messages
@@ -138,10 +175,7 @@ class PromptManager:
         system_end = 0
         while system_end < len(messages) and messages[system_end].role == "system":
             system_end += 1
-        messages.insert(
-            system_end,
-            ChatMessage(role="system", content=self._read_prompt(prompt_name)),
-        )
+        messages.insert(system_end, ChatMessage(role="system", content=content))
         return request.model_copy(update={"messages": messages})
 
     def _read_prompt(self, prompt_name: str) -> str:
