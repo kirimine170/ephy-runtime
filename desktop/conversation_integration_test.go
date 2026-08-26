@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -139,4 +141,49 @@ func TestLiveLocalModelSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	chat(false)
+	if adapterPath := os.Getenv("EPHY_TEST_ADAPTER_GGUF"); adapterPath != "" {
+		if _, err := a.ImportLocalModel(ImportLocalModelRequest{ID: "experimental-style", Path: adapterPath, BaseModelID: "qwen3-8b"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.ApplyLocalModel(ApplyLocalModelRequest{Role: "fast", ModelID: "qwen3-8b", AdapterID: "experimental-style"}); err != nil {
+			t.Fatal(err)
+		}
+		adapters := func() int {
+			response, err := http.Get("http://127.0.0.1:8081/lora-adapters")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			var loaded []struct {
+				Scale float64 `json:"scale"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&loaded); err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusOK {
+				t.Fatal("adapter inspection failed")
+			}
+			for _, entry := range loaded {
+				if entry.Scale != 1 {
+					t.Fatal("adapter is not active")
+				}
+			}
+			return len(loaded)
+		}
+		if adapters() != 1 {
+			t.Fatal("LoRA was not loaded")
+		}
+		answer, err := a.Chat(ChatRequest{Mode: "fast", Prompt: "こんにちは．短く自己紹介をお願いします．", MaxTokens: 100, Stream: true})
+		if err != nil || strings.TrimSpace(answer.Answer) == "" {
+			t.Fatal("adapter inference failed", err)
+		}
+		t.Log("experimental LoRA loaded and streamed; this is not a quality approval")
+		if _, err := a.ApplyLocalModel(ApplyLocalModelRequest{Role: "fast", ModelID: "qwen3-8b"}); err != nil {
+			t.Fatal(err)
+		}
+		if adapters() != 0 {
+			t.Fatal("LoRA remained active after disabling")
+		}
+		chat(true)
+	}
 }
