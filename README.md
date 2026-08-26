@@ -1,8 +1,45 @@
 # Ephy Runtime
 
+Ephyの会話起動は[Conversation MVP](docs/CONVERSATION_MVP.md)，開発者向けmodel／LoRA選択は[Model Manager](docs/MODEL_MANAGER.md)を参照してください．
+
 Phase 1 の実装に加えて、Phase 2 の入口と Go + Wails デスクトップ UI の土台を用意した。
 
 タスク管理、会話方針、Git運用、標準testは [`docs/WORKFLOW.md`](docs/WORKFLOW.md) を参照する。
+
+EphyのIdentity，Profile，Memory，Growth及びInstance Lifecycleの設計は，[`docs/design/`](docs/design/README.md)を正本とする．設計判断と理由は，[`docs/adr/`](docs/adr/README.md)で管理する．
+
+## 最初の会話
+
+配置を移動した場合も含め，まずruntimeとmodelを確認してから，標準stackを1コマンドで起動する．
+
+```bash
+./scripts/phase1.sh check
+./scripts/phase1.sh
+```
+
+WailsのChat画面で「こんにちは，自己紹介して」と送信し，stream応答が返れば会話経路は利用可能である．終了時は次を実行する．
+
+```bash
+./scripts/phase1.sh stop
+```
+
+会話MVPの範囲，完了条件，優先順は[`docs/CONVERSATION_MVP.md`](docs/CONVERSATION_MVP.md)を参照する．
+
+## Ephy ecosystem role
+
+`ephy-runtime`は，model routing，RAG，tool実行，評価，desktop interactionを所有するlocal-first runtimeである．既存の`apps/worker/cli.py`はlocal CLIであり，独立PC上のremote nodeである`ephy-worker`とは異なる．大規模なpackage renameは今回行わず，後続refactorとして扱う．
+
+## Repository relationships
+
+親projectは`ephy`であり，`karte`および`karte-renderer`と直接統合する．正本は[`.ephy/project.yaml`](.ephy/project.yaml)とし，下流consumer一覧は重複管理しない．
+
+## Security and data handling
+
+秘密情報，raw conversation，不要な個人情報，Karte production data，camera master画像，raw LoRA dataset，model weightを通常のGitへ保存しない．詳細は[`docs/security-and-data.md`](docs/security-and-data.md)を参照する．
+
+## License
+
+このrepositoryのlicenseは未決定であり，推測で追加しない．公開範囲と配布条件を確認してから明示的に決定する．
 
 ## 含まれるもの
 
@@ -164,6 +201,8 @@ Karte bundle を Markdown 化して index し、そのまま検索対象に入�
 ```
 
 bundle 形式は `configs/karte.sample.json` と同じで、`cards[].title` と `cards[].body` を必須にし、`project` と `tags` は card ごとに指定できる。
+
+このJSON bundle入出力は互換adapterの試作であり，Karte本体の`KARTE_DATA_DIR/content`と接続した実統合ではない．正式境界は[`ADR-0007`](docs/adr/ADR-0007-karte-adapter-is-compatibility-layer.md)で未決定事項として管理する．
 
 ## RAG の簡易確認
 

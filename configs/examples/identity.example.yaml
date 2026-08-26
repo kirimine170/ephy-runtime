@@ -1,0 +1,25 @@
+schema_version: "1.0.0"
+
+identity:
+  lineage_name: "Ephy"
+  individual_name: "エフィ"
+  ordinal: 0
+  instance_id: "019c0000-0000-7000-8000-000000000000"
+  parent_instance_id: null
+  created_at: "2026-08-05T00:00:00+09:00"
+  status: "active"
+
+genesis:
+  runtime_version: "0.1.0"
+  profile_version: "0.1.0"
+  genesis_manifest_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  created_by: "example-owner"
+
+ownership:
+  owner_reference: "private://owner/example"
+  owner_data_embedded: false
+
+verification:
+  signature_algorithm: null
+  public_key_id: null
+  signature: null

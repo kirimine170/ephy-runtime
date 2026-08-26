@@ -5,12 +5,4 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_runtime_common.sh"
 
 MODEL_PATH="$(resolve_fast_model_path || true)"
 require_llama_server
-require_file "${MODEL_PATH}" "fast model"
-
-exec "${LLAMA_SERVER_BIN}" \
-  -m "${MODEL_PATH}" \
-  --host 127.0.0.1 \
-  --port 8081 \
-  --ctx-size 32768 \
-  --alias qwen3-8b \
-  --n-gpu-layers 99
+exec_configured_model fast "${MODEL_PATH}" qwen3-8b 8081

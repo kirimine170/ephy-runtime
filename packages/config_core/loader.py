@@ -1,9 +1,12 @@
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Mapping
+from uuid import UUID
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -69,6 +72,29 @@ class WebSearchConfig(BaseModel):
     max_context_chars: int = 4000
 
 
+class EphyRuntimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    private_root: str | None = None
+    instance_id: UUID | None = None
+    identity_filename: str = "identity.yaml"
+    profile_filename: str = "profile.yaml"
+
+    @field_validator("identity_filename", "profile_filename")
+    @classmethod
+    def require_plain_filename(cls, value: str) -> str:
+        if (
+            not value
+            or Path(value).name != value
+            or "/" in value
+            or "\\" in value
+            or value in {".", ".."}
+        ):
+            raise ValueError("Ephy config filenames must not contain path components")
+        return value
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -77,6 +103,16 @@ class AppConfig(BaseModel):
     rag: RagConfig = Field(default_factory=RagConfig)
     vector_db: VectorDBConfig = Field(default_factory=VectorDBConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    ephy: EphyRuntimeConfig = Field(default_factory=EphyRuntimeConfig)
+
+
+@dataclass(frozen=True)
+class ResolvedEphyPaths:
+    private_root: Path
+    instance_id: UUID
+    instance_dir: Path
+    identity_path: Path
+    profile_path: Path
 
 
 def _read_yaml(path: Path) -> dict:
@@ -125,15 +161,52 @@ def load_app_config() -> AppConfig:
     routes_payload = _load_yaml_with_optional_local("routes")
     rag_payload = _load_yaml_with_optional_local("rag")
     web_payload = _load_optional_yaml_with_optional_local("web")
+    ephy_payload = _load_optional_yaml_with_optional_local("ephy")
+    if os.getenv("EPHY_RUNTIME_DISABLE_LOCAL_CONFIG") != "1":
+        from packages.model_registry.service import ModelRegistry
+
+        models_payload = _merge_dicts(models_payload, {
+            "models": ModelRegistry(CONFIG_DIR.parent).model_overrides(),
+        })
     return AppConfig(
         models=models_payload.get("models", {}),
         routes=routes_payload.get("routes", {}),
         rag=rag_payload.get("rag", {}),
         vector_db=rag_payload.get("vector_db", {}),
         web_search=web_payload.get("web_search", {}),
+        ephy=ephy_payload.get("ephy", {}),
     )
 
 
 def reload_app_config() -> AppConfig:
     load_app_config.cache_clear()
     return load_app_config()
+
+
+def resolve_ephy_paths(
+    config: EphyRuntimeConfig,
+    environ: Mapping[str, str] | None = None,
+) -> ResolvedEphyPaths:
+    env = environ if environ is not None else os.environ
+    root_value = env.get("EPHY_PRIVATE_ROOT") or config.private_root
+    instance_value = env.get("EPHY_INSTANCE_ID") or config.instance_id
+
+    if not root_value:
+        raise ValueError("EPHY_PRIVATE_ROOT or ephy.private_root is required")
+    if not instance_value:
+        raise ValueError("EPHY_INSTANCE_ID or ephy.instance_id is required")
+
+    private_root = Path(root_value).expanduser()
+    if not private_root.is_absolute():
+        raise ValueError("Ephy private root must be an absolute path")
+
+    instance_id = UUID(str(instance_value))
+    resolved_root = private_root.resolve(strict=False)
+    instance_dir = resolved_root / "instances" / str(instance_id)
+    return ResolvedEphyPaths(
+        private_root=resolved_root,
+        instance_id=instance_id,
+        instance_dir=instance_dir,
+        identity_path=instance_dir / config.identity_filename,
+        profile_path=instance_dir / config.profile_filename,
+    )

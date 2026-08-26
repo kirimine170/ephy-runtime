@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ephy.local/schemas/identity_manifest.schema.json",
+  "title": "Ephy Identity Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity",
+    "genesis"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lineage_name",
+        "individual_name",
+        "ordinal",
+        "instance_id",
+        "created_at",
+        "status"
+      ],
+      "properties": {
+        "lineage_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "individual_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "instance_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "parent_instance_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "provisioning",
+            "active",
+            "suspended",
+            "archived",
+            "revoked"
+          ]
+        }
+      }
+    },
+    "genesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "genesis_manifest_hash"
+      ],
+      "properties": {
+        "runtime_version": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "profile_version": {
+          "$ref": "#/$defs/semanticVersion"
+        },
+        "genesis_manifest_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "created_by": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner_reference",
+        "owner_data_embedded"
+      ],
+      "properties": {
+        "owner_reference": {
+          "type": "string",
+          "format": "uri"
+        },
+        "owner_data_embedded": {
+          "const": false
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "signature_algorithm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "public_key_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "signature": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

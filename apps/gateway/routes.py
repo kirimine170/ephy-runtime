@@ -85,6 +85,7 @@ def build_router() -> APIRouter:
             "service": "ephy-runtime-gateway",
             "configured_models": sorted(config.models.keys()),
             "web_search_enabled": config.web_search.enabled,
+            "ephy_enabled": request.app.state.ephy_context is not None,
         }
 
     @router.get("/v1/models")

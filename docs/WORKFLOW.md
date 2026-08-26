@@ -3,6 +3,9 @@
 ## 正本
 
 - タスク、優先度、フェーズ、依存関係、完了条件は [Ephyタスク・バックログ管理](https://docs.google.com/spreadsheets/d/1b6-QifgaXWl3TeMMEf7yTq3VxduIrLewyVVlGhiVudo/edit) を正本とする。
+- Identity，Profile，Memory，Growth及びInstance Lifecycleの設計仕様は，[`docs/design/`](design/README.md)を正本とする．
+- 設計判断と理由は，[`docs/adr/`](adr/README.md)を正本とする．
+- machine-readableな制約は`schemas/`，公開可能な設定例は`configs/examples/`で管理する．未実装の間は，対応する設計資料を正本とする．
 - 実装開始前に対象Task ID、依存、完了条件を確認する。
 - 新しい要件や実装中に判明した課題は、既存Taskへ追記するか新しいTaskとして登録する。
 - 実装完了時は状態、進捗、根拠、リスク、最終更新日を更新し、更新履歴を残す。

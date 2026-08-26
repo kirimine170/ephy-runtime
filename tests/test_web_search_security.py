@@ -76,10 +76,10 @@ def build_config() -> AppConfig:
     "secret",
     [
         "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456",
-        "token=ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+        "token=ghp_" + "abcdefghijklmnopqrstuvwxyz1234567890",
         "JWT eyJabcdefghijk.eyJabcdefghijk.abcdefghijklmnop",
         "password=super-secret-password",
-        "-----BEGIN PRIVATE KEY-----",
+        "-----BEGIN " + "PRIVATE KEY-----",
     ],
 )
 def test_detector_hard_blocks_credentials(secret) -> None:

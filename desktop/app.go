@@ -29,6 +29,7 @@ type App struct {
 	httpClient *http.Client
 
 	mu                 sync.Mutex
+	modelLifecycleMu   sync.Mutex
 	workspaceRoot      string
 	fastCmd            *exec.Cmd
 	fastRunning        bool
@@ -593,6 +594,15 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.workspaceRoot = detectWorkspaceRoot()
+	if os.Getenv("EPHY_START_CONVERSATION") == "1" {
+		go func() {
+			if _, err := a.startConversation(); err != nil {
+				a.mu.Lock()
+				a.appendGatewayLog("conversation startup failed: " + err.Error())
+				a.mu.Unlock()
+			}
+		}()
+	}
 }
 
 func (a *App) GetGatewayURL() string {
@@ -2084,6 +2094,8 @@ func (a *App) RunRuntimeStackAction(request RuntimeStackActionRequest) (*Workflo
 	)
 
 	switch action {
+	case "start_conversation":
+		response, err = a.startConversation()
 	case "start_recommended_stack":
 		response, err = a.StartRecommendedStack()
 	case "stop_recommended_stack":
@@ -5417,6 +5429,12 @@ func (a *App) getQdrantRuntimeState() (bool, string) {
 }
 
 func (a *App) startModelProcess(scriptRelativePath string, label string, cmdRef **exec.Cmd, runningRef *bool, appendFn func(string), captureFn func(io.ReadCloser), waitFn func(*exec.Cmd)) (*RuntimeStatus, error) {
+	a.modelLifecycleMu.Lock()
+	defer a.modelLifecycleMu.Unlock()
+	return a.startModelProcessLocked(scriptRelativePath, label, cmdRef, runningRef, appendFn, captureFn, waitFn)
+}
+
+func (a *App) startModelProcessLocked(scriptRelativePath string, label string, cmdRef **exec.Cmd, runningRef *bool, appendFn func(string), captureFn func(io.ReadCloser), waitFn func(*exec.Cmd)) (*RuntimeStatus, error) {
 	a.mu.Lock()
 	if *runningRef {
 		a.mu.Unlock()
@@ -5464,6 +5482,12 @@ func (a *App) startModelProcess(scriptRelativePath string, label string, cmdRef 
 }
 
 func (a *App) stopModelProcess(label string, cmdRef **exec.Cmd, runningRef *bool, appendFn func(string)) (*RuntimeStatus, error) {
+	a.modelLifecycleMu.Lock()
+	defer a.modelLifecycleMu.Unlock()
+	return a.stopModelProcessLocked(label, cmdRef, runningRef, appendFn)
+}
+
+func (a *App) stopModelProcessLocked(label string, cmdRef **exec.Cmd, runningRef *bool, appendFn func(string)) (*RuntimeStatus, error) {
 	a.mu.Lock()
 	cmd := *cmdRef
 	if cmd == nil || cmd.Process == nil || !*runningRef {
@@ -5480,19 +5504,26 @@ func (a *App) stopModelProcess(label string, cmdRef **exec.Cmd, runningRef *bool
 	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
 		return nil, err
 	}
-	time.Sleep(300 * time.Millisecond)
-	a.mu.Lock()
-	*runningRef = false
-	*cmdRef = nil
-	appendFn(label + " stop requested")
-	a.mu.Unlock()
-	return a.GetRuntimeStatus(), nil
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		stopped := *cmdRef != cmd || !*runningRef
+		a.mu.Unlock()
+		if stopped {
+			return a.GetRuntimeStatus(), nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("%s did not exit; model selection was not changed", label)
 }
 
 func (a *App) waitModelProcess(cmd *exec.Cmd, cmdRef **exec.Cmd, runningRef *bool, appendFn func(string), label string) {
 	err := cmd.Wait()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if *cmdRef != cmd {
+		return // An older process must not clear a newer process handle．
+	}
 	*runningRef = false
 	*cmdRef = nil
 	if err != nil {
