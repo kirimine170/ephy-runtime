@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -277,23 +278,32 @@ def validate_metadata(path: Path) -> list[str]:
 
 
 def iter_text_files(root: Path) -> Iterable[tuple[str, str]]:
-    """Yield small UTF-8 text files while excluding VCS and generated caches."""
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(root)
-        if any(part in {".git", "__pycache__", ".pytest_cache"} for part in relative.parts):
-            continue
-        try:
-            content = path.read_bytes()
-        except OSError:
-            continue
-        if len(content) > 1_000_000 or b"\x00" in content:
-            continue
-        try:
-            yield relative.as_posix(), content.decode("utf-8")
-        except UnicodeDecodeError:
-            continue
+    """Scan source text without loading model weights or traversing dependencies."""
+    excluded = {".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache",
+                ".ruff_cache", "node_modules", "build", "dist"}
+    limit = 1_000_000
+    for directory, names, files in os.walk(root, followlinks=False):
+        parent = Path(directory)
+        names[:] = sorted(name for name in names if name not in excluded and
+                          not (parent == root and name in {"llama.cpp", "tools"}) and
+                          not (parent / name).is_symlink())
+        for name in sorted(files):
+            path = parent / name
+            if path.is_symlink():
+                continue
+            try:
+                if not path.is_file() or path.stat().st_size > limit:
+                    continue
+                with path.open("rb") as stream:
+                    content = stream.read(limit + 1)
+            except OSError:
+                continue
+            if len(content) > limit or b"\x00" in content:
+                continue
+            try:
+                yield path.relative_to(root).as_posix(), content.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
 
 
 def validate_placeholders(text_files: Sequence[tuple[str, str]]) -> list[str]:

@@ -7,13 +7,36 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 VALIDATE_SCRIPT = REPOSITORY_ROOT / "scripts" / "validate_repository.py"
 sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
 
-from validate_repository import validate_parent_graph
+from validate_repository import iter_text_files, validate_parent_graph
+
+
+class TextScanTests(unittest.TestCase):
+    def test_generated_dependencies_and_symlinks_are_not_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "source.py").write_text("source")
+            for name in (".venv", "llama.cpp", "tools", "desktop/frontend/node_modules", "desktop/build"):
+                directory = root / name
+                directory.mkdir(parents=True)
+                (directory / "dependency.py").write_text("dependency")
+            (root / "linked.py").symlink_to(root / "source.py")
+            self.assertEqual(list(iter_text_files(root)), [("source.py", "source")])
+
+    def test_large_model_is_skipped_before_opening(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            weight = root / "model.gguf"
+            with weight.open("wb") as stream:
+                stream.truncate(1_000_001)
+            with mock.patch.object(Path, "open", side_effect=AssertionError("large file was opened")):
+                self.assertEqual(list(iter_text_files(root)), [])
 
 
 class ValidateRepositoryTests(unittest.TestCase):
