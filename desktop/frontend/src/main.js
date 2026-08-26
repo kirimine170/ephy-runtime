@@ -11,6 +11,7 @@ import {
   renderSinglePresetBatchActionButtons,
 } from './presetBatchRender';
 import {prepareWebSearchRequest} from './webSearchFlow';
+import {mountModelManager} from './modelManager';
 import {
   renderOverviewPresetRuntimeHintCard,
   renderPresetCatalogCard,
@@ -21,6 +22,10 @@ import {
 } from './presetWorkflowRender';
 
 import {
+  GetLocalModelCatalog,
+  SetDeveloperMode,
+  ImportLocalModel,
+  ApplyLocalModel,
   CancelBatchWorkflow,
   ClearBatchPresetSelection,
   ClearBatchWorkflowState,
@@ -390,7 +395,7 @@ app.innerHTML = `
                 </select>
                 <select id="chat-mode" class="text-input chat-toolbar-select" aria-label="Mode">
                   <option value="auto">Auto</option>
-                  <option value="fast">Quick</option>
+                  <option value="fast" selected>Quick</option>
                   <option value="work">Deep Work</option>
                   <option value="rag">With Sources</option>
                   <option value="code">Code</option>
@@ -412,6 +417,8 @@ app.innerHTML = `
                   <span>Web</span>
                 </label>
                 <span id="chat-web-status" class="chat-web-status">Local only</span>
+                <button id="start-conversation" class="ghost-btn" type="button">Ephyを起動</button>
+                <span id="conversation-start-status" role="status" class="helper-text"></span>
                 <div id="chat-source-scope" class="chat-toolbar-meta">scope=all | project=(default) | top_k=5</div>
                 <div class="chat-header-actions">
                   <details id="chat-more-menu" class="chat-more-menu">
@@ -1269,6 +1276,7 @@ app.innerHTML = `
       </section>
       <section class="tab" data-tab-panel="settings">
         <div class="settings-hub">
+          <article class="panel" id="developer-model-manager"></article>
           <article class="panel">
             <div class="panel-head">
               <h2>Settings</h2>
@@ -1319,6 +1327,29 @@ app.innerHTML = `
     </dialog>
   </div>
 `;
+
+mountModelManager(document.getElementById('developer-model-manager'), {
+  GetLocalModelCatalog, SetDeveloperMode, ImportLocalModel, ApplyLocalModel,
+});
+
+document.getElementById('start-conversation').addEventListener('click', async () => {
+  const button = document.getElementById('start-conversation');
+  button.disabled = true;
+  button.textContent = '起動中…';
+  document.getElementById('conversation-start-status').textContent = '';
+  try {
+    const result = await RunRuntimeStackAction({action: 'start_conversation'});
+    if (result.status !== 'ok') throw new Error(result.detail);
+    document.getElementById('chat-mode').value = 'fast';
+    button.textContent = '会話できます';
+    await refreshRuntime();
+  } catch (error) {
+    button.textContent = '起動を再試行';
+    button.title = String(error);
+    document.getElementById('conversation-start-status').textContent = String(error);
+    setOutput('runtime-config-status', String(error));
+  } finally { button.disabled = false; }
+});
 
 function bindTabs() {
   document.querySelectorAll('.nav-btn').forEach((button) => {
@@ -1798,7 +1829,7 @@ function startNewChat() {
   document.getElementById('chat-prompt').value = '';
   document.getElementById('chat-save-name').value = '';
   document.getElementById('chat-history-select').value = '';
-  document.getElementById('chat-mode').value = 'auto';
+  document.getElementById('chat-mode').value = 'fast';
   document.getElementById('chat-web-search').checked = false;
   document.getElementById('rag-project').value = '';
   document.getElementById('rag-source-path').value = '';

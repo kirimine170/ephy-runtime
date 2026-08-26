@@ -208,6 +208,27 @@ exec_llama_server() {
   exec "${LLAMA_SERVER_BIN}" "$@"
 }
 
+exec_configured_model() {
+  local role="$1"
+  local fallback_path="$2"
+  local fallback_alias="$3"
+  local port="$4"
+  if [[ -f "${ROOT_DIR}/configs/runtime-selection.local.json" ]]; then
+    local python_bin="${EPHY_PYTHON_BIN:-${ROOT_DIR}/.venv/bin/python}"
+    if [[ ! -x "${python_bin}" ]]; then
+      echo 'model selection requires the runtime Python environment' >&2
+      exit 1
+    fi
+    export PYTHONPATH="${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+    exec "${python_bin}" -m packages.model_registry --root "${ROOT_DIR}" launch \
+      --role "${role}" --server "${LLAMA_SERVER_BIN}" \
+      --fallback-path "${fallback_path}" --fallback-alias "${fallback_alias}"
+  fi
+  require_file "${fallback_path}" "${role} model"
+  exec_llama_server -m "${fallback_path}" --host 127.0.0.1 --port "${port}" \
+    --ctx-size 32768 --alias "${fallback_alias}" --n-gpu-layers 99
+}
+
 require_file() {
   local target="$1"
   local label="$2"

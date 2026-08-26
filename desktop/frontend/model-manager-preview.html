@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Model Manager · UI test fixture</title></head>
+<body><main style="max-width:1000px;margin:48px auto;padding:24px"><p>UI test fixture · 実モデルや設定は変更しません．</p><article id="manager" class="panel"></article></main>
+<script type="module">
+import './src/style.css';
+import './src/app.css';
+import {mountModelManager} from './src/modelManager.js';
+let catalog = {developer_mode:false, revision:'fixture', selections:{fast:{model_id:'qwen3-8b-q6-k'}}, models:[
+  {id:'qwen3-8b-q6-k',sha256:'base-a',size_bytes:6500000000,available:true},
+  {id:'alternate-local-model',sha256:'base-b',size_bytes:8000000000,available:true},
+  {id:'missing-model',sha256:'missing',size_bytes:4000000000,available:false},
+], adapters:[{id:'ephy-style-v0',base_model_id:'qwen3-8b-q6-k',base_sha256:'base-a',available:true,experimental:true}]};
+mountModelManager(document.querySelector('#manager'), {
+  GetLocalModelCatalog: async()=>structuredClone(catalog),
+  SetDeveloperMode: async(enabled)=>{catalog.developer_mode=enabled;},
+  ImportLocalModel: async()=>{throw new Error('このfixtureではファイルを読み込みません．');},
+  ApplyLocalModel: async(request)=>{
+    catalog.selections[request.role]={model_id:request.model_id,adapter_id:request.adapter_id};
+    return structuredClone(catalog);
+  },
+});
+</script></body>
+</html>

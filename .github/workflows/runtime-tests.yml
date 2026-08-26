@@ -34,3 +34,19 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  desktop:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci && npm run build
+        working-directory: desktop/frontend
+      - run: go test ./...
+        working-directory: desktop

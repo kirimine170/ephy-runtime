@@ -12,6 +12,7 @@ from packages.rag_core.service import RagService
 from packages.router_core.router import ModelRouter
 from packages.web_search_core.service import WebSearchService
 from .routes import build_router
+from .model_transition import InferenceGate, InferenceGateMiddleware, transition_router
 
 
 def initialize_app_state(app: FastAPI, config) -> None:
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
     adapter = LlamaCppChatAdapter()
     app.state.chat_adapter = adapter
     app.state.ephy_context = None
+    app.state.inference_gate = InferenceGate()
     app.state.web_search_service = None
     try:
         initialize_app_state(app, load_app_config())
@@ -61,3 +63,5 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Local LLM Workbench Gateway", version="0.1.0", lifespan=lifespan)
 app.include_router(build_router())
+app.include_router(transition_router)
+app.add_middleware(InferenceGateMiddleware)
