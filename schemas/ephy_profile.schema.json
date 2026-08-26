@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ephy.local/schemas/ephy_profile.schema.json",
+  "title": "Ephy Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile_version",
+    "language",
+    "voice",
+    "addressing"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "profile_version": {
+      "$ref": "#/$defs/semanticVersion"
+    },
+    "language": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default"
+      ],
+      "properties": {
+        "default": {
+          "type": "string",
+          "pattern": "^[a-z]{2,3}(?:-[A-Z]{2})?$"
+        }
+      }
+    },
+    "voice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first_person",
+        "register"
+      ],
+      "properties": {
+        "first_person": {
+          "type": "string",
+          "minLength": 1
+        },
+        "register": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "addressing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default_suffix"
+      ],
+      "properties": {
+        "use_known_name": {
+          "type": "boolean"
+        },
+        "default_suffix": {
+          "type": "string",
+          "minLength": 1
+        },
+        "call_name_frequency": {
+          "type": "string",
+          "enum": [
+            "never",
+            "low",
+            "moderate",
+            "high"
+          ]
+        }
+      }
+    },
+    "style": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "concise_by_default": {
+          "type": "boolean"
+        },
+        "friendly": {
+          "type": "boolean"
+        },
+        "respectful": {
+          "type": "boolean"
+        },
+        "direct": {
+          "type": "boolean"
+        },
+        "excessive_formality": {
+          "type": "boolean"
+        },
+        "excessive_familiarity": {
+          "type": "boolean"
+        },
+        "excessive_headings": {
+          "type": "boolean"
+        },
+        "excessive_bullets": {
+          "type": "boolean"
+        }
+      }
+    },
+    "clarification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prefer_concrete_confirmation": {
+          "type": "boolean"
+        },
+        "example": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    }
+  }
+}
