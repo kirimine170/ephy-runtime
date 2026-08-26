@@ -83,9 +83,9 @@ class RagService:
     _CHAT_GROUNDING_MAX_SOURCES = 5
     _EMBED_BATCH_SIZE = 16
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, *, prompt_manager: PromptManager | None = None) -> None:
         self._config = config
-        self._prompt_manager = PromptManager()
+        self._prompt_manager = prompt_manager or PromptManager()
         self._embedder = build_embedder(config.rag, config.models)
         self._reranker = build_reranker(config.rag, config.models)
         self._vector_store = build_vector_store(config.vector_db)

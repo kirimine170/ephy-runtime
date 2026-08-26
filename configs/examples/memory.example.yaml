@@ -1,0 +1,19 @@
+memory_id: "019c0000-0001-7000-8000-000000000000"
+instance_id: "019c0000-0000-7000-8000-000000000000"
+subject: "user"
+type: "preference"
+content: "句読点は「，」「．」を使用する"
+source:
+  type: "conversation"
+  reference: "private://conversation/example"
+confidence: 1.0
+created_at: "2026-08-05T00:00:00+09:00"
+updated_at: "2026-08-05T00:00:00+09:00"
+valid_from: "2026-08-05T00:00:00+09:00"
+valid_until: null
+retention_policy: "until_deleted"
+consent:
+  storage_allowed: true
+  training_allowed: false
+status: "active"
+supersedes: null

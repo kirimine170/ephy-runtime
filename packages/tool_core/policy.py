@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 
 from .schemas import (
     ApprovalGrant,
@@ -57,7 +58,10 @@ def plan_tool_invocation(
         return _decision(ToolDecisionType.BLOCK, "permission_not_granted", digest, required)
     if ToolPermission.NETWORK_ACCESS in required and not context.network_enabled:
         return _decision(ToolDecisionType.BLOCK, "network_disabled", digest, required)
-    if context.allowed_workspace_roots and invocation.workspace_root not in context.allowed_workspace_roots:
+    if context.allowed_workspace_roots and not _workspace_root_allowed(
+        invocation.workspace_root,
+        context.allowed_workspace_roots,
+    ):
         return _decision(ToolDecisionType.BLOCK, "workspace_root_not_allowed", digest, required)
 
     if definition.approval_policy == ApprovalPolicy.ALWAYS:
@@ -88,3 +92,11 @@ def _decision(
         invocation_hash=digest,
         required_permissions=permissions,
     )
+
+
+def _workspace_root_allowed(workspace_root: str, allowed_roots: tuple[str, ...]) -> bool:
+    try:
+        candidate = Path(workspace_root).expanduser().resolve(strict=False)
+        return any(candidate == Path(root).expanduser().resolve(strict=False) for root in allowed_roots)
+    except (OSError, RuntimeError, ValueError):
+        return False

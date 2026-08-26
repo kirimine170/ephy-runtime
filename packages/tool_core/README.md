@@ -100,6 +100,40 @@ approval storeは実行開始と同時にgrantへ`consumed_at`を設定し，同
 
 `ToolAuditEvent`はinvocation hash，tool，permission，decision/result，時刻，duration，output切詰め有無，error codeだけを保持する．file pathやhostが必要な場合も生値ではなくtarget hashを保存する．user prompt，raw arguments，file content，process outputは保存しない．
 
+## Read-only Tool Set
+
+T-034では，次の固定toolを`ReadOnlyToolExecutor`から提供する．すべて`read_files`権限だけを要求し，`ToolPolicyContext.allowed_workspace_roots`内に対象を制限する．
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `files.read` | `path` | UTF-8 textとworkspace相対path |
+| `files.list` | `path?`, `recursive?`, `max_entries?` | file／directory metadata |
+| `files.search` | `query`, `path?`, `case_sensitive?`, `max_results?` | file，行番号，該当行 |
+| `git.status` | なし | short status |
+| `git.diff` | `path?`, `staged?` | working tree／index diff |
+| `git.log` | `limit?` | commit metadata |
+
+file toolはcanonical root，`..`，symlink，special file，sensitive pathを実行直前に検査する．`.env*`，`.ssh`，`.aws`，`.gnupg`，`.git`，credential名，private key拡張子はread権限があっても拒否する．file本文や検索結果は実行結果にだけ含め，audit eventには保存しない．出力はtool definitionのbyte上限で切り詰める．
+
+Git toolは任意commandやrevision引数を受け取らない．shellを使わず固定argvで`status`，`diff`，`log`だけを実行し，global／system config，pager，optional lock，terminal promptを無効化する．初期版ではworkspace直下に通常の`.git` directoryがあるrepositoryだけを対象とし，外部gitdirを参照するworktreeは拒否する．
+
+```python
+from packages.tool_core import ReadOnlyToolExecutor
+
+record = ReadOnlyToolExecutor().execute(invocation, policy_context)
+if record.decision.decision == "allow" and record.result.status == "succeeded":
+    consume(record.result.output)
+append_metadata_only_audit(record.audit_event)
+```
+
+## Approved Mutation Tools
+
+T-035では`files.write`と`process.run`を`MutationToolExecutor`から提供する．どちらも`approval_policy=always`であり，`plan()`が返すprepared invocationのhashに対するone-shot grantがなければ`execute()`は実行しない．grantは`InMemoryApprovalStore`内のlock下で実行開始時に消費され，同じ承認を並列実行やretryへ再利用できない．
+
+`files.write`は現在内容のSHA-256とunified diffをpreviewへ含める．承認後にhashを再検査し，同じdirectory内のtemporary fileを`fsync`してから`os.replace`する．新規fileは`expected_sha256=null`，既存fileはpreview時のhashがexact matchしなければならない．delete，move，recursive write，binary writeは対象外とする．
+
+`process.run`はshell文字列ではなく`argv[]`だけを受け取る．実行fileはabsolute path，cwdは許可workspace内，environmentは`LANG`，`LC_ALL`，`NO_COLOR`，`PYTHONUTF8`，`TZ`だけを追加可能とする．macOSでは`sandbox-exec`でnetwork，workspace外のuser data read，workspace外writeを拒否する．timeout時はprocess groupを終了し，stdout／stderrは合計byte上限まで読み取る．対応sandboxがないplatformでは安全側に倒して`sandbox_unavailable`で拒否する．
+
 ## 後続タスクの完了条件
 
 - `T-034`: read-only file/search/git toolが許可root，symlink，sensitive path testを通る．
