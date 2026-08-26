@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from packages.identity_core import IdentityService
 from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage
 from packages.profile_core import ProfileService
@@ -11,6 +14,19 @@ from packages.prompt_core.loader import PromptManager
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY_EXAMPLE = ROOT / "configs" / "examples" / "identity.example.yaml"
 PROFILE_EXAMPLE = ROOT / "configs" / "examples" / "profile.example.yaml"
+
+
+def test_profile_rejects_empty_clarification_example() -> None:
+    profile = ProfileService().load(PROFILE_EXAMPLE).model_dump(by_alias=True)
+    profile["clarification"]["example"] = [""]
+    with pytest.raises(ValidationError):
+        ProfileService().validate(profile)
+
+
+def test_identity_loader_allows_omitted_parent() -> None:
+    identity = IdentityService().load(IDENTITY_EXAMPLE).model_dump(mode="json")
+    del identity["identity"]["parent_instance_id"]
+    assert IdentityService().validate(identity).identity.parent_instance_id is None
 
 
 def test_profile_service_loads_and_resolves_policy() -> None:

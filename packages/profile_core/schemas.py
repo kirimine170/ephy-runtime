@@ -45,7 +45,7 @@ class StyleConfig(StrictFrozenModel):
 
 class ClarificationConfig(StrictFrozenModel):
     prefer_concrete_confirmation: bool = True
-    example: tuple[str, ...] = ()
+    example: tuple[Annotated[str, Field(min_length=1)], ...] = ()
 
     @field_validator("example")
     @classmethod

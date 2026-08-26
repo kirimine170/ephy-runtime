@@ -34,7 +34,7 @@ class IdentityRecord(StrictFrozenModel):
     individual_name: str = Field(min_length=1)
     ordinal: int = Field(ge=0)
     instance_id: UUID
-    parent_instance_id: UUID | None
+    parent_instance_id: UUID | None = None
     created_at: datetime
     status: IdentityStatus
 
