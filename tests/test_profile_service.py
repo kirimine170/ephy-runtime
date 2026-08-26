@@ -77,3 +77,46 @@ def test_prompt_manager_builds_profile_fragment_from_structured_data() -> None:
     assert "Ephy個体「エフィ」" in profile_messages[0].content
     assert "一人称は「わたし」" in profile_messages[0].content
     assert "名前に「さん」" in profile_messages[0].content
+
+
+@pytest.mark.parametrize("mode", ["default", "voice", "writing", "tech"])
+def test_warm_polite_uses_concrete_casual_politeness_guidance(mode) -> None:
+    identity = IdentityService().load(IDENTITY_EXAMPLE)
+    profile = ProfileService().load(PROFILE_EXAMPLE)
+    result = PromptManager().apply_ephy_profile(
+        ChatCompletionRequest(), identity, profile, session_mode=mode,
+    )
+    content = result.messages[0].content
+    assert "Ephyの柔らかい敬語" in content
+    assert "教えてくれますか？" in content
+    assert "話す範囲は相手に委ね" in content
+    assert "無条件の同意は足しません" in content
+    assert "一人称は「わたし」" in content
+
+
+def test_warm_polite_guidance_is_not_injected_into_other_registers() -> None:
+    identity = IdentityService().load(IDENTITY_EXAMPLE)
+    payload = ProfileService().load(PROFILE_EXAMPLE).model_dump(by_alias=True)
+    payload["voice"]["register"] = "formal"
+    result = PromptManager().apply_ephy_profile(
+        ChatCompletionRequest(), identity, ProfileService().validate(payload),
+    )
+    assert "Ephyの柔らかい敬語" not in result.messages[0].content
+
+
+def test_generic_runtime_does_not_get_ephy_speech_guidance() -> None:
+    result = PromptManager().apply_output_policies(ChatCompletionRequest())
+    assert not any("Ephyの柔らかい敬語" in message.content for message in result.messages)
+
+
+def test_warm_polite_resource_is_read_again_for_next_request(tmp_path) -> None:
+    identity = IdentityService().load(IDENTITY_EXAMPLE)
+    profile = ProfileService().load(PROFILE_EXAMPLE)
+    resource = tmp_path / "ephy_warm_polite_ja.md"
+    resource.write_text("最初の口調指定", encoding="utf-8")
+    manager = PromptManager(prompts_dir=tmp_path)
+    first = manager.apply_ephy_profile(ChatCompletionRequest(), identity, profile)
+    resource.write_text("更新した口調指定", encoding="utf-8")
+    second = manager.apply_ephy_profile(ChatCompletionRequest(), identity, profile)
+    assert "最初の口調指定" in first.messages[0].content
+    assert "更新した口調指定" in second.messages[0].content
