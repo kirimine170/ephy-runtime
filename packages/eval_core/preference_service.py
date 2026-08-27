@@ -39,6 +39,10 @@ PROMPT_COMPARISONS = {
     "prompt_v1_v2": ("v1", "v2"),
     "prompt_v2_v3": ("v2", "v3"),
 }
+RESULT_COMPARISONS = {
+    **PROMPT_COMPARISONS,
+    "base_vs_adapter": ("base", "adapter"),
+}
 
 
 class PreferenceService:
@@ -74,6 +78,22 @@ class PreferenceService:
     def create_session(self, request: CreatePreferenceSessionRequest) -> dict:
         self._ensure_safe_data_root()
         dataset_path, scenarios = self._load_dataset(request.dataset_path)
+        if request.comparison_mode == "base_vs_adapter":
+            _, adapter = self._current_artifacts(request.model_role)
+            if adapter is None:
+                raise ValueError(
+                    "Base/LoRA comparison requires a selected Model Manager adapter"
+                )
+            scenarios = [scenario for scenario in scenarios if scenario.split != "train"]
+            if not scenarios:
+                raise ValueError(
+                    "Base/LoRA comparison requires validation or holdout scenarios"
+                )
+            if request.pair_count > len(scenarios):
+                raise ValueError(
+                    "Base/LoRA pair count exceeds the available validation/holdout scenarios "
+                    f"({len(scenarios)})"
+                )
         session = PreferenceSession(
             session_id=str(uuid4()),
             dataset_path=str(dataset_path),
@@ -81,6 +101,7 @@ class PreferenceService:
             target_pairs=request.pair_count,
             prefetch=request.prefetch,
             comparison_mode=request.comparison_mode,
+            adapter_scale=request.adapter_scale,
             generation_parameters=request.generation_parameters,
             created_at=datetime.now(timezone.utc),
         )
@@ -96,6 +117,18 @@ class PreferenceService:
         async with self._generation_lock:
             with self._registry.selection_lease():
                 session = self._store.get_session(session_id)
+                if session.comparison_mode == "base_vs_adapter":
+                    model, adapter = self._current_artifacts(session.model_role)
+                    if adapter is None:
+                        raise ValueError(
+                            "Base/LoRA comparison requires the session adapter to remain selected"
+                        )
+                    self._ensure_adapter_session_consistency(
+                        session_id,
+                        model,
+                        adapter,
+                        session.adapter_scale,
+                    )
                 existing = self._store.generation_count(session_id)
                 remaining = max(session.target_pairs - existing, 0)
                 requested = limit if limit is not None else session.prefetch
@@ -176,6 +209,7 @@ class PreferenceService:
         categories: dict[str, Counter] = defaultdict(Counter)
         candidates: dict[str, dict] = {}
         prompt_variants: dict[str, Counter] = defaultdict(Counter)
+        adapter_variants: dict[str, Counter] = defaultdict(Counter)
         for item in rows:
             pair = item["pair"]
             scenario = item["scenario"]
@@ -194,6 +228,8 @@ class PreferenceService:
                 )
                 if candidate.prompt_variant:
                     prompt_variants[candidate.prompt_variant]["generated"] += 1
+                adapter_key = "adapter" if candidate.adapter_registration_id else "base"
+                adapter_variants[adapter_key]["generated"] += 1
             if vote is None:
                 continue
             reviewed += 1
@@ -213,6 +249,12 @@ class PreferenceService:
                     prompt_variants[winner.prompt_variant]["wins"] += 1
                 if loser.prompt_variant:
                     prompt_variants[loser.prompt_variant]["losses"] += 1
+                winner_adapter_key = (
+                    "adapter" if winner.adapter_registration_id else "base"
+                )
+                loser_adapter_key = "adapter" if loser.adapter_registration_id else "base"
+                adapter_variants[winner_adapter_key]["wins"] += 1
+                adapter_variants[loser_adapter_key]["losses"] += 1
                 displayed = (
                     "left"
                     if (vote.selection == "a") == (pair.display_order == "ab")
@@ -226,6 +268,8 @@ class PreferenceService:
         comparison = self._comparison_stats(
             session.comparison_mode,
             prompt_variants,
+            adapter_variants,
+            adapter_scale=session.adapter_scale,
             remaining=remaining,
         )
         return {
@@ -325,6 +369,23 @@ class PreferenceService:
                 candidate_a,
                 candidate_b,
             ) = await self._generate_prompt_comparison(
+                session,
+                base_request,
+                generation_index,
+                model,
+                adapter,
+            )
+        elif session.comparison_mode == "base_vs_adapter":
+            if adapter is None:
+                raise ValueError(
+                    "Base/LoRA comparison requires a selected Model Manager adapter"
+                )
+            (
+                response_a,
+                response_b,
+                candidate_a,
+                candidate_b,
+            ) = await self._generate_adapter_comparison(
                 session,
                 base_request,
                 generation_index,
@@ -462,6 +523,89 @@ class PreferenceService:
         assert candidate_first is not None and candidate_second is not None
         return response_first, response_second, candidate_first, candidate_second
 
+    async def _generate_adapter_comparison(
+        self,
+        session: PreferenceSession,
+        base_request: ChatCompletionRequest,
+        generation_index: int,
+        model,
+        adapter,
+    ) -> tuple[str, str, CandidateSpec, CandidateSpec]:
+        request = self._prompt_manager.apply_mode_prompt(
+            base_request,
+            session.model_role,
+            ephy_prompt_version="v3",
+        )
+        if self._prompt_revision(request) == self._prompt_revision(base_request):
+            raise ValueError(
+                "Base/LoRA comparison requires an enabled warm_polite Ephy Profile"
+            )
+        decision = self._route_request(request, model.backend_model)
+        prompt_revision = self._prompt_revision(request)
+        loaded = await self._adapter.list_lora_adapters(decision.selected_model)
+        expected_path = Path(adapter.path).resolve(strict=False)
+        matching = [
+            item
+            for item in loaded
+            if isinstance(item.get("id"), int)
+            and isinstance(item.get("path"), str)
+            and Path(item["path"]).resolve(strict=False) == expected_path
+        ]
+        if len(matching) != 1:
+            raise ValueError(
+                "Selected LoRA is not the adapter loaded by llama-server; apply it in "
+                "Model Manager before generating the comparison"
+            )
+        adapter_id = matching[0]["id"]
+        response_base = ""
+        response_adapter = ""
+        candidate_base = None
+        candidate_adapter = None
+        for attempt in range(4):
+            shared_seed = self._seed(
+                session.generation_parameters,
+                generation_index,
+                attempt,
+            )
+            parameters = session.generation_parameters.model_copy(
+                update={"seed": shared_seed}
+            )
+            response_base = await self._generate_response(
+                decision.selected_model,
+                request,
+                parameters,
+                lora_adapters=[{"id": adapter_id, "scale": 0.0}],
+            )
+            response_adapter = await self._generate_response(
+                decision.selected_model,
+                request,
+                parameters,
+                lora_adapters=[{"id": adapter_id, "scale": session.adapter_scale}],
+            )
+            candidate_base = self._candidate_spec(
+                session.model_role,
+                model,
+                None,
+                "v3",
+                prompt_revision,
+                parameters,
+            )
+            candidate_adapter = self._candidate_spec(
+                session.model_role,
+                model,
+                adapter,
+                "v3",
+                prompt_revision,
+                parameters,
+                adapter_scale=session.adapter_scale,
+            )
+            if self._normalize_response(response_base) != self._normalize_response(
+                response_adapter
+            ):
+                break
+        assert candidate_base is not None and candidate_adapter is not None
+        return response_base, response_adapter, candidate_base, candidate_adapter
+
     def _route_request(self, request: ChatCompletionRequest, backend_model: str):
         decision = self._router.route_chat(request)
         if decision.selected_model.model != backend_model:
@@ -470,7 +614,14 @@ class PreferenceService:
             )
         return decision
 
-    async def _generate_response(self, model_config, request, parameters: GenerationParameters) -> str:
+    async def _generate_response(
+        self,
+        model_config,
+        request,
+        parameters: GenerationParameters,
+        *,
+        lora_adapters: list[dict] | None = None,
+    ) -> str:
         payload = request.model_copy(
             update={
                 "temperature": parameters.temperature,
@@ -479,10 +630,13 @@ class PreferenceService:
                 "seed": parameters.seed,
             }
         )
-        response = await self._adapter.create_chat_completion(
-            model_config=model_config,
-            request_payload=payload,
-        )
+        request_args = {
+            "model_config": model_config,
+            "request_payload": payload,
+        }
+        if lora_adapters is not None:
+            request_args["lora_adapters"] = lora_adapters
+        response = await self._adapter.create_chat_completion(**request_args)
         try:
             content = response["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -500,6 +654,29 @@ class PreferenceService:
             raise ValueError(f"Model Manager has no registered selection for role '{role}'")
         return self._registry.resolve(selection, verify=False)
 
+    def _ensure_adapter_session_consistency(
+        self,
+        session_id: str,
+        model,
+        adapter,
+        adapter_scale: float,
+    ) -> None:
+        for item in self._store.session_rows(session_id):
+            pair = item["pair"]
+            if (
+                pair.candidate_a.model_registration_id != model.id
+                or pair.candidate_a.model_sha256 != model.sha256
+                or pair.candidate_a.adapter_registration_id is not None
+                or pair.candidate_b.model_registration_id != model.id
+                or pair.candidate_b.model_sha256 != model.sha256
+                or pair.candidate_b.adapter_registration_id != adapter.id
+                or pair.candidate_b.adapter_sha256 != adapter.sha256
+                or pair.candidate_b.adapter_scale != adapter_scale
+            ):
+                raise ValueError(
+                    "Model Manager selection changed after this Base/LoRA session started"
+                )
+
     @staticmethod
     def _candidate_spec(
         role,
@@ -508,6 +685,7 @@ class PreferenceService:
         prompt_variant,
         prompt_revision,
         parameters,
+        adapter_scale=None,
     ) -> CandidateSpec:
         return CandidateSpec(
             candidate_id=str(uuid4()),
@@ -516,6 +694,11 @@ class PreferenceService:
             model_sha256=model.sha256,
             adapter_registration_id=adapter.id if adapter else None,
             adapter_sha256=adapter.sha256 if adapter else None,
+            adapter_scale=(
+                adapter_scale
+                if adapter_scale is not None
+                else (1.0 if adapter else None)
+            ),
             prompt_variant=prompt_variant,
             prompt_revision=prompt_revision,
             generation_parameters=parameters,
@@ -546,19 +729,26 @@ class PreferenceService:
     def _comparison_stats(
         comparison_mode: str,
         prompt_variants: dict[str, Counter],
+        adapter_variants: dict[str, Counter],
         *,
+        adapter_scale: float,
         remaining: int,
     ) -> dict:
-        comparison_variants = PROMPT_COMPARISONS.get(comparison_mode)
+        comparison_variants = RESULT_COMPARISONS.get(comparison_mode)
         if comparison_variants is None:
             return {"mode": comparison_mode}
         if remaining > 0:
             return {"mode": comparison_mode, "blinded": True}
 
+        counts = (
+            adapter_variants
+            if comparison_mode == "base_vs_adapter"
+            else prompt_variants
+        )
         variants = {}
         for name in comparison_variants:
-            wins = int(prompt_variants[name]["wins"])
-            losses = int(prompt_variants[name]["losses"])
+            wins = int(counts[name]["wins"])
+            losses = int(counts[name]["losses"])
             decided = wins + losses
             variants[name] = {
                 "wins": wins,
@@ -572,12 +762,15 @@ class PreferenceService:
             winner = first_variant
         else:
             winner = "tie"
-        return {
+        result = {
             "mode": comparison_mode,
             "blinded": False,
             "winner": winner,
             "variants": variants,
         }
+        if comparison_mode == "base_vs_adapter":
+            result["adapter_scale"] = adapter_scale
+        return result
 
     def _session_summary(self, session: PreferenceSession) -> dict:
         stats = self.stats(session.session_id)
@@ -586,6 +779,7 @@ class PreferenceService:
             "dataset_path": session.dataset_path,
             "model_role": session.model_role,
             "comparison_mode": session.comparison_mode,
+            "adapter_scale": session.adapter_scale,
             "target_pairs": session.target_pairs,
             "prefetch": session.prefetch,
             "created_at": session.created_at.isoformat(),

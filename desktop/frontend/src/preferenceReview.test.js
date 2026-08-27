@@ -77,6 +77,23 @@ test('prompt comparison stays blind until completion and then renders version re
   assert.match(v3Complete, /Prompt v3/);
   assert.match(v3Complete, /v2 4勝/);
   assert.match(v3Complete, /v3 6勝/);
+
+  const adapterBlinded = renderPromptComparison({mode: 'base_vs_adapter', blinded: true});
+  const adapterComplete = renderPromptComparison({
+    mode: 'base_vs_adapter',
+    blinded: false,
+    winner: 'adapter',
+    adapter_scale: 32,
+    variants: {
+      base: {wins: 3, losses: 5, win_rate: 0.375},
+      adapter: {wins: 5, losses: 3, win_rate: 0.625},
+    },
+  });
+  assert.match(adapterBlinded, /Base／LoRA.*blind/);
+  assert.doesNotMatch(adapterBlinded, /Base 3勝|LoRA 5勝/);
+  assert.match(adapterComplete, /<strong>LoRA ×32<\/strong>/);
+  assert.match(adapterComplete, /Base 3勝/);
+  assert.match(adapterComplete, /LoRA ×32 5勝/);
 });
 
 

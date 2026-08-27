@@ -43,6 +43,8 @@ storageへの同意とtrainingへの同意を分離し，各dataset recordにcon
 
 DPO／ORPO候補は，`consent.training=true`，`deletion_status=active`及び`split=train`を満たす最新の有効なA／B voteに限定する．tie，skip，重複応答，validation及びholdoutは学習exportから除外する．SFTへ使う応答は，A／Bで選ばれたことだけでは不十分であり，`approved_for_sft=true`による別の明示承認を必要とする．削除や訂正を監査できるよう，generationを上書きせず，vote訂正もappend-onlyで記録する．
 
+学習済みLoRAのbase比較は，逆に`split=validation`又は`split=holdout`だけを使う．Model Managerで選択された同一baseとLoRAを，llama-serverのrequest単位scale 0／指定値，同一prompt，同一seedで生成し，候補の正体をsession完了まで隠す．評価結果を自動的にtrain exportへ戻さず，採用又はrollbackの判断資料として保持する．
+
 ## Artifact管理
 
 model又はadapter artifactは，version，基盤model，学習datasetのprovenance，評価結果，hash及びrollback先を記録する．private artifactはrepositoryへcommitしない．Model GrowthはGrowth Protocolを通し，適用前後の会話Profile，安全性及びIdentity継続性を評価する．

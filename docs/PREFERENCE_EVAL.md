@@ -4,7 +4,7 @@
 
 Preference A/B評価は，同一の会話履歴に対して生成した2応答から，よりEphyらしく自然な応答を人が選ぶための評価基盤である．結果はSQLiteへ追記し，将来のDPO／ORPO及び明示承認されたSFT用JSONLへ変換できる．LoRA学習自体は現在の実装範囲に含まれない．
 
-`same_prompt`方式では，Model Managerで対象roleに現在選択されている同一model，同一LoRA，同一system promptを使い，`temperature > 0`かつ異なるseedで2回生成する．`prompt_v1_v2`及び`prompt_v2_v3`方式では，同一model，同一LoRA，同一seedを保ち，`warm_polite` promptだけを指定した2版で切り替える．これにより，sampling差とprompt改善を分けて評価できる．base対LoRA又はLoRA v1対v2の自動比較と，稼働中modelの自動切替は現在実装していない．
+`same_prompt`方式では，Model Managerで対象roleに現在選択されている同一model，同一LoRA，同一system promptを使い，`temperature > 0`かつ異なるseedで2回生成する．`prompt_v1_v2`及び`prompt_v2_v3`方式では，同一model，同一LoRA，同一seedを保ち，`warm_polite` promptだけを指定した2版で切り替える．これにより，sampling差とprompt改善を分けて評価できる．`base_vs_adapter`方式では，Model Managerで選択中のLoRAをllama-serverのrequest単位scale 0／指定値で切り替え，同一model，同一v3 prompt，同一seedのbaseとLoRAを比較する．scaleはcandidate metadataへ記録し，session途中で変更できない．
 
 ## データ境界
 
@@ -41,7 +41,7 @@ splitはscenario単位で`train`，`validation`又は`holdout`へ固定する．
 
 ## Wails UI
 
-SettingsからEvaluationを開き，`Preference A/B`を利用する．dataset，comparison，model role及びpair数を指定してsessionを開始するか，既存sessionを選択して再開する．v3評価では`configs/eval.preference.v3.yaml`と`Prompt v2 vs v3`を選ぶ．未評価pairは再起動後も先頭から復元される．理由タグとnoteは任意であり，選好だけを素早く保存できる．
+SettingsからEvaluationを開き，`Preference A/B`を利用する．dataset，comparison，model role及びpair数を指定してsessionを開始するか，既存sessionを選択して再開する．v3評価では`configs/eval.preference.v3.yaml`と`Prompt v2 vs v3`を選ぶ．LoRA評価では，先にModel Managerで対象LoRAをroleへ適用し，同じdatasetの`Base vs selected LoRA`を選ぶ．学習への再流入を防ぐため，このmodeはvalidation及びholdout scenarioだけを使い，指定pair数が利用可能件数を超える場合は拒否する．未評価pairは再起動後も先頭から復元される．理由タグとnoteは任意であり，選好だけを素早く保存できる．
 
 キーボード操作は次のとおりである．
 
@@ -65,6 +65,13 @@ SettingsからEvaluationを開き，`Preference A/B`を利用する．dataset，
   --comparison prompt_v2_v3 \
   --count 30
 
+./scripts/run_cli.sh preference generate \
+  --dataset configs/eval.preference.v3.yaml \
+  --role fast \
+  --comparison base_vs_adapter \
+  --count 11 \
+  --adapter-scale 1
+
 ./scripts/run_cli.sh preference stats --session SESSION_ID
 
 ./scripts/run_cli.sh preference export \
@@ -81,9 +88,9 @@ SFTは同じ条件に加え，review時に`approved_for_sft=true`を明示した
 
 ## 実装済み範囲と将来構想
 
-現在は，同一の選択済みmodel／LoRAによるsame-prompt sampling，prompt v1／v2及びv2／v3比較，blind review，append-only vote，session再開，完了後のversion別統計，DPO／SFT export，CLI，Gateway及びWails UIを実装している．
+現在は，同一の選択済みmodel／LoRAによるsame-prompt sampling，prompt v1／v2，v2／v3及びbase／選択中LoRA比較，blind review，append-only vote，session再開，完了後の比較別統計，DPO／SFT export，CLI，Gateway及びWails UIを実装している．base／LoRA比較はrequest単位のLoRA scaleを使うため，global scaleを変更せず，生成後の復元操作も不要である．生成前にllama-serverが読み込んだadapter pathとModel Manager選択を照合し，session途中のmodel又はadapter変更を拒否する．
 
-base対LoRA，LoRA version間又は異なるbase model間の自動比較，LLM reviewer，DPO／ORPO training，LoRA artifact作成及びModel Growth適用は将来構想である．これらを追加する際も，private data boundary，artifact hash，固定split及び評価後のrollback可能性を維持する．
+LoRA version間又は異なるbase model間の自動比較，LLM reviewer，DPO／ORPO training，LoRA artifact作成及びModel Growth適用は将来構想である．これらを追加する際も，private data boundary，artifact hash，固定split及び評価後のrollback可能性を維持する．
 
 ## Opt-in実モデルテスト
 

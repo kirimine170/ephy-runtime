@@ -65,13 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
     preference_generate.add_argument("--prefetch", type=int, default=4, choices=range(1, 11))
     preference_generate.add_argument(
         "--comparison",
-        choices=("same_prompt", "prompt_v1_v2", "prompt_v2_v3"),
+        choices=("same_prompt", "prompt_v1_v2", "prompt_v2_v3", "base_vs_adapter"),
         default="same_prompt",
     )
     preference_generate.add_argument("--temperature", type=float, default=0.8)
     preference_generate.add_argument("--top-p", type=float, default=0.95)
     preference_generate.add_argument("--seed", type=int)
     preference_generate.add_argument("--max-tokens", type=int, default=512)
+    preference_generate.add_argument("--adapter-scale", type=float, default=1.0)
 
     preference_stats = preference_commands.add_parser("stats")
     preference_stats.add_argument("--session", required=True)
@@ -197,6 +198,7 @@ async def run_async(args: argparse.Namespace) -> int:
                         pair_count=args.count,
                         prefetch=args.prefetch,
                         comparison_mode=args.comparison,
+                        adapter_scale=args.adapter_scale,
                         generation_parameters=generation_parameters,
                     )
                 )

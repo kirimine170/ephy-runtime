@@ -23,6 +23,23 @@ def test_preference_generate_cli_arguments() -> None:
     assert args.comparison == "prompt_v2_v3"
     assert args.temperature > 0
 
+    adapter_args = build_parser().parse_args(
+        [
+            "preference",
+            "generate",
+            "--dataset",
+            "configs/eval.preference.v3.yaml",
+            "--count",
+            "11",
+            "--comparison",
+            "base_vs_adapter",
+            "--adapter-scale",
+            "32",
+        ]
+    )
+    assert adapter_args.comparison == "base_vs_adapter"
+    assert adapter_args.adapter_scale == 32
+
 
 def test_preference_stats_and_export_cli_arguments() -> None:
     stats = build_parser().parse_args(["preference", "stats", "--session", "session-1"])

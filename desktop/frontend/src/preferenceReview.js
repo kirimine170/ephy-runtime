@@ -73,19 +73,28 @@ export function renderBlindPreferencePair(pair, escapeHtml = escapeDefault) {
 
 export function renderPromptComparison(comparison, escapeHtml = escapeDefault) {
   const variantsInMode = String(comparison?.mode || '').match(/^prompt_(v\d+)_(v\d+)$/);
-  if (!variantsInMode) {
+  const adapterComparison = comparison?.mode === 'base_vs_adapter';
+  if (!variantsInMode && !adapterComparison) {
     return '';
   }
   if (comparison.blinded !== false) {
-    return '<div class="runtime-result-text">Prompt versionはsession完了までblindです．</div>';
+    return `<div class="runtime-result-text">${adapterComparison ? 'Base／LoRA' : 'Prompt version'}はsession完了までblindです．</div>`;
   }
   const variants = comparison.variants || {};
-  const variantNames = variantsInMode.slice(1);
-  const winner = comparison.winner === 'tie' ? '同率' : `Prompt ${comparison.winner || '-'}`;
+  const variantNames = adapterComparison ? ['base', 'adapter'] : variantsInMode.slice(1);
+  const adapterScale = Number(comparison.adapter_scale || 1);
+  const labels = adapterComparison
+    ? {base: 'Base', adapter: `LoRA ×${adapterScale}`}
+    : Object.fromEntries(variantNames.map((name) => [name, name]));
+  const winner = comparison.winner === 'tie'
+    ? '同率'
+    : adapterComparison
+      ? labels[comparison.winner] || '-'
+      : `Prompt ${comparison.winner || '-'}`;
   const results = variantNames.map((name) => {
     const result = variants[name] || {};
     const rate = Math.round(Number(result.win_rate || 0) * 100);
-    return `<span>${escapeHtml(name)} ${escapeHtml(String(result.wins || 0))}勝 · ${escapeHtml(String(rate))}%</span>`;
+    return `<span>${escapeHtml(labels[name])} ${escapeHtml(String(result.wins || 0))}勝 · ${escapeHtml(String(rate))}%</span>`;
   }).join('');
   return `
     <div class="preference-comparison-result">

@@ -215,6 +215,7 @@ type PreferenceSessionRequest struct {
 	PairCount            int                            `json:"pair_count"`
 	Prefetch             int                            `json:"prefetch"`
 	ComparisonMode       string                         `json:"comparison_mode"`
+	AdapterScale         float64                        `json:"adapter_scale,omitempty"`
 	GenerationParameters PreferenceGenerationParameters `json:"generation_parameters"`
 }
 
