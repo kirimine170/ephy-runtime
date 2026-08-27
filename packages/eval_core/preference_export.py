@@ -72,6 +72,8 @@ class PreferenceExporter:
                 continue
             chosen = pair.response_a if vote.selection == "a" else pair.response_b
             rejected = pair.response_b if vote.selection == "a" else pair.response_a
+            chosen_candidate = pair.candidate_a if vote.selection == "a" else pair.candidate_b
+            rejected_candidate = pair.candidate_b if vote.selection == "a" else pair.candidate_a
             prompt = [message.model_dump() for message in scenario.messages]
             if export_format == "dpo":
                 records.append(
@@ -84,6 +86,10 @@ class PreferenceExporter:
                             "scenario_id": scenario.scenario_id,
                             "category": scenario.category,
                             "provenance": scenario.provenance,
+                            "chosen_prompt_variant": chosen_candidate.prompt_variant,
+                            "rejected_prompt_variant": rejected_candidate.prompt_variant,
+                            "chosen_prompt_revision": chosen_candidate.prompt_revision,
+                            "rejected_prompt_revision": rejected_candidate.prompt_revision,
                         },
                     }
                 )

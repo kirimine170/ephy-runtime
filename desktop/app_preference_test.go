@@ -29,7 +29,7 @@ func TestPreferenceAPIFlowAndSessionResume(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload.ModelRole != "fast" || payload.PairCount != 3 {
+		if payload.ModelRole != "fast" || payload.PairCount != 3 || payload.ComparisonMode != "prompt_v1_v2" {
 			t.Fatalf("unexpected session request: %#v", payload)
 		}
 		_, _ = writer.Write([]byte(`{"session_id":"session-1"}`))
@@ -48,10 +48,11 @@ func TestPreferenceAPIFlowAndSessionResume(t *testing.T) {
 	defer server.Close()
 
 	created, err := app.CreatePreferenceSession(PreferenceSessionRequest{
-		DatasetPath: "configs/eval.preference.sample.yaml",
-		ModelRole:   "fast",
-		PairCount:   3,
-		Prefetch:    2,
+		DatasetPath:    "configs/eval.preference.sample.yaml",
+		ModelRole:      "fast",
+		PairCount:      3,
+		Prefetch:       2,
+		ComparisonMode: "prompt_v1_v2",
 		GenerationParameters: PreferenceGenerationParameters{
 			Temperature: 0.8,
 			TopP:        0.95,

@@ -1318,7 +1318,23 @@
 }
 
 .preference-session-controls {
-    grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(130px, 1fr));
+    grid-template-columns: minmax(260px, 2fr) minmax(190px, 1.2fr) repeat(3, minmax(120px, 1fr));
+}
+
+.preference-comparison-result {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    align-items: center;
+    padding: 10px 12px;
+    border: 1px solid rgba(124, 92, 255, 0.2);
+    border-radius: 12px;
+    background: rgba(241, 236, 255, 0.58);
+}
+
+.preference-comparison-result strong {
+    color: #4e3aa8;
 }
 
 .preference-review {

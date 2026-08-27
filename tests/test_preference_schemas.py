@@ -8,8 +8,10 @@ from packages.config_core.loader import ROOT_DIR
 from packages.eval_core.preference_schemas import (
     CandidateSpec,
     ConversationScenario,
+    CreatePreferenceSessionRequest,
     GenerationParameters,
     PreferenceDataset,
+    PreferenceSession,
 )
 
 
@@ -58,6 +60,26 @@ def test_candidate_requires_complete_adapter_identity() -> None:
             prompt_revision="b" * 64,
             generation_parameters=GenerationParameters(),
             generated_at=datetime.now(timezone.utc),
+        )
+
+
+def test_prompt_comparison_mode_is_strict_and_old_sessions_remain_compatible() -> None:
+    request = CreatePreferenceSessionRequest(
+        dataset_path="configs/eval.preference.sample.yaml",
+        comparison_mode="prompt_v1_v2",
+    )
+    old_session = PreferenceSession(
+        session_id="session-1",
+        dataset_path="configs/eval.preference.sample.yaml",
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert request.comparison_mode == "prompt_v1_v2"
+    assert old_session.comparison_mode == "same_prompt"
+    with pytest.raises(ValidationError):
+        CreatePreferenceSessionRequest(
+            dataset_path="configs/eval.preference.sample.yaml",
+            comparison_mode="unblinded",
         )
 
 

@@ -16,6 +16,7 @@ import {
   assertBlindPreferencePair,
   preferenceSelectionForKey,
   renderBlindPreferencePair,
+  renderPromptComparison,
 } from './preferenceReview';
 import {
   renderOverviewPresetRuntimeHintCard,
@@ -1306,6 +1307,13 @@ app.innerHTML = `
               <input id="preference-dataset" class="text-input" value="configs/eval.preference.sample.yaml" />
             </label>
             <label class="field">
+              <span>Comparison</span>
+              <select id="preference-comparison" class="text-input">
+                <option value="prompt_v1_v2">Prompt v1 vs v2</option>
+                <option value="same_prompt">Same prompt sampling</option>
+              </select>
+            </label>
+            <label class="field">
               <span>Model role</span>
               <select id="preference-role" class="text-input">
                 <option value="fast">Fast</option>
@@ -1328,7 +1336,7 @@ app.innerHTML = `
             <button id="preference-start" class="primary-btn">Start A/B session</button>
             <button id="preference-resume" class="ghost-btn">Resume</button>
           </div>
-          <p class="helper-text">レビュー中は候補のモデル情報と生成順を表示しません．1／2／0／Sで選択，Enterで保存，Zで直前の投票を訂正できます．</p>
+          <p class="helper-text">Prompt比較ではv1／v2を同じseedで生成し，session完了までversionと生成順を表示しません．1／2／0／Sで選択，Enterで保存，Zで直前の投票を訂正できます．</p>
           <div id="preference-status" class="runtime-result"></div>
           <div id="preference-review" class="preference-review">
             <div class="preference-empty">Sessionを開始または再開すると，ここに会話と2候補が表示されます．</div>
@@ -7085,6 +7093,7 @@ function renderPreferenceStats(stats) {
       const summary = Object.entries(counts || {}).map(([key, count]) => `${key}:${count}`).join('，');
       return `<li><span>${escapeHtml(category)}</span><strong>${escapeHtml(summary || '-')}</strong></li>`;
     }).join('');
+  const comparison = renderPromptComparison(stats.comparison, escapeHtml);
   document.getElementById('preference-progress').textContent =
     `${stats.reviewed || 0} reviewed · ${stats.remaining || 0} remaining`;
   document.getElementById('preference-stats').innerHTML = `
@@ -7097,6 +7106,7 @@ function renderPreferenceStats(stats) {
       <div><strong>${escapeHtml(`${leftRate}% / ${rightRate}%`)}</strong><span>left / right</span></div>
     </div>
     <div class="runtime-result-text"><strong>Reason tags：</strong>${reasonTags}</div>
+    ${comparison}
     ${categories ? `<ul class="preference-category-stats">${categories}</ul>` : ''}
   `;
 }
@@ -7118,7 +7128,8 @@ async function refreshPreferenceSessions({quiet = false} = {}) {
     select.innerHTML = [
       '<option value="">Select session</option>',
       ...sessions.map((session) => {
-        const label = `${session.created_at || ''} · ${session.reviewed || 0}/${session.target_pairs || 0} · ${session.model_role || 'fast'}`;
+        const comparison = session.comparison_mode === 'prompt_v1_v2' ? 'prompt v1/v2' : 'same prompt';
+        const label = `${session.created_at || ''} · ${session.reviewed || 0}/${session.target_pairs || 0} · ${session.model_role || 'fast'} · ${comparison}`;
         return `<option value="${escapeHtml(session.session_id || '')}">${escapeHtml(label)}</option>`;
       }),
     ].join('');
@@ -7201,6 +7212,7 @@ async function startPreferenceSession() {
       model_role: document.getElementById('preference-role').value || 'fast',
       pair_count: pairCount,
       prefetch: 4,
+      comparison_mode: document.getElementById('preference-comparison').value || 'prompt_v1_v2',
       generation_parameters: {temperature: 0.8, top_p: 0.95, max_tokens: 512},
     });
     preferenceSessionId = session.session_id;

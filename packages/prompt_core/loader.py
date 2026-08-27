@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from packages.config_core.loader import ROOT_DIR
 from packages.identity_core.schemas import IdentityManifest
@@ -14,6 +15,12 @@ PROMPTS_DIR = ROOT_DIR / "prompts"
 LANGUAGE_POLICY_MARKER = "出力言語ポリシー"
 RESPONSE_STYLE_POLICY_MARKER = "応答スタイルポリシー"
 EPHY_PROFILE_POLICY_MARKER = "Ephy Profile Policy"
+WarmPolitePromptVersion = Literal["v1", "v2"]
+DEFAULT_WARM_POLITE_PROMPT_VERSION: WarmPolitePromptVersion = "v2"
+WARM_POLITE_PROMPT_FILES: dict[WarmPolitePromptVersion, str] = {
+    "v1": "ephy_warm_polite_ja.v1.md",
+    "v2": "ephy_warm_polite_ja.md",
+}
 
 
 class PromptManager:
@@ -33,7 +40,13 @@ class PromptManager:
             return None
         return self._read_prompt(prompt_name)
 
-    def apply_mode_prompt(self, request: ChatCompletionRequest, mode: str) -> ChatCompletionRequest:
+    def apply_mode_prompt(
+        self,
+        request: ChatCompletionRequest,
+        mode: str,
+        *,
+        ephy_prompt_version: WarmPolitePromptVersion = DEFAULT_WARM_POLITE_PROMPT_VERSION,
+    ) -> ChatCompletionRequest:
         updated_request = request
         if not any(message.role == "system" for message in request.messages):
             system_prompt = self.get_mode_system_prompt(mode)
@@ -44,15 +57,24 @@ class PromptManager:
                     }
                 )
 
-        return self.apply_output_policies(updated_request)
+        return self.apply_output_policies(
+            updated_request,
+            ephy_prompt_version=ephy_prompt_version,
+        )
 
-    def apply_output_policies(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
+    def apply_output_policies(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        ephy_prompt_version: WarmPolitePromptVersion = DEFAULT_WARM_POLITE_PROMPT_VERSION,
+    ) -> ChatCompletionRequest:
         updated_request = self.apply_language_policy(request)
         updated_request = self.apply_response_style_policy(updated_request)
         if self._ephy_context is not None:
             updated_request = self.apply_ephy_profile(
                 updated_request, self._ephy_context.identity, self._ephy_context.profile,
                 session_mode=request.metadata.session_mode if request.metadata else "default",
+                warm_polite_prompt_version=ephy_prompt_version,
             )
         return updated_request
 
@@ -72,6 +94,7 @@ class PromptManager:
         identity: IdentityManifest,
         profile: EphyProfile,
         session_mode: SessionMode = "default",
+        warm_polite_prompt_version: WarmPolitePromptVersion = DEFAULT_WARM_POLITE_PROMPT_VERSION,
     ) -> ChatCompletionRequest:
         policy = ProfileService().resolve_conversation_policy(profile, session_mode=session_mode)
         lines = [
@@ -82,7 +105,7 @@ class PromptManager:
             f"会話registerは「{policy.speech_register}」です．",
         ]
         if policy.speech_register == "warm_polite" and session_mode != "writing":
-            lines.append(self._read_prompt("ephy_warm_polite_ja.md"))
+            lines.append(self._read_prompt(WARM_POLITE_PROMPT_FILES[warm_polite_prompt_version]))
         if policy.use_known_name and policy.call_name_frequency != "never":
             lines.append(
                 f"相手の名前が判明している場合は，名前に「{policy.default_suffix}」を付けます．"

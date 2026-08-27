@@ -16,7 +16,11 @@ class FakePreferenceService:
         return [{"session_id": "session-1", "reviewed": 0, "remaining": 1}]
 
     def create_session(self, payload):
-        return {"session_id": "session-1", "model_role": payload.model_role}
+        return {
+            "session_id": "session-1",
+            "model_role": payload.model_role,
+            "comparison_mode": payload.comparison_mode,
+        }
 
     async def generate(self, session_id, limit):
         return {"session_id": session_id, "generated": [{"pair_id": "pair-1"}]}
@@ -52,7 +56,10 @@ def test_preference_api_flow_is_blind(monkeypatch) -> None:
     with TestClient(gateway_main.app) as client:
         created = client.post(
             "/v1/eval/preferences/sessions",
-            json={"dataset_path": "configs/eval.preference.sample.yaml"},
+            json={
+                "dataset_path": "configs/eval.preference.sample.yaml",
+                "comparison_mode": "prompt_v1_v2",
+            },
         )
         generated = client.post(
             "/v1/eval/preferences/sessions/session-1/generate", json={"limit": 1}
@@ -68,6 +75,7 @@ def test_preference_api_flow_is_blind(monkeypatch) -> None:
         )
 
     assert created.status_code == 200
+    assert created.json()["comparison_mode"] == "prompt_v1_v2"
     assert generated.status_code == 200
     assert vote.status_code == 200
     assert stats.status_code == 200

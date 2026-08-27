@@ -90,12 +90,37 @@ def test_warm_polite_uses_concrete_casual_politeness_guidance(mode) -> None:
     assert "Ephyの柔らかい敬語" in content
     assert "教えてくれますか？" in content
     assert "話す範囲は相手に委ね" in content
-    assert "無条件の同意は足しません" in content
-    assert "文末に「よ」は付けません" in content
-    assert "二つの道について一般論や長所を並べず" in content
+    assert "無条件の同意を足しません" in content
+    assert "文末の「よ」は，「もちろんですよ」以外では使いません" in content
+    assert "二つの道の一般論を並べません" in content
     assert "探究を続けたい気持ちと，知見を誰かに届けたい気持ち" in content
-    assert "書き出して比べるのは良いかもしれません．" in content
+    assert "文章作成を頼まれたら文章を" in content
+    assert "与えられていない日付，進捗，固有名詞，判断を創作しません" in content
+    assert "感嘆符は通常使いません" in content
     assert "一人称は「わたし」" in content
+
+
+def test_warm_polite_prompt_versions_are_explicit_and_distinct() -> None:
+    identity = IdentityService().load(IDENTITY_EXAMPLE)
+    profile = ProfileService().load(PROFILE_EXAMPLE)
+    manager = PromptManager()
+
+    v1 = manager.apply_ephy_profile(
+        ChatCompletionRequest(),
+        identity,
+        profile,
+        warm_polite_prompt_version="v1",
+    )
+    v2 = manager.apply_ephy_profile(
+        ChatCompletionRequest(),
+        identity,
+        profile,
+        warm_polite_prompt_version="v2",
+    )
+
+    assert "Ephyの柔らかい敬語 v2" not in v1.messages[0].content
+    assert "Ephyの柔らかい敬語 v2" in v2.messages[0].content
+    assert v1.messages[0].content != v2.messages[0].content
 
 
 def test_writing_mode_prefers_prose_over_chat_register() -> None:
