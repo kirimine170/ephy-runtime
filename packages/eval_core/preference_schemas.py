@@ -14,7 +14,12 @@ CanonicalSelection = Literal["a", "b", "tie", "skip"]
 DisplaySelection = Literal["left", "right", "tie", "skip"]
 ReviewerType = Literal["human", "llm"]
 ModelRole = Literal["fast", "work", "code"]
-ComparisonMode = Literal["same_prompt", "prompt_v1_v2", "prompt_v2_v3"]
+ComparisonMode = Literal[
+    "same_prompt",
+    "prompt_v1_v2",
+    "prompt_v2_v3",
+    "base_vs_adapter",
+]
 PromptVariant = Literal["v1", "v2", "v3"]
 ReasonTag = Literal[
     "direct",
@@ -89,6 +94,7 @@ class CandidateSpec(StrictModel):
     model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     adapter_registration_id: str | None = None
     adapter_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    adapter_scale: float | None = Field(default=None, gt=0, le=100)
     prompt_variant: PromptVariant | None = None
     prompt_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     generation_parameters: GenerationParameters
@@ -98,6 +104,8 @@ class CandidateSpec(StrictModel):
     def require_complete_adapter_identity(self):
         if (self.adapter_registration_id is None) != (self.adapter_sha256 is None):
             raise ValueError("Adapter registration ID and SHA-256 must be recorded together")
+        if self.adapter_registration_id is None and self.adapter_scale is not None:
+            raise ValueError("Adapter scale requires an adapter identity")
         return self
 
 
@@ -135,6 +143,7 @@ class PreferenceSession(StrictModel):
     target_pairs: int = Field(default=20, ge=1, le=100)
     prefetch: int = Field(default=4, ge=1, le=10)
     comparison_mode: ComparisonMode = "same_prompt"
+    adapter_scale: float = Field(default=1.0, gt=0, le=100)
     generation_parameters: GenerationParameters = Field(default_factory=GenerationParameters)
     status: Literal["active", "complete"] = "active"
     created_at: datetime
@@ -146,6 +155,7 @@ class CreatePreferenceSessionRequest(StrictModel):
     pair_count: int = Field(default=20, ge=1, le=100)
     prefetch: int = Field(default=4, ge=1, le=10)
     comparison_mode: ComparisonMode = "same_prompt"
+    adapter_scale: float = Field(default=1.0, gt=0, le=100)
     generation_parameters: GenerationParameters = Field(default_factory=GenerationParameters)
 
 

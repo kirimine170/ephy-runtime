@@ -28,7 +28,11 @@ class FakeRegistry:
 
     def resolve(self, selection, verify=False):
         model = SimpleNamespace(id="registered-fast", sha256="a" * 64, backend_model="backend-fast")
-        adapter = SimpleNamespace(id="warm-politeness-v1", sha256="b" * 64)
+        adapter = SimpleNamespace(
+            id="warm-politeness-v1",
+            sha256="b" * 64,
+            path="/tmp/warm-politeness-v1.gguf",
+        )
         return model, adapter
 
 
@@ -36,10 +40,21 @@ class FakeAdapter:
     def __init__(self, responses):
         self.responses = iter(responses)
         self.requests = []
+        self.lora_requests = []
 
-    async def create_chat_completion(self, *, model_config, request_payload):
+    async def create_chat_completion(
+        self,
+        *,
+        model_config,
+        request_payload,
+        lora_adapters=None,
+    ):
         self.requests.append(request_payload)
+        self.lora_requests.append(lora_adapters)
         return {"choices": [{"message": {"content": next(self.responses)}}]}
+
+    async def list_lora_adapters(self, model_config):
+        return [{"id": 0, "path": "/tmp/warm-politeness-v1.gguf", "scale": 1.0}]
 
 
 def write_dataset(root: Path) -> Path:
@@ -58,6 +73,15 @@ scenarios:
     provenance: unit test
     consent: {storage: true, training: true}
     split: train
+  - scenario_id: synthetic-service-validation-1
+    category: validation test
+    messages:
+      - role: user
+        content: validation hello
+    source_kind: synthetic
+    provenance: unit test validation
+    consent: {storage: true, training: true}
+    split: validation
 """.strip(),
         encoding="utf-8",
     )
@@ -195,6 +219,92 @@ def test_prompt_v2_v3_comparison_uses_shared_seed_and_reports_v3_result(tmp_path
     assert completed["winner"] == "v3"
     assert completed["variants"]["v2"]["losses"] == 1
     assert completed["variants"]["v3"]["wins"] == 1
+
+
+def test_base_vs_adapter_uses_per_request_scale_and_only_non_train_scenarios(
+    tmp_path,
+) -> None:
+    service, adapter = make_service(
+        tmp_path,
+        ["base response", "adapter response"],
+        display_order="ab",
+        prompt_manager=ephy_prompt_manager(),
+    )
+    session = service.create_session(
+        CreatePreferenceSessionRequest(
+            dataset_path="configs/preference.yaml",
+            pair_count=1,
+            comparison_mode="base_vs_adapter",
+            adapter_scale=32,
+        )
+    )
+
+    asyncio.run(service.generate(session["session_id"], 1))
+
+    blind = service.next_pair(session["session_id"])
+    stored = service.store.get_pair(blind.pair_id)
+    assert stored.scenario_id == "synthetic-service-validation-1"
+    assert stored.candidate_a.adapter_registration_id is None
+    assert stored.candidate_b.adapter_registration_id == "warm-politeness-v1"
+    assert stored.candidate_b.adapter_scale == 32
+    assert stored.candidate_a.prompt_variant == "v3"
+    assert stored.candidate_b.prompt_revision == stored.candidate_a.prompt_revision
+    assert adapter.requests[0].seed == adapter.requests[1].seed
+    assert adapter.lora_requests == [
+        [{"id": 0, "scale": 0.0}],
+        [{"id": 0, "scale": 32.0}],
+    ]
+    assert service.stats(session["session_id"])["comparison"] == {
+        "mode": "base_vs_adapter",
+        "blinded": True,
+    }
+
+    service.vote(blind.pair_id, SubmitPreferenceVoteRequest(selection="right"))
+    completed = service.stats(session["session_id"])["comparison"]
+    assert completed["blinded"] is False
+    assert completed["winner"] == "adapter"
+    assert completed["adapter_scale"] == 32
+    assert completed["variants"]["base"]["losses"] == 1
+    assert completed["variants"]["adapter"]["wins"] == 1
+
+
+def test_base_vs_adapter_rejects_train_only_or_repeated_holdout_requests(tmp_path) -> None:
+    service, _ = make_service(tmp_path, ["base", "adapter"])
+    with pytest.raises(ValueError, match="exceeds the available"):
+        service.create_session(
+            CreatePreferenceSessionRequest(
+                dataset_path="configs/preference.yaml",
+                pair_count=2,
+                comparison_mode="base_vs_adapter",
+            )
+        )
+
+
+def test_base_vs_adapter_rejects_selection_changes_after_generation(tmp_path) -> None:
+    service, _ = make_service(
+        tmp_path,
+        ["base response", "adapter response"],
+        prompt_manager=ephy_prompt_manager(),
+    )
+    session = service.create_session(
+        CreatePreferenceSessionRequest(
+            dataset_path="configs/preference.yaml",
+            pair_count=1,
+            comparison_mode="base_vs_adapter",
+        )
+    )
+    asyncio.run(service.generate(session["session_id"], 1))
+
+    class ChangedRegistry(FakeRegistry):
+        def resolve(self, selection, verify=False):
+            model, adapter = super().resolve(selection, verify=verify)
+            adapter.id = "different-adapter"
+            return model, adapter
+
+    service._registry = ChangedRegistry()
+
+    with pytest.raises(ValueError, match="selection changed"):
+        asyncio.run(service.generate(session["session_id"], 1))
 
 
 @pytest.mark.parametrize(

@@ -1309,6 +1309,7 @@ app.innerHTML = `
             <label class="field">
               <span>Comparison</span>
               <select id="preference-comparison" class="text-input">
+                <option value="base_vs_adapter">Base vs selected LoRA</option>
                 <option value="prompt_v2_v3">Prompt v2 vs v3</option>
                 <option value="prompt_v1_v2">Prompt v1 vs v2</option>
                 <option value="same_prompt">Same prompt sampling</option>
@@ -1324,7 +1325,11 @@ app.innerHTML = `
             </label>
             <label class="field">
               <span>Pairs</span>
-              <input id="preference-count" class="text-input" type="number" min="1" max="100" value="30" />
+              <input id="preference-count" class="text-input" type="number" min="1" max="100" value="11" />
+            </label>
+            <label class="field">
+              <span>LoRA scale</span>
+              <input id="preference-adapter-scale" class="text-input" type="number" min="0.1" max="100" step="0.1" value="1" />
             </label>
             <label class="field">
               <span>Resume session</span>
@@ -1337,7 +1342,7 @@ app.innerHTML = `
             <button id="preference-start" class="primary-btn">Start A/B session</button>
             <button id="preference-resume" class="ghost-btn">Resume</button>
           </div>
-          <p class="helper-text">Prompt比較では選択した2版を同じseedで生成し，session完了までversionと生成順を表示しません．1／2／0／Sで選択，Enterで保存，Zで直前の投票を訂正できます．</p>
+          <p class="helper-text">Base／LoRA比較はModel Managerで選択中のLoRAを同一seed，v3 prompt，validation／holdoutだけで比較します．候補の正体はsession完了まで表示しません．1／2／0／Sで選択，Enterで保存，Zで直前の投票を訂正できます．</p>
           <div id="preference-status" class="runtime-result"></div>
           <div id="preference-review" class="preference-review">
             <div class="preference-empty">Sessionを開始または再開すると，ここに会話と2候補が表示されます．</div>
@@ -7132,6 +7137,7 @@ async function refreshPreferenceSessions({quiet = false} = {}) {
         const comparison = {
           prompt_v1_v2: 'prompt v1/v2',
           prompt_v2_v3: 'prompt v2/v3',
+          base_vs_adapter: 'base/LoRA',
           same_prompt: 'same prompt',
         }[session.comparison_mode] || session.comparison_mode;
         const label = `${session.created_at || ''} · ${session.reviewed || 0}/${session.target_pairs || 0} · ${session.model_role || 'fast'} · ${comparison}`;
@@ -7217,7 +7223,8 @@ async function startPreferenceSession() {
       model_role: document.getElementById('preference-role').value || 'fast',
       pair_count: pairCount,
       prefetch: 4,
-      comparison_mode: document.getElementById('preference-comparison').value || 'prompt_v2_v3',
+      comparison_mode: document.getElementById('preference-comparison').value || 'base_vs_adapter',
+      adapter_scale: Number(document.getElementById('preference-adapter-scale').value || 1),
       generation_parameters: {temperature: 0.8, top_p: 0.95, max_tokens: 512},
     });
     preferenceSessionId = session.session_id;
@@ -8532,6 +8539,10 @@ document.getElementById('export-workflow').addEventListener('click', async () =>
 
 document.getElementById('preference-start').addEventListener('click', startPreferenceSession);
 document.getElementById('preference-resume').addEventListener('click', resumePreferenceSession);
+document.getElementById('preference-comparison').addEventListener('change', (event) => {
+  document.getElementById('preference-count').value =
+    event.target.value === 'base_vs_adapter' ? '11' : '30';
+});
 document.getElementById('preference-submit').addEventListener('click', submitPreferenceVote);
 document.getElementById('preference-correct').addEventListener('click', correctPreviousPreferenceVote);
 document.getElementById('preference-export-dpo').addEventListener('click', () => exportPreference('dpo'));
