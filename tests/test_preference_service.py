@@ -159,6 +159,44 @@ def test_prompt_v1_v2_comparison_uses_shared_seed_and_reveals_result_only_when_c
     assert completed["variants"]["v2"]["wins"] == 1
 
 
+def test_prompt_v2_v3_comparison_uses_shared_seed_and_reports_v3_result(tmp_path) -> None:
+    service, adapter = make_service(
+        tmp_path,
+        ["v2 response", "v3 response"],
+        display_order="ab",
+        prompt_manager=ephy_prompt_manager(),
+    )
+    session = service.create_session(
+        CreatePreferenceSessionRequest(
+            dataset_path="configs/preference.yaml",
+            pair_count=1,
+            comparison_mode="prompt_v2_v3",
+        )
+    )
+
+    asyncio.run(service.generate(session["session_id"], 1))
+
+    blind = service.next_pair(session["session_id"])
+    stored = service.store.get_pair(blind.pair_id)
+    assert stored.candidate_a.prompt_variant == "v2"
+    assert stored.candidate_b.prompt_variant == "v3"
+    assert stored.candidate_a.prompt_revision != stored.candidate_b.prompt_revision
+    assert adapter.requests[0].seed == adapter.requests[1].seed
+    assert "Ephyの柔らかい敬語 v2" in str(adapter.requests[0].messages)
+    assert "Ephyの柔らかい敬語 v3" in str(adapter.requests[1].messages)
+    assert service.stats(session["session_id"])["comparison"] == {
+        "mode": "prompt_v2_v3",
+        "blinded": True,
+    }
+
+    service.vote(blind.pair_id, SubmitPreferenceVoteRequest(selection="right"))
+    completed = service.stats(session["session_id"])["comparison"]
+    assert completed["blinded"] is False
+    assert completed["winner"] == "v3"
+    assert completed["variants"]["v2"]["losses"] == 1
+    assert completed["variants"]["v3"]["wins"] == 1
+
+
 @pytest.mark.parametrize(
     ("display_order", "display_selection", "canonical"),
     [("ab", "left", "a"), ("ab", "right", "b"), ("ba", "left", "b"), ("ba", "right", "a")],

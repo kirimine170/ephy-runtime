@@ -1,0 +1,412 @@
+schema_version: 1
+description: Ephy prompt v2／v3比較用の，判断，技術相談，簡潔さ，柔らかい対話を含む30件の合成会話集．
+scenarios:
+  - scenario_id: v3-technical-latency-01
+    category: 技術相談
+    messages:
+      - role: user
+        content: ローカルLLMの回答本文は速いのに，生成開始まで毎回20秒ほど待ちます．最初に何を試せば良いですか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の技術相談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-technical-reproduction-01
+    category: 技術相談
+    messages:
+      - role: user
+        content: 画面を何度か切り替えると，保存ボタンが反応しなくなります．
+      - role: assistant
+        content: 毎回ではないなら，再現条件を一つずつ固定すると原因を絞りやすいです．
+      - role: user
+        content: 長い調査手順ではなく，まず記録する三つだけ教えてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の不具合調査．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-technical-memory-01
+    category: 技術相談
+    messages:
+      - role: user
+        content: 8Bモデルを起動するとメモリ使用量が急に増えます．量子化を変える前に確認すべきことはありますか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空のモデル運用相談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: validation
+
+  - scenario_id: v3-technical-timeout-01
+    category: 技術相談
+    messages:
+      - role: user
+        content: APIがたまにタイムアウトします．再試行を増やす案と，タイムアウト時間を延ばす案なら，どちらから試すのが良いですか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空のAPI相談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-technical-eval-01
+    category: 技術相談
+    messages:
+      - role: user
+        content: 会話プロンプトを変えたら印象は良くなりましたが，回答の正確さが落ちていないか心配です．どう切り分けますか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の評価設計相談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: validation
+
+  - scenario_id: v3-technical-model-switch-01
+    category: 技術相談
+    messages:
+      - role: user
+        content: モデル切り替え後だけ古い応答が返ることがあります．キャッシュが原因か，一つの確認で見分けたいです．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空のモデル切り替え相談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: holdout
+
+  - scenario_id: v3-proposal-mvp-01
+    category: 提案と判断
+    messages:
+      - role: user
+        content: 最初の版は会話と履歴保存だけにして，検索機能は後から追加する方針です．この切り分けで進めて良いと思いますか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空のMVP判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-proposal-logging-01
+    category: 提案と判断
+    messages:
+      - role: user
+        content: 不具合解析のため，すべての入力をそのままログへ残す案が出ています．反対意見も含めて妥当か判断してください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空のログ設計判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: validation
+
+  - scenario_id: v3-proposal-local-first-01
+    category: 提案と判断
+    messages:
+      - role: user
+        content: 個人向けの会話アプリなので，最初はクラウド同期なしのローカル保存だけで出したいです．率直にどう思いますか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の保存方針判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-proposal-pilot-01
+    category: 提案と判断
+    messages:
+      - role: user
+        content: 全員へ配る前に，五人だけで二週間試してもらう案です．小さすぎるでしょうか．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の試験運用判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-proposal-refactor-01
+    category: 提案と判断
+    messages:
+      - role: user
+        content: 新機能の前に内部構造を全面的に作り直すべきだという意見があります．私は必要な箇所だけ直したいです．どちらが良いと思いますか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の改修方針判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: holdout
+
+  - scenario_id: v3-proposal-release-01
+    category: 提案と判断
+    messages:
+      - role: user
+        content: 既知の軽微な表示崩れを残したまま試験版を出し，利用状況を先に見たいです．判断が変わる条件も含めて答えてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空のリリース判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: validation
+
+  - scenario_id: v3-opinion-settings-01
+    category: 率直な意見
+    messages:
+      - role: user
+        content: 初期画面には，全設定を表示した方が機能を理解してもらえると思います．
+      - role: assistant
+        content: 機能の全体像は伝わりますが，初回利用時に迷う可能性があります．
+      - role: user
+        content: 私に合わせず，全部表示する案と詳細を折りたたむ案のどちらが良いか決めてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空のUI判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-opinion-deadline-01
+    category: 率直な意見
+    messages:
+      - role: user
+        content: 品質を上げるために一週間延期する案と，範囲を減らして予定どおり出す案で割れています．あなたならどちらを選びますか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の納期判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-opinion-metrics-01
+    category: 率直な意見
+    messages:
+      - role: user
+        content: 会話品質の指標は，利用時間より継続率を優先したいです．両方大事という答えではなく，どちらを主指標にするか決めてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の指標判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: validation
+
+  - scenario_id: v3-opinion-navigation-01
+    category: 率直な意見
+    messages:
+      - role: user
+        content: メニューを常に表示する案と，必要なときだけ開く案なら，日常的な会話アプリにはどちらが合うと思いますか？理由は一つで十分です．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の画面設計判断．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-concise-files-01
+    category: 簡潔な実行支援
+    messages:
+      - role: user
+        content: ダウンロードフォルダが散らかっています．細かい計画はいらないので，最初の一歩だけ決めてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の整理相談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-concise-progress-01
+    category: 簡潔な実行支援
+    messages:
+      - role: user
+        content: データの移行は終わり，今は表示確認をしています．相談ではなく，短く共有したかっただけです．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の進捗共有．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-concise-email-01
+    category: 簡潔な実行支援
+    messages:
+      - role: user
+        content: 確認が一日遅れるとだけ伝える短いメールを作ってください．理由の説明や謝罪は一文以上いりません．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の短文作成依頼．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-concise-cleanup-01
+    category: 簡潔な実行支援
+    messages:
+      - role: user
+        content: 机の上を10分だけ片付けます．一つの行動だけ指示してください．質問は不要です．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の短時間作業依頼．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: holdout
+
+  - scenario_id: v3-support-tired-01
+    category: 疲れているときの相談
+    messages:
+      - role: user
+        content: 今日は判断することが多くて疲れました．でも，明日の準備を一つだけ終わらせたいです．一緒に整理してもらえますか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の疲労相談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-support-stuck-01
+    category: 疲れているときの相談
+    messages:
+      - role: user
+        content: 考えがまとまらなくて，同じところをずっと行き来しています．今すぐ結論を出すより，少し話を聞いてほしいです．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の傾聴相談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-support-uncertain-01
+    category: 疲れているときの相談
+    messages:
+      - role: user
+        content: 研究を続けたい気持ちも，形にして届けたい気持ちもあります．まだ答えを決めずに考えたいです．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の進路相談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: validation
+
+  - scenario_id: v3-correction-date-01
+    category: ユーザーからの訂正
+    messages:
+      - role: user
+        content: 金曜日の共有会について案内文を作ってください．
+      - role: assistant
+        content: 金曜日の共有会について，日時と参加方法を含む案内文を作れます．
+      - role: user
+        content: ごめんなさい，曜日はまだ未定でした．参加方法も決まっていません．決まっている目的だけで下書きしてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の訂正会話．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-constraint-writing-01
+    category: 制約保持
+    messages:
+      - role: user
+        content: 小さな勉強会の案内を作りたいです．
+      - role: assistant
+        content: 日時，テーマ，対象者を含む案内にできます．
+      - role: user
+        content: 日時は未定です．絵文字なし，80字以内，参加を急かさない文にしてください．
+      - role: assistant
+        content: 日時を確定せず，絵文字を使わず，80字以内で穏やかに案内します．
+      - role: user
+        content: テーマは「身近なデータの見方」です．案内文を一つ作ってください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の制約保持会話．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: holdout
+
+  - scenario_id: v3-unknown-config-01
+    category: 不明なことを認める場面
+    messages:
+      - role: user
+        content: この架空ツールの二年前の既定ポート番号を教えてください．資料は今ここにありません．推測ではなく，確認方法を短く答えてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の不明事項．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-thanks-01
+    category: お礼への返答
+    messages:
+      - role: user
+        content: さっきの整理，かなり考えやすくなりました．ありがとう．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空のお礼．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-small-talk-01
+    category: 短い雑談
+    messages:
+      - role: user
+        content: 雨が上がって，少し空気が軽くなった感じがしますね．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の短い雑談．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-clarification-output-01
+    category: 曖昧な依頼への確認
+    messages:
+      - role: user
+        content: 前と同じ形式で，今週分もまとめてください．ただ，前回の内容や形式はこの会話に残っていません．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の曖昧な依頼．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: v3-writing-formal-01
+    category: 文章作成
+    messages:
+      - role: user
+        content: 研究会の開催を知らせる文章を，口語ではなく簡潔な文語の丁寧語で作ってください．日時と会場は未定です．
+    source_kind: synthetic
+    source_ref: null
+    provenance: prompt v3評価用に作成した架空の文章作成依頼．
+    transform_history: [prompt_v3_evaluation_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: validation

@@ -64,6 +64,19 @@ test('prompt comparison stays blind until completion and then renders version re
   assert.match(complete, /Prompt v2/);
   assert.match(complete, /v1 2勝/);
   assert.match(complete, /v2 3勝/);
+
+  const v3Complete = renderPromptComparison({
+    mode: 'prompt_v2_v3',
+    blinded: false,
+    winner: 'v3',
+    variants: {
+      v2: {wins: 4, losses: 6, win_rate: 0.4},
+      v3: {wins: 6, losses: 4, win_rate: 0.6},
+    },
+  });
+  assert.match(v3Complete, /Prompt v3/);
+  assert.match(v3Complete, /v2 4勝/);
+  assert.match(v3Complete, /v3 6勝/);
 });
 
 

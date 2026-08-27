@@ -72,23 +72,25 @@ export function renderBlindPreferencePair(pair, escapeHtml = escapeDefault) {
 }
 
 export function renderPromptComparison(comparison, escapeHtml = escapeDefault) {
-  if (!comparison || comparison.mode !== 'prompt_v1_v2') {
+  const variantsInMode = String(comparison?.mode || '').match(/^prompt_(v\d+)_(v\d+)$/);
+  if (!variantsInMode) {
     return '';
   }
   if (comparison.blinded !== false) {
     return '<div class="runtime-result-text">Prompt versionはsession完了までblindです．</div>';
   }
   const variants = comparison.variants || {};
-  const v1 = variants.v1 || {};
-  const v2 = variants.v2 || {};
-  const v1Rate = Math.round(Number(v1.win_rate || 0) * 100);
-  const v2Rate = Math.round(Number(v2.win_rate || 0) * 100);
+  const variantNames = variantsInMode.slice(1);
   const winner = comparison.winner === 'tie' ? '同率' : `Prompt ${comparison.winner || '-'}`;
+  const results = variantNames.map((name) => {
+    const result = variants[name] || {};
+    const rate = Math.round(Number(result.win_rate || 0) * 100);
+    return `<span>${escapeHtml(name)} ${escapeHtml(String(result.wins || 0))}勝 · ${escapeHtml(String(rate))}%</span>`;
+  }).join('');
   return `
     <div class="preference-comparison-result">
       <strong>${escapeHtml(winner)}</strong>
-      <span>v1 ${escapeHtml(String(v1.wins || 0))}勝 · ${escapeHtml(String(v1Rate))}%</span>
-      <span>v2 ${escapeHtml(String(v2.wins || 0))}勝 · ${escapeHtml(String(v2Rate))}%</span>
+      ${results}
     </div>
   `;
 }

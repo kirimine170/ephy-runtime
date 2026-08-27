@@ -58,7 +58,7 @@ def test_preference_api_flow_is_blind(monkeypatch) -> None:
             "/v1/eval/preferences/sessions",
             json={
                 "dataset_path": "configs/eval.preference.sample.yaml",
-                "comparison_mode": "prompt_v1_v2",
+                "comparison_mode": "prompt_v2_v3",
             },
         )
         generated = client.post(
@@ -75,7 +75,7 @@ def test_preference_api_flow_is_blind(monkeypatch) -> None:
         )
 
     assert created.status_code == 200
-    assert created.json()["comparison_mode"] == "prompt_v1_v2"
+    assert created.json()["comparison_mode"] == "prompt_v2_v3"
     assert generated.status_code == 200
     assert vote.status_code == 200
     assert stats.status_code == 200

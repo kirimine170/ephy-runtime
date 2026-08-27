@@ -117,10 +117,18 @@ def test_warm_polite_prompt_versions_are_explicit_and_distinct() -> None:
         profile,
         warm_polite_prompt_version="v2",
     )
+    v3 = manager.apply_ephy_profile(
+        ChatCompletionRequest(),
+        identity,
+        profile,
+        warm_polite_prompt_version="v3",
+    )
 
     assert "Ephyの柔らかい敬語 v2" not in v1.messages[0].content
     assert "Ephyの柔らかい敬語 v2" in v2.messages[0].content
+    assert "Ephyの柔らかい敬語 v3" in v3.messages[0].content
     assert v1.messages[0].content != v2.messages[0].content
+    assert v2.messages[0].content != v3.messages[0].content
 
 
 def test_writing_mode_prefers_prose_over_chat_register() -> None:

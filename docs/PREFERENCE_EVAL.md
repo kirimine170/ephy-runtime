@@ -4,7 +4,7 @@
 
 Preference A/B評価は，同一の会話履歴に対して生成した2応答から，よりEphyらしく自然な応答を人が選ぶための評価基盤である．結果はSQLiteへ追記し，将来のDPO／ORPO及び明示承認されたSFT用JSONLへ変換できる．LoRA学習自体は現在の実装範囲に含まれない．
 
-`same_prompt`方式では，Model Managerで対象roleに現在選択されている同一model，同一LoRA，同一system promptを使い，`temperature > 0`かつ異なるseedで2回生成する．`prompt_v1_v2`方式では，同一model，同一LoRA，同一seedを保ち，`warm_polite` promptだけをv1とv2で切り替える．これにより，sampling差とprompt改善を分けて評価できる．base対LoRA又はLoRA v1対v2の自動比較と，稼働中modelの自動切替は現在実装していない．
+`same_prompt`方式では，Model Managerで対象roleに現在選択されている同一model，同一LoRA，同一system promptを使い，`temperature > 0`かつ異なるseedで2回生成する．`prompt_v1_v2`及び`prompt_v2_v3`方式では，同一model，同一LoRA，同一seedを保ち，`warm_polite` promptだけを指定した2版で切り替える．これにより，sampling差とprompt改善を分けて評価できる．base対LoRA又はLoRA v1対v2の自動比較と，稼働中modelの自動切替は現在実装していない．
 
 ## データ境界
 
@@ -30,10 +30,10 @@ splitはscenario単位で`train`，`validation`又は`holdout`へ固定する．
 
 ## 生成とblind review
 
-1. `configs/eval.preference.sample.yaml`又はdata root配下の許可されたYAMLからsessionを作成する．
+1. `configs/eval.preference.sample.yaml`，`configs/eval.preference.v3.yaml`又はdata root配下の許可されたYAMLからsessionを作成する．
 2. Model Managerの現在のrole選択からmodel及びLoRAを解決する．Qwenのversionやmodel名は固定しない．
-3. `prompt_v1_v2`では，同じ会話とseedからprompt v1及びv2の候補を順次生成する．`same_prompt`では，同じ会話とpromptから異なるseedで2候補を生成する．同時推論数は1である．
-4. 正規化後に同一なら，`prompt_v1_v2`では両versionを同じ新seedで，`same_prompt`では候補Bを再生成する．最大試行後も同一のpairは`duplicate_generation`として保存し，review queueから除外する．
+3. Prompt比較では，同じ会話とseedから指定した2版の候補を順次生成する．`same_prompt`では，同じ会話とpromptから異なるseedで2候補を生成する．同時推論数は1である．
+4. 正規化後に同一なら，Prompt比較では両versionを同じ新seedで，`same_prompt`では候補Bを再生成する．最大試行後も同一のpairは`duplicate_generation`として保存し，review queueから除外する．
 5. 表示時だけ左右をランダム化し，UIへはpair ID，会話履歴，左右の応答，category及び進捗だけを返す．
 6. `left`又は`right`はserver側でcanonicalな`a`又は`b`へ変換する．
 
@@ -41,7 +41,7 @@ splitはscenario単位で`train`，`validation`又は`holdout`へ固定する．
 
 ## Wails UI
 
-SettingsからEvaluationを開き，`Preference A/B`を利用する．dataset，comparison，model role及びpair数を指定してsessionを開始するか，既存sessionを選択して再開する．Prompt改善では`Prompt v1 vs v2`を選ぶ．未評価pairは再起動後も先頭から復元される．理由タグとnoteは任意であり，選好だけを素早く保存できる．
+SettingsからEvaluationを開き，`Preference A/B`を利用する．dataset，comparison，model role及びpair数を指定してsessionを開始するか，既存sessionを選択して再開する．v3評価では`configs/eval.preference.v3.yaml`と`Prompt v2 vs v3`を選ぶ．未評価pairは再起動後も先頭から復元される．理由タグとnoteは任意であり，選好だけを素早く保存できる．
 
 キーボード操作は次のとおりである．
 
@@ -60,17 +60,17 @@ SettingsからEvaluationを開き，`Preference A/B`を利用する．dataset，
 
 ```bash
 ./scripts/run_cli.sh preference generate \
-  --dataset configs/eval.preference.sample.yaml \
+  --dataset configs/eval.preference.v3.yaml \
   --role fast \
-  --comparison prompt_v1_v2 \
-  --count 20
+  --comparison prompt_v2_v3 \
+  --count 30
 
 ./scripts/run_cli.sh preference stats --session SESSION_ID
 
 ./scripts/run_cli.sh preference export \
   --session SESSION_ID \
   --format dpo \
-  --output exports/ephy-preference-v1.dpo.jsonl
+  --output exports/ephy-preference-v3.dpo.jsonl
 ```
 
 ## DPO及びSFT export
@@ -81,7 +81,7 @@ SFTは同じ条件に加え，review時に`approved_for_sft=true`を明示した
 
 ## 実装済み範囲と将来構想
 
-現在は，同一の選択済みmodel／LoRAによるsame-prompt samplingとprompt v1／v2比較，blind review，append-only vote，session再開，完了後のversion別統計，DPO／SFT export，CLI，Gateway及びWails UIを実装している．
+現在は，同一の選択済みmodel／LoRAによるsame-prompt sampling，prompt v1／v2及びv2／v3比較，blind review，append-only vote，session再開，完了後のversion別統計，DPO／SFT export，CLI，Gateway及びWails UIを実装している．
 
 base対LoRA，LoRA version間又は異なるbase model間の自動比較，LLM reviewer，DPO／ORPO training，LoRA artifact作成及びModel Growth適用は将来構想である．これらを追加する際も，private data boundary，artifact hash，固定split及び評価後のrollback可能性を維持する．
 
