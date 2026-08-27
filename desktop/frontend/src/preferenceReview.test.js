@@ -6,6 +6,7 @@ import {
   createPreferenceReviewController,
   preferenceSelectionForKey,
   renderBlindPreferencePair,
+  renderPromptComparison,
 } from './preferenceReview.js';
 
 
@@ -39,6 +40,30 @@ test('blind guard rejects deblinded API payloads', () => {
     () => assertBlindPreferencePair({...pair(), model_registration_id: 'secret-model'}),
     /not blind/,
   );
+  assert.throws(
+    () => assertBlindPreferencePair({...pair(), prompt_variant: 'v2'}),
+    /not blind/,
+  );
+});
+
+
+test('prompt comparison stays blind until completion and then renders version result', () => {
+  const blinded = renderPromptComparison({mode: 'prompt_v1_v2', blinded: true});
+  const complete = renderPromptComparison({
+    mode: 'prompt_v1_v2',
+    blinded: false,
+    winner: 'v2',
+    variants: {
+      v1: {wins: 2, losses: 3, win_rate: 0.4},
+      v2: {wins: 3, losses: 2, win_rate: 0.6},
+    },
+  });
+
+  assert.match(blinded, /session完了までblind/);
+  assert.doesNotMatch(blinded, /v1 2勝|v2 3勝/);
+  assert.match(complete, /Prompt v2/);
+  assert.match(complete, /v1 2勝/);
+  assert.match(complete, /v2 3勝/);
 });
 
 

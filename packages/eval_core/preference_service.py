@@ -74,6 +74,7 @@ class PreferenceService:
             model_role=request.model_role,
             target_pairs=request.pair_count,
             prefetch=request.prefetch,
+            comparison_mode=request.comparison_mode,
             generation_parameters=request.generation_parameters,
             created_at=datetime.now(timezone.utc),
         )
@@ -168,6 +169,7 @@ class PreferenceService:
         reason_tags = Counter()
         categories: dict[str, Counter] = defaultdict(Counter)
         candidates: dict[str, dict] = {}
+        prompt_variants: dict[str, Counter] = defaultdict(Counter)
         for item in rows:
             pair = item["pair"]
             scenario = item["scenario"]
@@ -184,32 +186,46 @@ class PreferenceService:
                         "losses": 0,
                     },
                 )
+                if candidate.prompt_variant:
+                    prompt_variants[candidate.prompt_variant]["generated"] += 1
             if vote is None:
                 continue
             reviewed += 1
             reason_tags.update(vote.reason_tags)
-            categories[scenario.category][vote.selection] += 1
             if vote.selection == "tie":
                 tie += 1
+                categories[scenario.category]["tie"] += 1
             elif vote.selection == "skip":
                 skip += 1
+                categories[scenario.category]["skip"] += 1
             else:
                 winner = pair.candidate_a if vote.selection == "a" else pair.candidate_b
                 loser = pair.candidate_b if vote.selection == "a" else pair.candidate_a
                 candidates[winner.candidate_id]["wins"] += 1
                 candidates[loser.candidate_id]["losses"] += 1
+                if winner.prompt_variant:
+                    prompt_variants[winner.prompt_variant]["wins"] += 1
+                if loser.prompt_variant:
+                    prompt_variants[loser.prompt_variant]["losses"] += 1
                 displayed = (
                     "left"
                     if (vote.selection == "a") == (pair.display_order == "ab")
                     else "right"
                 )
                 display_selections[displayed] += 1
+                categories[scenario.category][displayed] += 1
         generated = len(rows)
         remaining = max(session.target_pairs - reviewed - duplicates, 0)
         decided_sides = display_selections["left"] + display_selections["right"]
+        comparison = self._comparison_stats(
+            session.comparison_mode,
+            prompt_variants,
+            remaining=remaining,
+        )
         return {
             "session_id": session_id,
             "model_role": session.model_role,
+            "comparison_mode": session.comparison_mode,
             "target_pairs": session.target_pairs,
             "total": session.target_pairs,
             "generated": generated,
@@ -227,6 +243,7 @@ class PreferenceService:
             },
             "reason_tags": dict(reason_tags),
             "duplicate_generation": duplicates,
+            "comparison": comparison,
         }
 
     def export(self, session_id: str, request: ExportPreferenceRequest) -> dict:
@@ -295,33 +312,61 @@ class PreferenceService:
             metadata={"mode": session.model_role, "session_mode": "default"},
             stream=False,
         )
-        effective_request = self._prompt_manager.apply_mode_prompt(base_request, session.model_role)
-        decision = self._router.route_chat(effective_request)
-        if decision.selected_model.model != model.backend_model:
-            raise ValueError("Gateway model configuration is stale; reload it before preference generation")
-        prompt_revision = self._prompt_revision(effective_request)
-        first_seed = self._seed(session.generation_parameters, generation_index, 0)
-        first_parameters = session.generation_parameters.model_copy(update={"seed": first_seed})
-        response_a = await self._generate_response(
-            decision.selected_model, effective_request, first_parameters
-        )
-        candidate_a = self._candidate_spec(
-            session.model_role, model, adapter, prompt_revision, first_parameters
-        )
+        if session.comparison_mode == "prompt_v1_v2":
+            (
+                response_a,
+                response_b,
+                candidate_a,
+                candidate_b,
+            ) = await self._generate_prompt_comparison(
+                session,
+                base_request,
+                generation_index,
+                model,
+                adapter,
+            )
+        else:
+            effective_request = self._prompt_manager.apply_mode_prompt(
+                base_request,
+                session.model_role,
+                ephy_prompt_version="v2",
+            )
+            decision = self._route_request(effective_request, model.backend_model)
+            prompt_revision = self._prompt_revision(effective_request)
+            first_seed = self._seed(session.generation_parameters, generation_index, 0)
+            first_parameters = session.generation_parameters.model_copy(update={"seed": first_seed})
+            response_a = await self._generate_response(
+                decision.selected_model, effective_request, first_parameters
+            )
+            candidate_a = self._candidate_spec(
+                session.model_role,
+                model,
+                adapter,
+                "v2",
+                prompt_revision,
+                first_parameters,
+            )
 
-        response_b = ""
-        candidate_b = None
-        for attempt in range(3):
-            second_seed = self._seed(session.generation_parameters, generation_index, attempt + 1)
-            second_parameters = session.generation_parameters.model_copy(update={"seed": second_seed})
-            response_b = await self._generate_response(
-                decision.selected_model, effective_request, second_parameters
-            )
-            candidate_b = self._candidate_spec(
-                session.model_role, model, adapter, prompt_revision, second_parameters
-            )
-            if self._normalize_response(response_a) != self._normalize_response(response_b):
-                break
+            response_b = ""
+            candidate_b = None
+            for attempt in range(3):
+                second_seed = self._seed(session.generation_parameters, generation_index, attempt + 1)
+                second_parameters = session.generation_parameters.model_copy(
+                    update={"seed": second_seed}
+                )
+                response_b = await self._generate_response(
+                    decision.selected_model, effective_request, second_parameters
+                )
+                candidate_b = self._candidate_spec(
+                    session.model_role,
+                    model,
+                    adapter,
+                    "v2",
+                    prompt_revision,
+                    second_parameters,
+                )
+                if self._normalize_response(response_a) != self._normalize_response(response_b):
+                    break
         assert candidate_b is not None
         duplicate = self._normalize_response(response_a) == self._normalize_response(response_b)
         return PreferencePair(
@@ -338,6 +383,84 @@ class PreferenceService:
             status="duplicate_generation" if duplicate else "pending",
             created_at=datetime.now(timezone.utc),
         )
+
+    async def _generate_prompt_comparison(
+        self,
+        session: PreferenceSession,
+        base_request: ChatCompletionRequest,
+        generation_index: int,
+        model,
+        adapter,
+    ) -> tuple[str, str, CandidateSpec, CandidateSpec]:
+        request_v1 = self._prompt_manager.apply_mode_prompt(
+            base_request,
+            session.model_role,
+            ephy_prompt_version="v1",
+        )
+        request_v2 = self._prompt_manager.apply_mode_prompt(
+            base_request,
+            session.model_role,
+            ephy_prompt_version="v2",
+        )
+        revision_v1 = self._prompt_revision(request_v1)
+        revision_v2 = self._prompt_revision(request_v2)
+        if revision_v1 == revision_v2:
+            raise ValueError(
+                "Prompt v1/v2 comparison requires an enabled warm_polite Ephy Profile"
+            )
+        decision_v1 = self._route_request(request_v1, model.backend_model)
+        decision_v2 = self._route_request(request_v2, model.backend_model)
+        response_v1 = ""
+        response_v2 = ""
+        candidate_v1 = None
+        candidate_v2 = None
+        for attempt in range(4):
+            shared_seed = self._seed(
+                session.generation_parameters,
+                generation_index,
+                attempt,
+            )
+            parameters = session.generation_parameters.model_copy(
+                update={"seed": shared_seed}
+            )
+            response_v1 = await self._generate_response(
+                decision_v1.selected_model,
+                request_v1,
+                parameters,
+            )
+            response_v2 = await self._generate_response(
+                decision_v2.selected_model,
+                request_v2,
+                parameters,
+            )
+            candidate_v1 = self._candidate_spec(
+                session.model_role,
+                model,
+                adapter,
+                "v1",
+                revision_v1,
+                parameters,
+            )
+            candidate_v2 = self._candidate_spec(
+                session.model_role,
+                model,
+                adapter,
+                "v2",
+                revision_v2,
+                parameters,
+            )
+            if self._normalize_response(response_v1) != self._normalize_response(response_v2):
+                break
+        assert candidate_v1 is not None and candidate_v2 is not None
+        return response_v1, response_v2, candidate_v1, candidate_v2
+
+    def _route_request(self, request: ChatCompletionRequest, backend_model: str):
+        decision = self._router.route_chat(request)
+        if decision.selected_model.model != backend_model:
+            raise ValueError(
+                "Gateway model configuration is stale; reload it before preference generation"
+            )
+        return decision
 
     async def _generate_response(self, model_config, request, parameters: GenerationParameters) -> str:
         payload = request.model_copy(
@@ -370,7 +493,14 @@ class PreferenceService:
         return self._registry.resolve(selection, verify=False)
 
     @staticmethod
-    def _candidate_spec(role, model, adapter, prompt_revision, parameters) -> CandidateSpec:
+    def _candidate_spec(
+        role,
+        model,
+        adapter,
+        prompt_variant,
+        prompt_revision,
+        parameters,
+    ) -> CandidateSpec:
         return CandidateSpec(
             candidate_id=str(uuid4()),
             model_role=role,
@@ -378,6 +508,7 @@ class PreferenceService:
             model_sha256=model.sha256,
             adapter_registration_id=adapter.id if adapter else None,
             adapter_sha256=adapter.sha256 if adapter else None,
+            prompt_variant=prompt_variant,
             prompt_revision=prompt_revision,
             generation_parameters=parameters,
             generated_at=datetime.now(timezone.utc),
@@ -403,12 +534,48 @@ class PreferenceService:
     def _sha256(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _comparison_stats(
+        comparison_mode: str,
+        prompt_variants: dict[str, Counter],
+        *,
+        remaining: int,
+    ) -> dict:
+        if comparison_mode != "prompt_v1_v2":
+            return {"mode": comparison_mode}
+        if remaining > 0:
+            return {"mode": comparison_mode, "blinded": True}
+
+        variants = {}
+        for name in ("v1", "v2"):
+            wins = int(prompt_variants[name]["wins"])
+            losses = int(prompt_variants[name]["losses"])
+            decided = wins + losses
+            variants[name] = {
+                "wins": wins,
+                "losses": losses,
+                "win_rate": wins / decided if decided else 0.0,
+            }
+        if variants["v2"]["wins"] > variants["v1"]["wins"]:
+            winner = "v2"
+        elif variants["v1"]["wins"] > variants["v2"]["wins"]:
+            winner = "v1"
+        else:
+            winner = "tie"
+        return {
+            "mode": comparison_mode,
+            "blinded": False,
+            "winner": winner,
+            "variants": variants,
+        }
+
     def _session_summary(self, session: PreferenceSession) -> dict:
         stats = self.stats(session.session_id)
         return {
             "session_id": session.session_id,
             "dataset_path": session.dataset_path,
             "model_role": session.model_role,
+            "comparison_mode": session.comparison_mode,
             "target_pairs": session.target_pairs,
             "prefetch": session.prefetch,
             "created_at": session.created_at.isoformat(),

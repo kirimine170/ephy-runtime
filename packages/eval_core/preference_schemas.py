@@ -14,6 +14,8 @@ CanonicalSelection = Literal["a", "b", "tie", "skip"]
 DisplaySelection = Literal["left", "right", "tie", "skip"]
 ReviewerType = Literal["human", "llm"]
 ModelRole = Literal["fast", "work", "code"]
+ComparisonMode = Literal["same_prompt", "prompt_v1_v2"]
+PromptVariant = Literal["v1", "v2"]
 ReasonTag = Literal[
     "direct",
     "natural_japanese",
@@ -87,6 +89,7 @@ class CandidateSpec(StrictModel):
     model_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     adapter_registration_id: str | None = None
     adapter_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    prompt_variant: PromptVariant | None = None
     prompt_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     generation_parameters: GenerationParameters
     generated_at: datetime
@@ -131,6 +134,7 @@ class PreferenceSession(StrictModel):
     model_role: ModelRole = "fast"
     target_pairs: int = Field(default=20, ge=1, le=100)
     prefetch: int = Field(default=4, ge=1, le=10)
+    comparison_mode: ComparisonMode = "same_prompt"
     generation_parameters: GenerationParameters = Field(default_factory=GenerationParameters)
     status: Literal["active", "complete"] = "active"
     created_at: datetime
@@ -141,6 +145,7 @@ class CreatePreferenceSessionRequest(StrictModel):
     model_role: ModelRole = "fast"
     pair_count: int = Field(default=20, ge=1, le=100)
     prefetch: int = Field(default=4, ge=1, le=10)
+    comparison_mode: ComparisonMode = "same_prompt"
     generation_parameters: GenerationParameters = Field(default_factory=GenerationParameters)
 
 

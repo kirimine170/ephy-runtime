@@ -63,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
     preference_generate.add_argument("--role", choices=("fast", "work", "code"), default="fast")
     preference_generate.add_argument("--count", type=int, default=20, choices=range(1, 101))
     preference_generate.add_argument("--prefetch", type=int, default=4, choices=range(1, 11))
+    preference_generate.add_argument(
+        "--comparison",
+        choices=("same_prompt", "prompt_v1_v2"),
+        default="same_prompt",
+    )
     preference_generate.add_argument("--temperature", type=float, default=0.8)
     preference_generate.add_argument("--top-p", type=float, default=0.95)
     preference_generate.add_argument("--seed", type=int)
@@ -191,6 +196,7 @@ async def run_async(args: argparse.Namespace) -> int:
                         model_role=args.role,
                         pair_count=args.count,
                         prefetch=args.prefetch,
+                        comparison_mode=args.comparison,
                         generation_parameters=generation_parameters,
                     )
                 )

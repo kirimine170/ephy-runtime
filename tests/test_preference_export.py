@@ -15,12 +15,13 @@ from packages.eval_core.preference_schemas import (
 from packages.eval_core.preference_store import PreferenceStore
 
 
-def candidate(candidate_id: str) -> CandidateSpec:
+def candidate(candidate_id: str, prompt_variant: str) -> CandidateSpec:
     return CandidateSpec(
         candidate_id=candidate_id,
         model_role="fast",
         model_registration_id="model-a",
         model_sha256="a" * 64,
+        prompt_variant=prompt_variant,
         prompt_revision="b" * 64,
         generation_parameters=GenerationParameters(seed=1),
         generated_at=datetime.now(timezone.utc),
@@ -60,8 +61,8 @@ def add_record(
         pair_id=pair_id,
         session_id=session_id,
         scenario_id=scenario_id,
-        candidate_a=candidate(f"a-{index}"),
-        candidate_b=candidate(f"b-{index}"),
+        candidate_a=candidate(f"a-{index}", "v1"),
+        candidate_b=candidate(f"b-{index}", "v2"),
         response_a=f"chosen {index}",
         response_b=f"rejected {index}",
         response_a_sha256="c" * 64,
@@ -106,6 +107,8 @@ def test_dpo_export_uses_only_latest_eligible_training_vote(tmp_path) -> None:
     assert result["records"] == 1
     assert records(destination)[0]["chosen"][0]["content"] == "rejected 1"
     assert records(destination)[0]["metadata"]["provenance"] == "unit test"
+    assert records(destination)[0]["metadata"]["chosen_prompt_variant"] == "v2"
+    assert records(destination)[0]["metadata"]["rejected_prompt_variant"] == "v1"
 
 
 @pytest.mark.parametrize(

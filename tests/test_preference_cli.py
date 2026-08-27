@@ -12,12 +12,15 @@ def test_preference_generate_cli_arguments() -> None:
             "fast",
             "--count",
             "20",
+            "--comparison",
+            "prompt_v1_v2",
         ]
     )
 
     assert args.command == "preference"
     assert args.preference_command == "generate"
     assert args.count == 20
+    assert args.comparison == "prompt_v1_v2"
     assert args.temperature > 0
 
 

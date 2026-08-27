@@ -12,6 +12,9 @@ from packages.eval_core.preference_schemas import (
 )
 from packages.eval_core.preference_service import PreferenceService
 from packages.eval_core.preference_store import PreferenceStore
+from packages.identity_core import IdentityService
+from packages.profile_core import ProfileService
+from packages.profile_core.runtime import EphyContext
 from packages.prompt_core.loader import PromptManager
 
 
@@ -61,7 +64,12 @@ scenarios:
     return path
 
 
-def make_service(tmp_path, responses, display_order="ba") -> tuple[PreferenceService, FakeAdapter]:
+def make_service(
+    tmp_path,
+    responses,
+    display_order="ba",
+    prompt_manager=None,
+) -> tuple[PreferenceService, FakeAdapter]:
     repository = tmp_path / "repository"
     write_dataset(repository)
     config = AppConfig(
@@ -71,7 +79,7 @@ def make_service(tmp_path, responses, display_order="ba") -> tuple[PreferenceSer
     adapter = FakeAdapter(responses)
     service = PreferenceService(
         config=config,
-        prompt_manager=PromptManager(prompts_dir=ROOT_DIR / "prompts"),
+        prompt_manager=prompt_manager or PromptManager(prompts_dir=ROOT_DIR / "prompts"),
         adapter=adapter,
         store=PreferenceStore(tmp_path / "data"),
         registry=FakeRegistry(),
@@ -80,6 +88,15 @@ def make_service(tmp_path, responses, display_order="ba") -> tuple[PreferenceSer
         seed_factory=iter(range(100, 200)).__next__,
     )
     return service, adapter
+
+
+def ephy_prompt_manager() -> PromptManager:
+    examples = ROOT_DIR / "configs/examples"
+    context = EphyContext(
+        identity=IdentityService().load(examples / "identity.example.yaml"),
+        profile=ProfileService().load(examples / "profile.example.yaml"),
+    )
+    return PromptManager(prompts_dir=ROOT_DIR / "prompts", ephy_context=context)
 
 
 def test_service_generates_blind_randomized_pair_and_metadata(tmp_path) -> None:
@@ -101,6 +118,45 @@ def test_service_generates_blind_randomized_pair_and_metadata(tmp_path) -> None:
     assert stored.candidate_a.adapter_sha256 == "b" * 64
     assert adapter.requests[0].temperature > 0
     assert adapter.requests[0].seed != adapter.requests[1].seed
+
+
+def test_prompt_v1_v2_comparison_uses_shared_seed_and_reveals_result_only_when_complete(
+    tmp_path,
+) -> None:
+    service, adapter = make_service(
+        tmp_path,
+        ["v1 response", "v2 response"],
+        display_order="ba",
+        prompt_manager=ephy_prompt_manager(),
+    )
+    session = service.create_session(
+        CreatePreferenceSessionRequest(
+            dataset_path="configs/preference.yaml",
+            pair_count=1,
+            comparison_mode="prompt_v1_v2",
+        )
+    )
+
+    asyncio.run(service.generate(session["session_id"], 1))
+
+    blind = service.next_pair(session["session_id"])
+    stored = service.store.get_pair(blind.pair_id)
+    in_progress = service.stats(session["session_id"])
+    assert blind.response_left == "v2 response"
+    assert "prompt" not in blind.model_dump_json()
+    assert stored.candidate_a.prompt_variant == "v1"
+    assert stored.candidate_b.prompt_variant == "v2"
+    assert stored.candidate_a.prompt_revision != stored.candidate_b.prompt_revision
+    assert adapter.requests[0].seed == adapter.requests[1].seed
+    assert "Ephyの柔らかい敬語 v2" not in str(adapter.requests[0].messages)
+    assert "Ephyの柔らかい敬語 v2" in str(adapter.requests[1].messages)
+    assert in_progress["comparison"] == {"mode": "prompt_v1_v2", "blinded": True}
+
+    service.vote(blind.pair_id, SubmitPreferenceVoteRequest(selection="left"))
+    completed = service.stats(session["session_id"])["comparison"]
+    assert completed["blinded"] is False
+    assert completed["winner"] == "v2"
+    assert completed["variants"]["v2"]["wins"] == 1
 
 
 @pytest.mark.parametrize(

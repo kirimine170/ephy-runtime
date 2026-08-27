@@ -214,6 +214,7 @@ type PreferenceSessionRequest struct {
 	ModelRole            string                         `json:"model_role"`
 	PairCount            int                            `json:"pair_count"`
 	Prefetch             int                            `json:"prefetch"`
+	ComparisonMode       string                         `json:"comparison_mode"`
 	GenerationParameters PreferenceGenerationParameters `json:"generation_parameters"`
 }
 

@@ -738,6 +738,7 @@ export namespace main {
 	    model_role: string;
 	    pair_count: number;
 	    prefetch: number;
+	    comparison_mode: string;
 	    generation_parameters: PreferenceGenerationParameters;
 
 	    static createFrom(source: any = {}) {
@@ -750,6 +751,7 @@ export namespace main {
 	        this.model_role = source["model_role"];
 	        this.pair_count = source["pair_count"];
 	        this.prefetch = source["prefetch"];
+	        this.comparison_mode = source["comparison_mode"];
 	        this.generation_parameters = this.convertValues(source["generation_parameters"], PreferenceGenerationParameters);
 	    }
 
