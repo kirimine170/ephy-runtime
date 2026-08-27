@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     preference_generate.add_argument("--prefetch", type=int, default=4, choices=range(1, 11))
     preference_generate.add_argument(
         "--comparison",
-        choices=("same_prompt", "prompt_v1_v2"),
+        choices=("same_prompt", "prompt_v1_v2", "prompt_v2_v3"),
         default="same_prompt",
     )
     preference_generate.add_argument("--temperature", type=float, default=0.8)

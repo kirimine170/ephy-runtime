@@ -35,6 +35,12 @@ from .preference_schemas import (
 from .preference_store import PreferenceStore
 
 
+PROMPT_COMPARISONS = {
+    "prompt_v1_v2": ("v1", "v2"),
+    "prompt_v2_v3": ("v2", "v3"),
+}
+
+
 class PreferenceService:
     def __init__(
         self,
@@ -312,7 +318,7 @@ class PreferenceService:
             metadata={"mode": session.model_role, "session_mode": "default"},
             stream=False,
         )
-        if session.comparison_mode == "prompt_v1_v2":
+        if session.comparison_mode in PROMPT_COMPARISONS:
             (
                 response_a,
                 response_b,
@@ -392,28 +398,30 @@ class PreferenceService:
         model,
         adapter,
     ) -> tuple[str, str, CandidateSpec, CandidateSpec]:
-        request_v1 = self._prompt_manager.apply_mode_prompt(
+        first_variant, second_variant = PROMPT_COMPARISONS[session.comparison_mode]
+        request_first = self._prompt_manager.apply_mode_prompt(
             base_request,
             session.model_role,
-            ephy_prompt_version="v1",
+            ephy_prompt_version=first_variant,
         )
-        request_v2 = self._prompt_manager.apply_mode_prompt(
+        request_second = self._prompt_manager.apply_mode_prompt(
             base_request,
             session.model_role,
-            ephy_prompt_version="v2",
+            ephy_prompt_version=second_variant,
         )
-        revision_v1 = self._prompt_revision(request_v1)
-        revision_v2 = self._prompt_revision(request_v2)
-        if revision_v1 == revision_v2:
+        revision_first = self._prompt_revision(request_first)
+        revision_second = self._prompt_revision(request_second)
+        if revision_first == revision_second:
             raise ValueError(
-                "Prompt v1/v2 comparison requires an enabled warm_polite Ephy Profile"
+                f"Prompt {first_variant}/{second_variant} comparison requires an enabled "
+                "warm_polite Ephy Profile"
             )
-        decision_v1 = self._route_request(request_v1, model.backend_model)
-        decision_v2 = self._route_request(request_v2, model.backend_model)
-        response_v1 = ""
-        response_v2 = ""
-        candidate_v1 = None
-        candidate_v2 = None
+        decision_first = self._route_request(request_first, model.backend_model)
+        decision_second = self._route_request(request_second, model.backend_model)
+        response_first = ""
+        response_second = ""
+        candidate_first = None
+        candidate_second = None
         for attempt in range(4):
             shared_seed = self._seed(
                 session.generation_parameters,
@@ -423,36 +431,36 @@ class PreferenceService:
             parameters = session.generation_parameters.model_copy(
                 update={"seed": shared_seed}
             )
-            response_v1 = await self._generate_response(
-                decision_v1.selected_model,
-                request_v1,
+            response_first = await self._generate_response(
+                decision_first.selected_model,
+                request_first,
                 parameters,
             )
-            response_v2 = await self._generate_response(
-                decision_v2.selected_model,
-                request_v2,
+            response_second = await self._generate_response(
+                decision_second.selected_model,
+                request_second,
                 parameters,
             )
-            candidate_v1 = self._candidate_spec(
+            candidate_first = self._candidate_spec(
                 session.model_role,
                 model,
                 adapter,
-                "v1",
-                revision_v1,
+                first_variant,
+                revision_first,
                 parameters,
             )
-            candidate_v2 = self._candidate_spec(
+            candidate_second = self._candidate_spec(
                 session.model_role,
                 model,
                 adapter,
-                "v2",
-                revision_v2,
+                second_variant,
+                revision_second,
                 parameters,
             )
-            if self._normalize_response(response_v1) != self._normalize_response(response_v2):
+            if self._normalize_response(response_first) != self._normalize_response(response_second):
                 break
-        assert candidate_v1 is not None and candidate_v2 is not None
-        return response_v1, response_v2, candidate_v1, candidate_v2
+        assert candidate_first is not None and candidate_second is not None
+        return response_first, response_second, candidate_first, candidate_second
 
     def _route_request(self, request: ChatCompletionRequest, backend_model: str):
         decision = self._router.route_chat(request)
@@ -541,13 +549,14 @@ class PreferenceService:
         *,
         remaining: int,
     ) -> dict:
-        if comparison_mode != "prompt_v1_v2":
+        comparison_variants = PROMPT_COMPARISONS.get(comparison_mode)
+        if comparison_variants is None:
             return {"mode": comparison_mode}
         if remaining > 0:
             return {"mode": comparison_mode, "blinded": True}
 
         variants = {}
-        for name in ("v1", "v2"):
+        for name in comparison_variants:
             wins = int(prompt_variants[name]["wins"])
             losses = int(prompt_variants[name]["losses"])
             decided = wins + losses
@@ -556,10 +565,11 @@ class PreferenceService:
                 "losses": losses,
                 "win_rate": wins / decided if decided else 0.0,
             }
-        if variants["v2"]["wins"] > variants["v1"]["wins"]:
-            winner = "v2"
-        elif variants["v1"]["wins"] > variants["v2"]["wins"]:
-            winner = "v1"
+        first_variant, second_variant = comparison_variants
+        if variants[second_variant]["wins"] > variants[first_variant]["wins"]:
+            winner = second_variant
+        elif variants[first_variant]["wins"] > variants[second_variant]["wins"]:
+            winner = first_variant
         else:
             winner = "tie"
         return {

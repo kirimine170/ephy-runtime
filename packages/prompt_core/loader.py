@@ -15,11 +15,12 @@ PROMPTS_DIR = ROOT_DIR / "prompts"
 LANGUAGE_POLICY_MARKER = "出力言語ポリシー"
 RESPONSE_STYLE_POLICY_MARKER = "応答スタイルポリシー"
 EPHY_PROFILE_POLICY_MARKER = "Ephy Profile Policy"
-WarmPolitePromptVersion = Literal["v1", "v2"]
+WarmPolitePromptVersion = Literal["v1", "v2", "v3"]
 DEFAULT_WARM_POLITE_PROMPT_VERSION: WarmPolitePromptVersion = "v2"
 WARM_POLITE_PROMPT_FILES: dict[WarmPolitePromptVersion, str] = {
     "v1": "ephy_warm_polite_ja.v1.md",
     "v2": "ephy_warm_polite_ja.md",
+    "v3": "ephy_warm_polite_ja.v3.md",
 }
 
 

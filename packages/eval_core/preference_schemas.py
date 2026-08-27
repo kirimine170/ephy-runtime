@@ -14,8 +14,8 @@ CanonicalSelection = Literal["a", "b", "tie", "skip"]
 DisplaySelection = Literal["left", "right", "tie", "skip"]
 ReviewerType = Literal["human", "llm"]
 ModelRole = Literal["fast", "work", "code"]
-ComparisonMode = Literal["same_prompt", "prompt_v1_v2"]
-PromptVariant = Literal["v1", "v2"]
+ComparisonMode = Literal["same_prompt", "prompt_v1_v2", "prompt_v2_v3"]
+PromptVariant = Literal["v1", "v2", "v3"]
 ReasonTag = Literal[
     "direct",
     "natural_japanese",
