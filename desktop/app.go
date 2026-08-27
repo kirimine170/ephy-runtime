@@ -202,6 +202,38 @@ type EvalRequest struct {
 	WithAnswer  bool   `json:"with_answer"`
 }
 
+type PreferenceGenerationParameters struct {
+	Temperature float64 `json:"temperature"`
+	TopP        float64 `json:"top_p"`
+	Seed        *int    `json:"seed,omitempty"`
+	MaxTokens   int     `json:"max_tokens"`
+}
+
+type PreferenceSessionRequest struct {
+	DatasetPath          string                         `json:"dataset_path"`
+	ModelRole            string                         `json:"model_role"`
+	PairCount            int                            `json:"pair_count"`
+	Prefetch             int                            `json:"prefetch"`
+	GenerationParameters PreferenceGenerationParameters `json:"generation_parameters"`
+}
+
+type PreferenceGenerateRequest struct {
+	Limit int `json:"limit,omitempty"`
+}
+
+type PreferenceVoteRequest struct {
+	Selection        string   `json:"selection"`
+	ReasonTags       []string `json:"reason_tags,omitempty"`
+	Note             string   `json:"note,omitempty"`
+	ApprovedForSFT   bool     `json:"approved_for_sft"`
+	SupersedesVoteID string   `json:"supersedes_vote_id,omitempty"`
+}
+
+type PreferenceExportRequest struct {
+	Format string `json:"format"`
+	Output string `json:"output"`
+}
+
 type SearchResponse struct {
 	Query   string       `json:"query"`
 	Results []SearchItem `json:"results"`
@@ -988,6 +1020,72 @@ func (a *App) Eval(request EvalRequest) (*EvalResponse, error) {
 	var response EvalResponse
 	err := a.postJSON("/v1/eval/run", request, &response)
 	return &response, err
+}
+
+func (a *App) ListPreferenceSessions() (map[string]any, error) {
+	var response map[string]any
+	err := a.getJSON("/v1/eval/preferences/sessions", &response)
+	return response, err
+}
+
+func (a *App) CreatePreferenceSession(request PreferenceSessionRequest) (map[string]any, error) {
+	var response map[string]any
+	err := a.postJSON("/v1/eval/preferences/sessions", request, &response)
+	a.recordPreferenceExecution("Preference A/B Session", err, request.DatasetPath, "session created")
+	return response, err
+}
+
+func (a *App) GeneratePreferencePairs(sessionID string, request PreferenceGenerateRequest) (map[string]any, error) {
+	var response map[string]any
+	path := fmt.Sprintf("/v1/eval/preferences/sessions/%s/generate", url.PathEscape(sessionID))
+	err := a.postJSON(path, request, &response)
+	a.recordPreferenceExecution("Preference A/B Generate", err, sessionID, "candidate pairs generated")
+	return response, err
+}
+
+func (a *App) NextPreferencePair(sessionID string) (map[string]any, error) {
+	var response map[string]any
+	path := fmt.Sprintf("/v1/eval/preferences/sessions/%s/next", url.PathEscape(sessionID))
+	err := a.getJSON(path, &response)
+	return response, err
+}
+
+func (a *App) VotePreferencePair(pairID string, request PreferenceVoteRequest) (map[string]any, error) {
+	var response map[string]any
+	path := fmt.Sprintf("/v1/eval/preferences/pairs/%s/vote", url.PathEscape(pairID))
+	err := a.postJSON(path, request, &response)
+	a.recordPreferenceExecution("Preference A/B Vote", err, pairID, "vote saved")
+	return response, err
+}
+
+func (a *App) PreferenceStats(sessionID string) (map[string]any, error) {
+	var response map[string]any
+	path := fmt.Sprintf("/v1/eval/preferences/sessions/%s/stats", url.PathEscape(sessionID))
+	err := a.getJSON(path, &response)
+	return response, err
+}
+
+func (a *App) ExportPreferenceSession(sessionID string, request PreferenceExportRequest) (map[string]any, error) {
+	var response map[string]any
+	path := fmt.Sprintf("/v1/eval/preferences/sessions/%s/export", url.PathEscape(sessionID))
+	err := a.postJSON(path, request, &response)
+	a.recordPreferenceExecution("Preference A/B Export", err, sessionID, request.Format)
+	return response, err
+}
+
+func (a *App) recordPreferenceExecution(title string, actionErr error, summary string, detail string) {
+	status := "ok"
+	if actionErr != nil {
+		status = "error"
+		detail = actionErr.Error()
+	}
+	_, _ = a.RecordExecution(ExecutionHistoryItem{
+		Kind:    "preference",
+		Title:   title,
+		Status:  status,
+		Summary: strings.TrimSpace(summary),
+		Detail:  detail,
+	})
 }
 
 func (a *App) ReloadGatewayConfig() (*ReloadConfigResponse, error) {

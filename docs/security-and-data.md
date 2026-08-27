@@ -16,6 +16,8 @@ Private repository visibility is not a secret-management control．Do not store 
 
 Use an approved secret manager for credentials and access-controlled data or artifact storage for large，sensitive，or operational data．Commit only synthetic or properly anonymized fixtures that are necessary for tests．Before committing，review staged changes and run the repository validation．
 
+Preference A/Bの生応答，SQLite DB及びDPO／SFT JSONLは，`EPHY_PREFERENCE_DATA_ROOT`で指定したGit管理外の絶対パスだけへ保存する．repositoryへ追加できる会話fixtureは，実在人物やprivate projectに由来しない合成dataに限定する．
+
 ## Metadata policy
 
 `.ephy/project.yaml` declares a data classification of `public`，`internal`，`confidential`，or `restricted`．It must also set both `personal_data_in_git` and `secrets_in_git` to `prohibited`．Classification describes handling sensitivity; it never permits secrets or unnecessary personal data in Git．

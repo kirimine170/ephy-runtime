@@ -18,6 +18,8 @@ export function ClearBatchWorkflowState():Promise<main.BatchWorkflowState>;
 
 export function ClearExecutionHistory():Promise<Array<main.ExecutionHistoryItem>>;
 
+export function CreatePreferenceSession(arg1:main.PreferenceSessionRequest):Promise<Record<string, any>>;
+
 export function DeleteLocalConfigFile(arg1:main.LocalConfigNameRequest):Promise<Array<main.LocalConfigFile>>;
 
 export function DeleteProjectPreset(arg1:main.LocalConfigNameRequest):Promise<Array<main.ProjectPreset>>;
@@ -28,7 +30,11 @@ export function Embeddings(arg1:main.EmbeddingRequest):Promise<Record<string, an
 
 export function Eval(arg1:main.EvalRequest):Promise<main.EvalResponse>;
 
+export function ExportPreferenceSession(arg1:string,arg2:main.PreferenceExportRequest):Promise<Record<string, any>>;
+
 export function ExportResult(arg1:main.ExportResultRequest):Promise<main.ExportResultResponse>;
+
+export function GeneratePreferencePairs(arg1:string,arg2:main.PreferenceGenerateRequest):Promise<Record<string, any>>;
 
 export function GetBatchPresetSelection():Promise<Array<string>>;
 
@@ -62,13 +68,19 @@ export function Ingest(arg1:main.IngestRequest):Promise<Record<string, any>>;
 
 export function ListExportedResults():Promise<Array<main.ExportedFileItem>>;
 
+export function ListPreferenceSessions():Promise<Record<string, any>>;
+
 export function LoadLocalConfigExample(arg1:main.LocalConfigNameRequest):Promise<main.LocalConfigFile>;
 
 export function Models():Promise<main.ModelListResponse>;
 
+export function NextPreferencePair(arg1:string):Promise<Record<string, any>>;
+
 export function OpenWebSource(arg1:string):Promise<void>;
 
 export function PlanWebSearch(arg1:string):Promise<main.WebSearchPlanResponse>;
+
+export function PreferenceStats(arg1:string):Promise<Record<string, any>>;
 
 export function Query(arg1:main.QueryRequest):Promise<main.QueryResponse>;
 
@@ -199,3 +211,5 @@ export function StopWatch():Promise<main.RuntimeStatus>;
 export function StopWork():Promise<main.RuntimeStatus>;
 
 export function ValidateProjectPreset(arg1:main.ProjectPreset):Promise<main.PresetValidationResponse>;
+
+export function VotePreferencePair(arg1:string,arg2:main.PreferenceVoteRequest):Promise<Record<string, any>>;

@@ -35,11 +35,17 @@ class InferenceGate:
 class InferenceGateMiddleware:
     paths = {"/v1/chat/completions", "/v1/rag/query", "/v1/embeddings", "/v1/eval/run"}
 
+    @classmethod
+    def inference_path(cls, path: str) -> bool:
+        return path in cls.paths or (
+            path.startswith("/v1/eval/preferences/sessions/") and path.endswith("/generate")
+        )
+
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") not in self.paths:
+        if scope["type"] != "http" or not self.inference_path(scope.get("path", "")):
             return await self.app(scope, receive, send)
         gate = scope["app"].state.inference_gate
         if gate.transitioning():

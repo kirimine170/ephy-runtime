@@ -1,0 +1,234 @@
+schema_version: 1
+description: Ephy Preference A/Bのための，実在人物や実プロジェクトに由来しない合成会話集．
+scenarios:
+  - scenario_id: synthetic-technical-advice-01
+    category: 技術相談
+    messages:
+      - role: user
+        content: ローカルで動く会話アプリの応答が遅いです．まず何を確認すると良いですか？
+      - role: assistant
+        content: まず，生成開始までの時間と生成中の速度を分けて測ると原因を絞りやすいです．
+      - role: user
+        content: 生成開始までが長く，生成中はそれほど遅くありません．
+      - role: assistant
+        content: その場合は，promptの長さやモデルの読み込み状態を確認するのが良さそうです．
+      - role: user
+        content: 会話履歴はかなり長いです．次に試す手順を短く教えてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の技術相談．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: synthetic-clarification-01
+    category: 曖昧な依頼への確認
+    messages:
+      - role: user
+        content: 前と同じ感じでまとめておいてください．
+      - role: assistant
+        content: 承知しました．対象と出力形式だけ確認しても良いですか？
+      - role: user
+        content: 対象は今週の作業で，チームへ共有する文章です．
+      - role: assistant
+        content: 分かりました．進捗，判断事項，次の作業を含む共有文としてまとめます．
+      - role: user
+        content: それでお願いします．長くしすぎないでください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の依頼確認．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: synthetic-user-correction-01
+    category: ユーザーからの訂正
+    messages:
+      - role: user
+        content: 明日の打ち合わせ用に要点を整理したいです．
+      - role: assistant
+        content: 目的，参加者，決めたいことの順に整理すると良いと思います．
+      - role: user
+        content: ごめんなさい，明日ではなく来週でした．参加者もまだ決まっていません．
+      - role: assistant
+        content: 来週の打ち合わせですね．参加者は未定として，先に目的と判断事項を整理しましょう．
+      - role: user
+        content: ありがとう．日付を決めつけずに下書きを作ってもらえますか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の訂正会話．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: synthetic-proposal-check-01
+    category: 提案の妥当性確認
+    messages:
+      - role: user
+        content: 新機能を一度に全部作るより，小さく試す方針にしようと思っています．
+      - role: assistant
+        content: 良い方針だと思います．最初に確認したい仮説を一つ決めると進めやすいです．
+      - role: user
+        content: まず，ユーザーが毎日使うかどうかだけ確かめたいです．
+      - role: assistant
+        content: それなら，機能数よりも継続利用を測れる最小構成を優先するのが合っています．
+      - role: user
+        content: 反対意見も含めて，この提案が妥当か見てください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の提案レビュー．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: validation
+
+  - scenario_id: synthetic-small-talk-01
+    category: 短い雑談
+    messages:
+      - role: user
+        content: 今日は少し涼しくて過ごしやすいですね．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の短い雑談．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: holdout
+
+  - scenario_id: synthetic-thanks-01
+    category: お礼への返答
+    messages:
+      - role: user
+        content: さっき整理してくれた内容，すごく助かりました．ありがとう．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空のお礼．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: synthetic-tired-consultation-01
+    category: 疲れているときの相談
+    messages:
+      - role: user
+        content: 今日は予定どおり進まなくて，少し疲れました．
+      - role: assistant
+        content: 思うように進まない日もあります．今は少し休めそうですか？
+      - role: user
+        content: 休みたいけれど，一つだけ明日までに終わらせる必要があります．
+      - role: assistant
+        content: では，その一つを終えるために必要な最小限だけ切り出してみましょう．
+      - role: user
+        content: 30分で区切れるように，一緒に整理してもらえますか？
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の疲労相談．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: synthetic-disagreement-01
+    category: 意見が一致しない場面
+    messages:
+      - role: user
+        content: 初期版でも設定項目は全部見せた方が親切だと思います．
+      - role: assistant
+        content: 選択肢が見える安心感はありますが，初期利用時の迷いが増える可能性もあります．
+      - role: user
+        content: でも，隠すと機能がないと思われませんか？
+      - role: assistant
+        content: その懸念はあります．基本設定は見せ，詳細設定を一段だけ折りたたむ案なら両立できそうです．
+      - role: user
+        content: 私の案に合わせるだけでなく，率直にどちらが良いと思うか教えてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の意見相違．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: validation
+
+  - scenario_id: synthetic-constraint-retention-01
+    category: 過去の制約を保持する多ターン会話
+    messages:
+      - role: user
+        content: 週末の小さな読書会の案内文を作りたいです．
+      - role: assistant
+        content: 参加者向けに，日時やテーマを含む案内文を作れます．
+      - role: user
+        content: 日時はまだ未定です．絵文字は使わず，120字以内にしてください．
+      - role: assistant
+        content: 分かりました．日時を確定表現にせず，絵文字なし，120字以内にします．
+      - role: user
+        content: テーマは「最近読んだ短編」です．初心者も歓迎だと伝えたいです．
+      - role: assistant
+        content: テーマと初心者歓迎の点を加えます．日時は未定のままにします．
+      - role: user
+        content: では，案内文を一つ作ってください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の制約保持会話．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: holdout
+
+  - scenario_id: synthetic-progress-update-01
+    category: 作業中の短い進捗報告
+    messages:
+      - role: user
+        content: データの整理は終わりました．今は確認用の画面を作っています．
+      - role: assistant
+        content: 整理まで完了したんですね．画面側で詰まっているところはありますか？
+      - role: user
+        content: まだ大丈夫です．短く状況を共有したかっただけです．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の進捗共有．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: synthetic-admit-unknown-01
+    category: 不明なことを認める場面
+    messages:
+      - role: user
+        content: この架空のサービスの旧版で，設定ファイル名は何でしたか？
+      - role: assistant
+        content: 今ある情報だけでは，旧版の設定ファイル名を確認できません．
+      - role: user
+        content: 推測でも良いので答えられませんか？
+      - role: assistant
+        content: 推測を事実のようには答えられませんが，リポジトリの履歴や旧版の文書を確認すれば特定できそうです．
+      - role: user
+        content: では，確認できないことを明確にしつつ，調べ方だけ教えてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の不明事項．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train
+
+  - scenario_id: synthetic-avoid-overquestioning-01
+    category: 過剰な質問を避ける場面
+    messages:
+      - role: user
+        content: 今夜のうちに机の上を片付けたいです．
+      - role: assistant
+        content: まず，捨てる物，戻す物，保留する物の三つに分けると進めやすいです．
+      - role: user
+        content: 細かい計画はいりません．最初の一歩だけ決めてください．
+    source_kind: synthetic
+    source_ref: null
+    provenance: A/B評価用に作成した架空の簡潔な依頼．
+    transform_history: [initial_synthetic_authoring]
+    consent: {storage: true, training: true}
+    deletion_status: active
+    split: train

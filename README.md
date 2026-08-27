@@ -51,8 +51,8 @@ WailsのChat画面で「こんにちは，自己紹介して」と送信し，st
 - Markdown / txt / PDF / docx / HTML / CSV / TSV / JSON / Git repository ingest と embedding ベース検索
 - Wails ベースのデスクトップ UI
 - Chat / Library からの Drag & Drop ingest
-- ingest / search / query / eval / karte import-export 用 CLI
-- `/health` `/v1/models` `/v1/chat/completions` `/v1/embeddings` `/v1/router/plan` `/v1/web/search/plan` `/v1/web/search/approve` `/v1/ingest` `/v1/rag/search` `/v1/rag/query` `/v1/rag/index` `/v1/rag/source` `/v1/eval/run`
+- ingest / search / query / eval / preference / karte import-export用CLI
+- `/health` `/v1/models` `/v1/chat/completions` `/v1/embeddings` `/v1/router/plan` `/v1/web/search/plan` `/v1/web/search/approve` `/v1/ingest` `/v1/rag/search` `/v1/rag/query` `/v1/rag/index` `/v1/rag/source` `/v1/eval/run` `/v1/eval/preferences/*`
 
 ## ディレクトリ
 
@@ -548,6 +548,28 @@ Runtime タブでは:
 `--with-answer` を付けると、RAG answer まで呼んでキーワード確認も行う。これは backend model が起動している前提。
 
 answer付きevalでは，source hit，keyword，latency，token使用量に加えて，回答文字数，見出し数，箇条書き数と`style_pass_rate`を記録する．caseごとに`max_answer_characters`，`max_bullets`，`max_headings`を上書きできる．
+
+## Preference A/B評価
+
+Model Managerで現在選択されているroleのmodel／LoRAを使い，同一会話から2候補を生成してblind評価できる．生成本文，vote及び学習用JSONLはGitへ保存せず，絶対パスのdata rootを明示する．
+
+```bash
+export EPHY_PREFERENCE_DATA_ROOT=/absolute/path/to/ephy-preference-data
+
+./scripts/run_cli.sh preference generate \
+  --dataset configs/eval.preference.sample.yaml \
+  --role fast \
+  --count 20
+
+./scripts/run_cli.sh preference stats --session SESSION_ID
+
+./scripts/run_cli.sh preference export \
+  --session SESSION_ID \
+  --format dpo \
+  --output exports/ephy-preference-v1.dpo.jsonl
+```
+
+WailsのEvaluation画面からsession開始，再開，左右選択，tie／skip，直前voteの訂正，統計及びDPO／SFT exportを操作できる．SFTには明示承認済みの選択だけを含める．data model，consent，holdout及びblind化の詳細は[`docs/PREFERENCE_EVAL.md`](docs/PREFERENCE_EVAL.md)を参照する．
 
 ## Document Ingest
 

@@ -60,6 +60,15 @@ def test_selection_is_atomic_and_keeps_other_roles(registry):
     assert registry.selection_path.stat().st_mode & 0o777 == 0o600
 
 
+def test_selection_lease_detects_writes_that_bypass_registry_lock(registry):
+    with pytest.raises(ValueError, match="outside the registry lock"):
+        with registry.selection_lease():
+            registry.selection_path.parent.mkdir(parents=True, exist_ok=True)
+            registry.selection_path.write_text(
+                '{"schema_version":1,"roles":{}}', encoding="utf-8"
+            )
+
+
 def test_modified_file_cannot_be_selected(registry, tmp_path):
     original = registry.revision()
     gguf(tmp_path / "base.gguf", b"changed")
