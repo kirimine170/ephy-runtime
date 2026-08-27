@@ -34,6 +34,10 @@ export function ClearExecutionHistory() {
   return window['go']['main']['App']['ClearExecutionHistory']();
 }
 
+export function CreatePreferenceSession(arg1) {
+  return window['go']['main']['App']['CreatePreferenceSession'](arg1);
+}
+
 export function DeleteLocalConfigFile(arg1) {
   return window['go']['main']['App']['DeleteLocalConfigFile'](arg1);
 }
@@ -54,8 +58,16 @@ export function Eval(arg1) {
   return window['go']['main']['App']['Eval'](arg1);
 }
 
+export function ExportPreferenceSession(arg1, arg2) {
+  return window['go']['main']['App']['ExportPreferenceSession'](arg1, arg2);
+}
+
 export function ExportResult(arg1) {
   return window['go']['main']['App']['ExportResult'](arg1);
+}
+
+export function GeneratePreferencePairs(arg1, arg2) {
+  return window['go']['main']['App']['GeneratePreferencePairs'](arg1, arg2);
 }
 
 export function GetBatchPresetSelection() {
@@ -122,6 +134,10 @@ export function ListExportedResults() {
   return window['go']['main']['App']['ListExportedResults']();
 }
 
+export function ListPreferenceSessions() {
+  return window['go']['main']['App']['ListPreferenceSessions']();
+}
+
 export function LoadLocalConfigExample(arg1) {
   return window['go']['main']['App']['LoadLocalConfigExample'](arg1);
 }
@@ -130,12 +146,20 @@ export function Models() {
   return window['go']['main']['App']['Models']();
 }
 
+export function NextPreferencePair(arg1) {
+  return window['go']['main']['App']['NextPreferencePair'](arg1);
+}
+
 export function OpenWebSource(arg1) {
   return window['go']['main']['App']['OpenWebSource'](arg1);
 }
 
 export function PlanWebSearch(arg1) {
   return window['go']['main']['App']['PlanWebSearch'](arg1);
+}
+
+export function PreferenceStats(arg1) {
+  return window['go']['main']['App']['PreferenceStats'](arg1);
 }
 
 export function Query(arg1) {
@@ -396,4 +420,8 @@ export function StopWork() {
 
 export function ValidateProjectPreset(arg1) {
   return window['go']['main']['App']['ValidateProjectPreset'](arg1);
+}
+
+export function VotePreferencePair(arg1, arg2) {
+  return window['go']['main']['App']['VotePreferencePair'](arg1, arg2);
 }

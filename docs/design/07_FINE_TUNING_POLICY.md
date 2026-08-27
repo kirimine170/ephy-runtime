@@ -37,6 +37,12 @@ LoRA等へ学習してよい内容は，個人を特定しない一般化され�
 
 storageへの同意とtrainingへの同意を分離し，各dataset recordにconsent，source，provenance，変換履歴及び削除状態を保持する．
 
+## Preference評価からの学習data
+
+会話Preference評価は，[`docs/PREFERENCE_EVAL.md`](../PREFERENCE_EVAL.md)のdata boundaryに従う．生の会話，Preference DB及び学習用JSONLは通常のGit管理下へ置かず，`EPHY_PREFERENCE_DATA_ROOT`で指定したaccess-controlledな領域に保存する．
+
+DPO／ORPO候補は，`consent.training=true`，`deletion_status=active`及び`split=train`を満たす最新の有効なA／B voteに限定する．tie，skip，重複応答，validation及びholdoutは学習exportから除外する．SFTへ使う応答は，A／Bで選ばれたことだけでは不十分であり，`approved_for_sft=true`による別の明示承認を必要とする．削除や訂正を監査できるよう，generationを上書きせず，vote訂正もappend-onlyで記録する．
+
 ## Artifact管理
 
 model又はadapter artifactは，version，基盤model，学習datasetのprovenance，評価結果，hash及びrollback先を記録する．private artifactはrepositoryへcommitしない．Model GrowthはGrowth Protocolを通し，適用前後の会話Profile，安全性及びIdentity継続性を評価する．

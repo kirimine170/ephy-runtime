@@ -5,6 +5,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from packages.eval_core.api import EvalRunRequest
+from packages.eval_core.preference_schemas import (
+    CreatePreferenceSessionRequest,
+    ExportPreferenceRequest,
+    GeneratePreferencePairsRequest,
+    SubmitPreferenceVoteRequest,
+)
 from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage, EmbeddingRequest, RequestMetadata
 from packages.rag_core.schemas import IndexBrowseRequest, IndexSourceRequest, IngestRequest, RAGQueryRequest, SearchRequest
 from packages.router_core.schemas import RouteDecision, RoutePlanResponse
@@ -338,6 +344,77 @@ def build_router() -> APIRouter:
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return report.model_dump()
+
+    @router.get("/v1/eval/preferences/sessions")
+    async def preference_sessions(request: Request) -> dict:
+        try:
+            sessions = request.app.state.preference_service.list_sessions()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"sessions": sessions}
+
+    @router.post("/v1/eval/preferences/sessions")
+    async def preference_session_create(
+        payload: CreatePreferenceSessionRequest,
+        request: Request,
+    ) -> dict:
+        try:
+            return request.app.state.preference_service.create_session(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/v1/eval/preferences/sessions/{session_id}/generate")
+    async def preference_generate(
+        session_id: str,
+        payload: GeneratePreferencePairsRequest,
+        request: Request,
+    ) -> dict:
+        try:
+            return await request.app.state.preference_service.generate(session_id, payload.limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @router.get("/v1/eval/preferences/sessions/{session_id}/next")
+    async def preference_next(session_id: str, request: Request) -> dict:
+        try:
+            pair = request.app.state.preference_service.next_pair(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"pair": pair.model_dump(mode="json") if pair is not None else None}
+
+    @router.post("/v1/eval/preferences/pairs/{pair_id}/vote")
+    async def preference_vote(
+        pair_id: str,
+        payload: SubmitPreferenceVoteRequest,
+        request: Request,
+    ) -> dict:
+        try:
+            vote = request.app.state.preference_service.vote(pair_id, payload)
+            pair = request.app.state.preference_service.store.get_pair(pair_id)
+            stats = request.app.state.preference_service.stats(pair.session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"vote_id": vote.vote_id, "pair_id": pair_id, "stats": stats}
+
+    @router.get("/v1/eval/preferences/sessions/{session_id}/stats")
+    async def preference_stats(session_id: str, request: Request) -> dict:
+        try:
+            return request.app.state.preference_service.stats(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/v1/eval/preferences/sessions/{session_id}/export")
+    async def preference_export(
+        session_id: str,
+        payload: ExportPreferenceRequest,
+        request: Request,
+    ) -> dict:
+        try:
+            return request.app.state.preference_service.export(session_id, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/v1/admin/reload")
     async def reload_config(request: Request) -> dict:

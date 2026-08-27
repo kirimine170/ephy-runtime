@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from packages.config_core.loader import load_app_config, reload_app_config
 from packages.eval_core.runner import EvalRunner
+from packages.eval_core.preference_service import PreferenceService
 from packages.llm_runtime.adapter import LlamaCppChatAdapter
 from packages.identity_core.service import IdentityService
 from packages.prompt_core.loader import PromptManager
@@ -30,6 +31,11 @@ def initialize_app_state(app: FastAPI, config) -> None:
         "prompt_manager": prompt_manager,
         "rag_service": RagService(config=config, prompt_manager=prompt_manager),
         "eval_runner": EvalRunner(config=config),
+        "preference_service": PreferenceService(
+            config=config,
+            prompt_manager=prompt_manager,
+            adapter=app.state.chat_adapter,
+        ),
         "web_search_service": WebSearchService(config=config, adapter=app.state.chat_adapter),
     }
     for name, value in replacement.items():

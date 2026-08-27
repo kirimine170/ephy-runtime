@@ -689,6 +689,108 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class PreferenceExportRequest {
+	    format: string;
+	    output: string;
+
+	    static createFrom(source: any = {}) {
+	        return new PreferenceExportRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.format = source["format"];
+	        this.output = source["output"];
+	    }
+	}
+	export class PreferenceGenerateRequest {
+	    limit?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new PreferenceGenerateRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.limit = source["limit"];
+	    }
+	}
+	export class PreferenceGenerationParameters {
+	    temperature: number;
+	    top_p: number;
+	    seed?: number;
+	    max_tokens: number;
+
+	    static createFrom(source: any = {}) {
+	        return new PreferenceGenerationParameters(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.temperature = source["temperature"];
+	        this.top_p = source["top_p"];
+	        this.seed = source["seed"];
+	        this.max_tokens = source["max_tokens"];
+	    }
+	}
+	export class PreferenceSessionRequest {
+	    dataset_path: string;
+	    model_role: string;
+	    pair_count: number;
+	    prefetch: number;
+	    generation_parameters: PreferenceGenerationParameters;
+
+	    static createFrom(source: any = {}) {
+	        return new PreferenceSessionRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.dataset_path = source["dataset_path"];
+	        this.model_role = source["model_role"];
+	        this.pair_count = source["pair_count"];
+	        this.prefetch = source["prefetch"];
+	        this.generation_parameters = this.convertValues(source["generation_parameters"], PreferenceGenerationParameters);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PreferenceVoteRequest {
+	    selection: string;
+	    reason_tags?: string[];
+	    note?: string;
+	    approved_for_sft: boolean;
+	    supersedes_vote_id?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new PreferenceVoteRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.selection = source["selection"];
+	        this.reason_tags = source["reason_tags"];
+	        this.note = source["note"];
+	        this.approved_for_sft = source["approved_for_sft"];
+	        this.supersedes_vote_id = source["supersedes_vote_id"];
+	    }
+	}
 	export class PresetPathCheck {
 	    label: string;
 	    path: string;

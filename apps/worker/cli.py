@@ -12,6 +12,14 @@ from packages.llm_runtime.adapter import LlamaCppChatAdapter
 from packages.rag_core.schemas import IngestRequest, RAGQueryRequest, SearchRequest
 from packages.rag_core.service import RagService
 from packages.eval_core.runner import EvalRunner
+from packages.eval_core.preference_schemas import (
+    CreatePreferenceSessionRequest,
+    ExportPreferenceRequest,
+    GenerationParameters,
+)
+from packages.eval_core.preference_service import PreferenceService
+from packages.prompt_core.loader import PromptManager
+from packages.profile_core.runtime import load_ephy_context
 from packages.router_core.router import ModelRouter
 
 
@@ -46,6 +54,27 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--top-k", type=int, default=5)
     evaluate.add_argument("--with-answer", action="store_true")
     evaluate.add_argument("--output")
+
+    preference = subparsers.add_parser("preference")
+    preference_commands = preference.add_subparsers(dest="preference_command", required=True)
+
+    preference_generate = preference_commands.add_parser("generate")
+    preference_generate.add_argument("--dataset", required=True)
+    preference_generate.add_argument("--role", choices=("fast", "work", "code"), default="fast")
+    preference_generate.add_argument("--count", type=int, default=20, choices=range(1, 101))
+    preference_generate.add_argument("--prefetch", type=int, default=4, choices=range(1, 11))
+    preference_generate.add_argument("--temperature", type=float, default=0.8)
+    preference_generate.add_argument("--top-p", type=float, default=0.95)
+    preference_generate.add_argument("--seed", type=int)
+    preference_generate.add_argument("--max-tokens", type=int, default=512)
+
+    preference_stats = preference_commands.add_parser("stats")
+    preference_stats.add_argument("--session", required=True)
+
+    preference_export = preference_commands.add_parser("export")
+    preference_export.add_argument("--session", required=True)
+    preference_export.add_argument("--format", choices=("dpo", "sft"), required=True)
+    preference_export.add_argument("--output", required=True)
 
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--gateway-url", default="http://127.0.0.1:8000")
@@ -138,6 +167,47 @@ async def run_async(args: argparse.Namespace) -> int:
         if args.output:
             with open(args.output, "w", encoding="utf-8") as file_obj:
                 json.dump(payload, file_obj, ensure_ascii=False, indent=2)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "preference":
+        adapter = LlamaCppChatAdapter()
+        service = PreferenceService(
+            config=config,
+            prompt_manager=PromptManager(ephy_context=load_ephy_context(config.ephy)),
+            adapter=adapter,
+        )
+        try:
+            if args.preference_command == "generate":
+                generation_parameters = GenerationParameters(
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    seed=args.seed,
+                    max_tokens=args.max_tokens,
+                )
+                session = service.create_session(
+                    CreatePreferenceSessionRequest(
+                        dataset_path=args.dataset,
+                        model_role=args.role,
+                        pair_count=args.count,
+                        prefetch=args.prefetch,
+                        generation_parameters=generation_parameters,
+                    )
+                )
+                await service.generate(session["session_id"], args.count)
+                payload = {
+                    "session": session,
+                    "stats": service.stats(session["session_id"]),
+                }
+            elif args.preference_command == "stats":
+                payload = service.stats(args.session)
+            else:
+                payload = service.export(
+                    args.session,
+                    ExportPreferenceRequest(format=args.format, output=args.output),
+                )
+        finally:
+            await adapter.aclose()
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 

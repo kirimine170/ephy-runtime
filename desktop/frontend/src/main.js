@@ -13,6 +13,11 @@ import {
 import {prepareWebSearchRequest} from './webSearchFlow';
 import {mountModelManager} from './modelManager';
 import {
+  assertBlindPreferencePair,
+  preferenceSelectionForKey,
+  renderBlindPreferencePair,
+} from './preferenceReview';
+import {
   renderOverviewPresetRuntimeHintCard,
   renderPresetCatalogCard,
   renderSelectedPresetPreviewCard,
@@ -30,9 +35,12 @@ import {
   ClearBatchPresetSelection,
   ClearBatchWorkflowState,
   ClearExecutionHistory,
+  CreatePreferenceSession,
   DeleteProjectPreset,
   DeleteSavedRequest,
   ExportResult,
+  ExportPreferenceSession,
+  GeneratePreferencePairs,
   GetBatchPresetSelection,
   GetRegressionWatchProfiles,
   GetRegressionWatchSettings,
@@ -41,6 +49,7 @@ import {
   GetGatewayURL,
   GetIndexSource,
   ListExportedResults,
+  ListPreferenceSessions,
   ReadExportedResult,
   GetLocalConfigFiles,
   GetProjectPresets,
@@ -49,8 +58,10 @@ import {
   Health,
   LoadLocalConfigExample,
   Models,
+  NextPreferencePair,
   OpenWebSource,
   PlanWebSearch,
+  PreferenceStats,
   ApproveWebSearch,
   RecordExecution,
   ReloadGatewayConfig,
@@ -93,6 +104,7 @@ import {
   StartBatchPresetWatch,
   StartBatchPresetVerification,
   ValidateProjectPreset,
+  VotePreferencePair,
 } from '../wailsjs/go/main/App';
 import { EventsOn, OnFileDrop, OnFileDropOff } from '../wailsjs/runtime/runtime';
 
@@ -111,6 +123,13 @@ let latestIndexExport = null;
 let currentIndexBrowseResponse = null;
 let currentIndexSourceResponse = null;
 let latestRuntimeStatus = null;
+let preferenceSessionId = '';
+let preferencePair = null;
+let preferenceSelection = null;
+let preferenceSaving = false;
+let preferencePrefetchPromise = null;
+let preferenceLastVote = null;
+let preferenceCorrectionVoteId = '';
 let chatThreadEntries = [];
 let latestChatSources = [];
 let activeChatSourceIndex = 0;
@@ -1273,6 +1292,101 @@ app.innerHTML = `
             <div id="eval-output" class="runtime-result"></div>
           </article>
         </div>
+        <article class="panel preference-panel">
+          <div class="panel-head preference-panel-head">
+            <div>
+              <span class="eyebrow dark">Conversation quality</span>
+              <h2>Preference A/B</h2>
+            </div>
+            <div id="preference-progress" class="preference-progress">Sessionを開始してください．</div>
+          </div>
+          <div class="preference-session-controls">
+            <label class="field preference-dataset-field">
+              <span>Dataset</span>
+              <input id="preference-dataset" class="text-input" value="configs/eval.preference.sample.yaml" />
+            </label>
+            <label class="field">
+              <span>Model role</span>
+              <select id="preference-role" class="text-input">
+                <option value="fast">Fast</option>
+                <option value="work">Work</option>
+                <option value="code">Code</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Pairs</span>
+              <input id="preference-count" class="text-input" type="number" min="1" max="100" value="20" />
+            </label>
+            <label class="field">
+              <span>Resume session</span>
+              <select id="preference-session-select" class="text-input">
+                <option value="">Select session</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="preference-start" class="primary-btn">Start A/B session</button>
+            <button id="preference-resume" class="ghost-btn">Resume</button>
+          </div>
+          <p class="helper-text">レビュー中は候補のモデル情報と生成順を表示しません．1／2／0／Sで選択，Enterで保存，Zで直前の投票を訂正できます．</p>
+          <div id="preference-status" class="runtime-result"></div>
+          <div id="preference-review" class="preference-review">
+            <div class="preference-empty">Sessionを開始または再開すると，ここに会話と2候補が表示されます．</div>
+          </div>
+          <div class="preference-vote-controls">
+            <div class="preference-choice-row" role="group" aria-label="Preference selection">
+              <button class="ghost-btn preference-choice" data-preference-choice="left">左 · 1</button>
+              <button class="ghost-btn preference-choice" data-preference-choice="right">右 · 2</button>
+              <button class="ghost-btn preference-choice" data-preference-choice="tie">同程度 · 0</button>
+              <button class="ghost-btn preference-choice" data-preference-choice="skip">判断不能 · S</button>
+            </div>
+            <details class="preference-details">
+              <summary>理由タグとメモを追加</summary>
+              <div id="preference-reason-tags" class="preference-reason-tags">
+                ${[
+                  'direct', 'natural_japanese', 'friendly_polite', 'good_distance',
+                  'contextual', 'concise', 'good_question', 'unnecessary_question',
+                  'too_formal', 'too_casual', 'too_long', 'generic_preamble',
+                  'excessive_agreement', 'persona_break', 'factual_problem', 'other',
+                ].map((tag) => `<label><input type="checkbox" value="${tag}" />${tag}</label>`).join('')}
+              </div>
+              <label class="field">
+                <span>Optional note</span>
+                <textarea id="preference-note" class="text-area" rows="3" maxlength="2000"></textarea>
+              </label>
+              <label class="check-field">
+                <input id="preference-sft-approval" type="checkbox" />
+                <span>選んだ応答をSFT用として明示承認する</span>
+              </label>
+            </details>
+            <div class="actions">
+              <button id="preference-submit" class="primary-btn" disabled>Submit vote · Enter</button>
+              <button id="preference-correct" class="ghost-btn" disabled>Correct previous · Z</button>
+            </div>
+          </div>
+          <div class="preference-lower-grid">
+            <section>
+              <h3>Session stats</h3>
+              <div id="preference-stats" class="runtime-result"></div>
+            </section>
+            <section>
+              <h3>Training export</h3>
+              <label class="field">
+                <span>DPO JSONL path</span>
+                <input id="preference-dpo-output" class="text-input" value="exports/ephy-preference.dpo.jsonl" />
+              </label>
+              <label class="field">
+                <span>SFT JSONL path</span>
+                <input id="preference-sft-output" class="text-input" value="exports/ephy-preference.sft.jsonl" />
+              </label>
+              <div class="actions">
+                <button id="preference-export-dpo" class="ghost-btn">Export DPO</button>
+                <button id="preference-export-sft" class="ghost-btn">Export SFT</button>
+              </div>
+              <p class="helper-text">出力先はEPHY_PREFERENCE_DATA_ROOT配下に限定されます．既存ファイルは上書きしません．</p>
+            </section>
+          </div>
+        </article>
       </section>
       <section class="tab" data-tab-panel="settings">
         <div class="settings-hub">
@@ -6898,6 +7012,287 @@ async function runEvalFromForm() {
   }
 }
 
+function selectedPreferenceReasonTags() {
+  return [...document.querySelectorAll('#preference-reason-tags input:checked')]
+    .map((input) => input.value);
+}
+
+function clearPreferenceVoteForm() {
+  preferenceSelection = null;
+  document.querySelectorAll('#preference-reason-tags input').forEach((input) => {
+    input.checked = false;
+  });
+  document.getElementById('preference-note').value = '';
+  document.getElementById('preference-sft-approval').checked = false;
+  updatePreferenceSelectionUI();
+}
+
+function updatePreferenceSelectionUI() {
+  document.querySelectorAll('[data-preference-choice], [data-preference-selection]').forEach((button) => {
+    const value = button.dataset.preferenceChoice || button.dataset.preferenceSelection;
+    button.classList.toggle('selected', value === preferenceSelection);
+    button.disabled = preferenceSaving || !preferencePair;
+  });
+  const submit = document.getElementById('preference-submit');
+  submit.disabled = preferenceSaving || !preferencePair || !preferenceSelection;
+  submit.textContent = preferenceSaving ? 'Saving…' : preferenceCorrectionVoteId
+    ? 'Save correction · Enter'
+    : 'Submit vote · Enter';
+  document.getElementById('preference-correct').disabled = preferenceSaving || !preferenceLastVote;
+  const approved = document.getElementById('preference-sft-approval');
+  approved.disabled = !['left', 'right'].includes(preferenceSelection || '');
+  if (approved.disabled) {
+    approved.checked = false;
+  }
+}
+
+function choosePreference(selection) {
+  if (!preferencePair || preferenceSaving || !['left', 'right', 'tie', 'skip'].includes(selection)) {
+    return;
+  }
+  preferenceSelection = selection;
+  updatePreferenceSelectionUI();
+}
+
+function renderPreferencePair(pair) {
+  preferencePair = pair || null;
+  const container = document.getElementById('preference-review');
+  try {
+    container.innerHTML = renderBlindPreferencePair(preferencePair, escapeHtml);
+  } catch (error) {
+    preferencePair = null;
+    container.innerHTML = '<div class="preference-empty">Blind化されていない候補を拒否しました．</div>';
+    renderRuntimeMessage('preference-status', String(error));
+  }
+  updatePreferenceSelectionUI();
+}
+
+function renderPreferenceStats(stats) {
+  if (!stats) {
+    document.getElementById('preference-stats').innerHTML = '';
+    return;
+  }
+  const left = Number(stats.display_selections?.left || 0);
+  const right = Number(stats.display_selections?.right || 0);
+  const leftRate = Math.round(Number(stats.display_selection_rate?.left || 0) * 100);
+  const rightRate = Math.round(Number(stats.display_selection_rate?.right || 0) * 100);
+  const reasonTags = Object.entries(stats.reason_tags || {})
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .map(([tag, count]) => `${escapeHtml(tag)}=${escapeHtml(String(count))}`)
+    .join(' · ') || 'まだありません．';
+  const categories = Object.entries(stats.categories || {})
+    .map(([category, counts]) => {
+      const summary = Object.entries(counts || {}).map(([key, count]) => `${key}:${count}`).join('，');
+      return `<li><span>${escapeHtml(category)}</span><strong>${escapeHtml(summary || '-')}</strong></li>`;
+    }).join('');
+  document.getElementById('preference-progress').textContent =
+    `${stats.reviewed || 0} reviewed · ${stats.remaining || 0} remaining`;
+  document.getElementById('preference-stats').innerHTML = `
+    <div class="preference-stat-grid">
+      <div><strong>${escapeHtml(String(stats.reviewed || 0))}</strong><span>reviewed</span></div>
+      <div><strong>${escapeHtml(String(stats.remaining || 0))}</strong><span>remaining</span></div>
+      <div><strong>${escapeHtml(String(stats.tie || 0))}</strong><span>tie</span></div>
+      <div><strong>${escapeHtml(String(stats.skip || 0))}</strong><span>skip</span></div>
+      <div><strong>${escapeHtml(String(stats.duplicate_generation || 0))}</strong><span>duplicate</span></div>
+      <div><strong>${escapeHtml(`${leftRate}% / ${rightRate}%`)}</strong><span>left / right</span></div>
+    </div>
+    <div class="runtime-result-text"><strong>Reason tags：</strong>${reasonTags}</div>
+    ${categories ? `<ul class="preference-category-stats">${categories}</ul>` : ''}
+  `;
+}
+
+async function refreshPreferenceStats() {
+  if (!preferenceSessionId) {
+    return null;
+  }
+  const stats = await PreferenceStats(preferenceSessionId);
+  renderPreferenceStats(stats);
+  return stats;
+}
+
+async function refreshPreferenceSessions({quiet = false} = {}) {
+  try {
+    const response = await ListPreferenceSessions();
+    const sessions = Array.isArray(response?.sessions) ? response.sessions : [];
+    const select = document.getElementById('preference-session-select');
+    select.innerHTML = [
+      '<option value="">Select session</option>',
+      ...sessions.map((session) => {
+        const label = `${session.created_at || ''} · ${session.reviewed || 0}/${session.target_pairs || 0} · ${session.model_role || 'fast'}`;
+        return `<option value="${escapeHtml(session.session_id || '')}">${escapeHtml(label)}</option>`;
+      }),
+    ].join('');
+    if (preferenceSessionId && sessions.some((session) => session.session_id === preferenceSessionId)) {
+      select.value = preferenceSessionId;
+    }
+    return sessions;
+  } catch (error) {
+    if (!quiet) {
+      renderRuntimeMessage('preference-status', String(error));
+    }
+    return [];
+  }
+}
+
+async function prefetchPreferencePairs(limit = 1) {
+  if (!preferenceSessionId) {
+    return null;
+  }
+  if (preferencePrefetchPromise) {
+    return preferencePrefetchPromise;
+  }
+  preferencePrefetchPromise = (async () => {
+    try {
+      await GeneratePreferencePairs(preferenceSessionId, {limit});
+      return await refreshPreferenceStats();
+    } catch (error) {
+      renderRuntimeMessage('preference-status', String(error));
+      return null;
+    } finally {
+      preferencePrefetchPromise = null;
+    }
+  })();
+  return preferencePrefetchPromise;
+}
+
+async function loadNextPreferencePair({generateIfNeeded = true} = {}) {
+  if (!preferenceSessionId) {
+    return null;
+  }
+  const response = await NextPreferencePair(preferenceSessionId);
+  if (response?.pair) {
+    assertBlindPreferencePair(response.pair);
+    preferenceCorrectionVoteId = '';
+    clearPreferenceVoteForm();
+    renderPreferencePair(response.pair);
+    await refreshPreferenceStats();
+    void prefetchPreferencePairs(1);
+    return response.pair;
+  }
+  const stats = await refreshPreferenceStats();
+  if (generateIfNeeded && Number(stats?.generated || 0) < Number(stats?.target_pairs || 0)) {
+    await prefetchPreferencePairs(Math.min(4, Number(stats.target_pairs) - Number(stats.generated || 0)));
+    return loadNextPreferencePair({generateIfNeeded: false});
+  }
+  renderPreferencePair(null);
+  renderRuntimeMessage(
+    'preference-status',
+    Number(stats?.remaining || 0) === 0
+      ? 'このsessionのレビューは完了しました．'
+      : '未評価候補を準備できませんでした．duplicate generationの統計を確認してください．',
+  );
+  return null;
+}
+
+async function startPreferenceSession() {
+  if (preferenceSaving) {
+    return;
+  }
+  const datasetPath = document.getElementById('preference-dataset').value.trim();
+  const pairCount = Math.min(Math.max(getPositiveInt('preference-count', 20), 1), 100);
+  if (!datasetPath) {
+    renderRuntimeMessage('preference-status', 'Dataset path is empty.');
+    return;
+  }
+  renderRuntimeMessage('preference-status', 'Sessionを作成し，最初の候補を生成しています…');
+  try {
+    const session = await CreatePreferenceSession({
+      dataset_path: datasetPath,
+      model_role: document.getElementById('preference-role').value || 'fast',
+      pair_count: pairCount,
+      prefetch: 4,
+      generation_parameters: {temperature: 0.8, top_p: 0.95, max_tokens: 512},
+    });
+    preferenceSessionId = session.session_id;
+    preferenceLastVote = null;
+    preferenceCorrectionVoteId = '';
+    await GeneratePreferencePairs(preferenceSessionId, {limit: Math.min(4, pairCount)});
+    await refreshPreferenceSessions({quiet: true});
+    await loadNextPreferencePair();
+    renderRuntimeMessage('preference-status', '候補をblind表示しました．自然な方を選んでください．');
+    await refreshExecutionHistory();
+  } catch (error) {
+    renderPreferencePair(null);
+    renderRuntimeMessage('preference-status', String(error));
+  }
+}
+
+async function resumePreferenceSession() {
+  const selected = document.getElementById('preference-session-select').value;
+  if (!selected) {
+    renderRuntimeMessage('preference-status', '再開するsessionを選択してください．');
+    return;
+  }
+  preferenceSessionId = selected;
+  preferenceLastVote = null;
+  preferenceCorrectionVoteId = '';
+  try {
+    await loadNextPreferencePair();
+    renderRuntimeMessage('preference-status', '未評価候補からsessionを再開しました．');
+  } catch (error) {
+    renderRuntimeMessage('preference-status', String(error));
+  }
+}
+
+async function submitPreferenceVote() {
+  if (preferenceSaving || !preferencePair || !preferenceSelection) {
+    return false;
+  }
+  preferenceSaving = true;
+  updatePreferenceSelectionUI();
+  const pair = preferencePair;
+  try {
+    const response = await VotePreferencePair(pair.pair_id, {
+      selection: preferenceSelection,
+      reason_tags: selectedPreferenceReasonTags(),
+      note: document.getElementById('preference-note').value.trim(),
+      approved_for_sft: ['left', 'right'].includes(preferenceSelection)
+        && document.getElementById('preference-sft-approval').checked,
+      supersedes_vote_id: preferenceCorrectionVoteId || '',
+    });
+    preferenceLastVote = {pair, voteId: response.vote_id};
+    preferenceCorrectionVoteId = '';
+    clearPreferenceVoteForm();
+    await loadNextPreferencePair();
+    await refreshExecutionHistory();
+    return true;
+  } catch (error) {
+    renderRuntimeMessage('preference-status', String(error));
+    return false;
+  } finally {
+    preferenceSaving = false;
+    updatePreferenceSelectionUI();
+  }
+}
+
+function correctPreviousPreferenceVote() {
+  if (!preferenceLastVote || preferenceSaving) {
+    return;
+  }
+  preferenceCorrectionVoteId = preferenceLastVote.voteId;
+  clearPreferenceVoteForm();
+  renderPreferencePair(preferenceLastVote.pair);
+  renderRuntimeMessage('preference-status', '直前の候補を再表示しました．新しい選択を保存すると訂正履歴が追記されます．');
+}
+
+async function exportPreference(format) {
+  if (!preferenceSessionId) {
+    renderRuntimeMessage('preference-status', '先にsessionを開始または再開してください．');
+    return;
+  }
+  const outputId = format === 'dpo' ? 'preference-dpo-output' : 'preference-sft-output';
+  try {
+    const response = await ExportPreferenceSession(preferenceSessionId, {
+      format,
+      output: document.getElementById(outputId).value.trim(),
+    });
+    renderRuntimeMessage('preference-status', `${format.toUpperCase()}を${response.output}へ${response.records}件exportしました．`);
+    await refreshExecutionHistory();
+  } catch (error) {
+    renderRuntimeMessage('preference-status', String(error));
+  }
+}
+
 async function runChatFromForm() {
   const mode = document.getElementById('chat-mode').value;
   const promptInput = document.getElementById('chat-prompt');
@@ -8118,6 +8513,52 @@ document.getElementById('export-workflow').addEventListener('click', async () =>
   await exportLatestResult('runtime-stack-output', latestWorkflowExport);
 });
 
+document.getElementById('preference-start').addEventListener('click', startPreferenceSession);
+document.getElementById('preference-resume').addEventListener('click', resumePreferenceSession);
+document.getElementById('preference-submit').addEventListener('click', submitPreferenceVote);
+document.getElementById('preference-correct').addEventListener('click', correctPreviousPreferenceVote);
+document.getElementById('preference-export-dpo').addEventListener('click', () => exportPreference('dpo'));
+document.getElementById('preference-export-sft').addEventListener('click', () => exportPreference('sft'));
+document.querySelector('.preference-choice-row').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-preference-choice]');
+  if (button) {
+    choosePreference(button.dataset.preferenceChoice);
+  }
+});
+document.getElementById('preference-review').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-preference-selection]');
+  if (button) {
+    choosePreference(button.dataset.preferenceSelection);
+  }
+});
+document.addEventListener('keydown', (event) => {
+  const evalPanel = document.querySelector('[data-tab-panel="eval"]');
+  const target = event.target;
+  if (
+    !evalPanel?.classList.contains('active')
+    || target?.matches?.('input, textarea, select, [contenteditable="true"]')
+  ) {
+    return;
+  }
+  if (event.key === 'Enter') {
+    if (preferenceSelection && !preferenceSaving) {
+      event.preventDefault();
+      void submitPreferenceVote();
+    }
+    return;
+  }
+  if (String(event.key).toLowerCase() === 'z') {
+    event.preventDefault();
+    correctPreviousPreferenceVote();
+    return;
+  }
+  const selection = preferenceSelectionForKey(event.key);
+  if (selection) {
+    event.preventDefault();
+    choosePreference(selection);
+  }
+});
+
 registerSavedRequestHandlers();
 bindTabs();
 bindValidationAction('overview-preset-validation');
@@ -8146,6 +8587,7 @@ async function initializeWorkbench() {
   refreshPresets();
   refreshSavedRequests();
   refreshExecutionHistory();
+  refreshPreferenceSessions({quiet: true});
   restoreBatchWorkflowState();
   window.setInterval(refreshRuntime, 4000);
   window.setInterval(restoreBatchWorkflowState, 2000);

@@ -121,6 +121,15 @@ class ModelRegistry:
             fcntl.flock(handle, fcntl.LOCK_EX)
             yield
 
+    @contextmanager
+    def selection_lease(self):
+        """Keep Model Manager selection stable for a bounded inference batch."""
+        with self._lock():
+            revision = self.revision()
+            yield
+            if self.revision() != revision:
+                raise ValueError("Model selection changed outside the registry lock")
+
     def registry(self) -> Registry:
         return _read(self.registry_path, Registry)
 
