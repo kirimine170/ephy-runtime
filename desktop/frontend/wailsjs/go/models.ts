@@ -739,6 +739,7 @@ export namespace main {
 	    pair_count: number;
 	    prefetch: number;
 	    comparison_mode: string;
+	    adapter_scale?: number;
 	    generation_parameters: PreferenceGenerationParameters;
 
 	    static createFrom(source: any = {}) {
@@ -752,6 +753,7 @@ export namespace main {
 	        this.pair_count = source["pair_count"];
 	        this.prefetch = source["prefetch"];
 	        this.comparison_mode = source["comparison_mode"];
+	        this.adapter_scale = source["adapter_scale"];
 	        this.generation_parameters = this.convertValues(source["generation_parameters"], PreferenceGenerationParameters);
 	    }
 
