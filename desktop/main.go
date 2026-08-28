@@ -11,11 +11,14 @@ import (
 //go:embed frontend/dist/index.html frontend/dist/assets/*
 var assets embed.FS
 
-func main() {
-	app := NewApp()
+const (
+	ephyRuntimeTitle            = "Ephy Runtime"
+	ephyRuntimeSingleInstanceID = "com.wails.ephy-runtime"
+)
 
-	err := wails.Run(&options.App{
-		Title:     "Local LLM Workbench",
+func newApplicationOptions(app *App) *options.App {
+	return &options.App{
+		Title:     ephyRuntimeTitle,
 		Width:     1320,
 		Height:    920,
 		MinWidth:  1024,
@@ -26,10 +29,21 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 244, G: 238, B: 225, A: 1},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: ephyRuntimeSingleInstanceID,
+			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
+				app.showExistingWindow()
+			},
+		},
 		Bind: []interface{}{
 			app,
 		},
-	})
+	}
+}
+
+func main() {
+	app := NewApp()
+	err := wails.Run(newApplicationOptions(app))
 
 	if err != nil {
 		println("Error:", err.Error())

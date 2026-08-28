@@ -11,7 +11,7 @@ import (
 
 func TestPackagedAppFindsRuntimeRoot(t *testing.T) {
 	root := t.TempDir()
-	for _, directory := range []string{"configs", "scripts", "desktop/build/bin/desktop.app/Contents/MacOS"} {
+	for _, directory := range []string{"configs", "scripts", "desktop/build/bin/ephy-runtime.app/Contents/MacOS"} {
 		if err := os.MkdirAll(filepath.Join(root, directory), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -21,7 +21,7 @@ func TestPackagedAppFindsRuntimeRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if actual := findRuntimeRoot(filepath.Join(root, "desktop/build/bin/desktop.app/Contents/MacOS")); actual != root {
+	if actual := findRuntimeRoot(filepath.Join(root, "desktop/build/bin/ephy-runtime.app/Contents/MacOS")); actual != root {
 		t.Fatal(actual)
 	}
 	if actual := findRuntimeRoot(t.TempDir()); actual != "" {

@@ -25,6 +25,7 @@ import (
 
 type App struct {
 	ctx        context.Context
+	ctxMu      sync.RWMutex
 	baseURL    string
 	httpClient *http.Client
 
@@ -627,7 +628,9 @@ func NewApp() *App {
 }
 
 func (a *App) startup(ctx context.Context) {
+	a.ctxMu.Lock()
 	a.ctx = ctx
+	a.ctxMu.Unlock()
 	a.workspaceRoot = detectWorkspaceRoot()
 	if os.Getenv("EPHY_START_CONVERSATION") == "1" {
 		go func() {
@@ -638,6 +641,21 @@ func (a *App) startup(ctx context.Context) {
 			}
 		}()
 	}
+}
+
+func (a *App) currentContext() context.Context {
+	a.ctxMu.RLock()
+	defer a.ctxMu.RUnlock()
+	return a.ctx
+}
+
+func (a *App) showExistingWindow() {
+	ctx := a.currentContext()
+	if ctx == nil {
+		return
+	}
+	runtime.WindowUnminimise(ctx)
+	runtime.WindowShow(ctx)
 }
 
 func (a *App) GetGatewayURL() string {
@@ -729,7 +747,7 @@ func (a *App) OpenWebSource(rawURL string) error {
 	if err != nil {
 		return err
 	}
-	runtime.BrowserOpenURL(a.ctx, parsed.String())
+	runtime.BrowserOpenURL(a.currentContext(), parsed.String())
 	return nil
 }
 
@@ -5352,10 +5370,11 @@ func (a *App) streamGatewayResponse(path string, payload any, onEvent func(event
 }
 
 func (a *App) emitChatStreamEvent(event ChatStreamEvent) {
-	if a.ctx == nil {
+	ctx := a.currentContext()
+	if ctx == nil {
 		return
 	}
-	runtime.EventsEmit(a.ctx, "chat-stream", event)
+	runtime.EventsEmit(ctx, "chat-stream", event)
 }
 
 type parsedStreamChunk struct {
