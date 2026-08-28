@@ -4,6 +4,9 @@ import test from 'node:test';
 import {
   assertBlindPreferencePair,
   createPreferenceReviewController,
+  PREFERENCE_GENERATION_BATCH_SIZE,
+  preferenceEmptyMessage,
+  preferenceGenerationLimit,
   preferenceSelectionForKey,
   renderBlindPreferencePair,
   renderPromptComparison,
@@ -24,6 +27,26 @@ function pair(id = 'pair-1') {
     progress: {reviewed: 0, remaining: 1, total: 1},
   };
 }
+
+
+test('preference generation requests only one pair at a time', () => {
+  assert.equal(PREFERENCE_GENERATION_BATCH_SIZE, 1);
+  assert.equal(preferenceGenerationLimit(4), 1);
+  assert.equal(preferenceGenerationLimit(1), 1);
+  assert.equal(preferenceGenerationLimit(0), 0);
+});
+
+
+test('empty preference state explains duplicate generations', () => {
+  assert.equal(
+    preferenceEmptyMessage({remaining: 9, duplicate_generation: 2}),
+    '同一出力だった候補を2組除外しました．Resumeでもう1組生成できます．',
+  );
+  assert.equal(
+    preferenceEmptyMessage({remaining: 0, duplicate_generation: 2}),
+    'このsessionのレビューは完了しました．',
+  );
+});
 
 
 test('blind pair render includes conversation and responses without model metadata', () => {

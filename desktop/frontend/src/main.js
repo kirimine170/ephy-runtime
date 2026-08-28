@@ -14,6 +14,9 @@ import {prepareWebSearchRequest} from './webSearchFlow';
 import {mountModelManager} from './modelManager';
 import {
   assertBlindPreferencePair,
+  PREFERENCE_GENERATION_BATCH_SIZE,
+  preferenceEmptyMessage,
+  preferenceGenerationLimit,
   preferenceSelectionForKey,
   renderBlindPreferencePair,
   renderPromptComparison,
@@ -7163,9 +7166,13 @@ async function prefetchPreferencePairs(limit = 1) {
   if (preferencePrefetchPromise) {
     return preferencePrefetchPromise;
   }
+  const generationLimit = preferenceGenerationLimit(limit);
+  if (generationLimit === 0) {
+    return null;
+  }
   preferencePrefetchPromise = (async () => {
     try {
-      await GeneratePreferencePairs(preferenceSessionId, {limit});
+      await GeneratePreferencePairs(preferenceSessionId, {limit: generationLimit});
       return await refreshPreferenceStats();
     } catch (error) {
       renderRuntimeMessage('preference-status', String(error));
@@ -7193,16 +7200,11 @@ async function loadNextPreferencePair({generateIfNeeded = true} = {}) {
   }
   const stats = await refreshPreferenceStats();
   if (generateIfNeeded && Number(stats?.generated || 0) < Number(stats?.target_pairs || 0)) {
-    await prefetchPreferencePairs(Math.min(4, Number(stats.target_pairs) - Number(stats.generated || 0)));
+    await prefetchPreferencePairs(Number(stats.target_pairs) - Number(stats.generated || 0));
     return loadNextPreferencePair({generateIfNeeded: false});
   }
   renderPreferencePair(null);
-  renderRuntimeMessage(
-    'preference-status',
-    Number(stats?.remaining || 0) === 0
-      ? 'このsessionのレビューは完了しました．'
-      : '未評価候補を準備できませんでした．duplicate generationの統計を確認してください．',
-  );
+  renderRuntimeMessage('preference-status', preferenceEmptyMessage(stats));
   return null;
 }
 
@@ -7222,7 +7224,7 @@ async function startPreferenceSession() {
       dataset_path: datasetPath,
       model_role: document.getElementById('preference-role').value || 'fast',
       pair_count: pairCount,
-      prefetch: 4,
+      prefetch: PREFERENCE_GENERATION_BATCH_SIZE,
       comparison_mode: document.getElementById('preference-comparison').value || 'base_vs_adapter',
       adapter_scale: Number(document.getElementById('preference-adapter-scale').value || 1),
       generation_parameters: {temperature: 0.8, top_p: 0.95, max_tokens: 512},
@@ -7230,10 +7232,12 @@ async function startPreferenceSession() {
     preferenceSessionId = session.session_id;
     preferenceLastVote = null;
     preferenceCorrectionVoteId = '';
-    await GeneratePreferencePairs(preferenceSessionId, {limit: Math.min(4, pairCount)});
+    await GeneratePreferencePairs(preferenceSessionId, {limit: preferenceGenerationLimit(pairCount)});
     await refreshPreferenceSessions({quiet: true});
-    await loadNextPreferencePair();
-    renderRuntimeMessage('preference-status', '候補をblind表示しました．自然な方を選んでください．');
+    const pair = await loadNextPreferencePair();
+    if (pair) {
+      renderRuntimeMessage('preference-status', '候補をblind表示しました．自然な方を選んでください．');
+    }
     await refreshExecutionHistory();
   } catch (error) {
     renderPreferencePair(null);
@@ -7251,8 +7255,10 @@ async function resumePreferenceSession() {
   preferenceLastVote = null;
   preferenceCorrectionVoteId = '';
   try {
-    await loadNextPreferencePair();
-    renderRuntimeMessage('preference-status', '未評価候補からsessionを再開しました．');
+    const pair = await loadNextPreferencePair();
+    if (pair) {
+      renderRuntimeMessage('preference-status', '未評価候補からsessionを再開しました．');
+    }
   } catch (error) {
     renderRuntimeMessage('preference-status', String(error));
   }
