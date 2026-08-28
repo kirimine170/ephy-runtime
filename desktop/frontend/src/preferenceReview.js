@@ -13,6 +13,24 @@ const FORBIDDEN_REVIEW_FIELDS = new Set([
   'generated_at',
 ]);
 
+export const PREFERENCE_GENERATION_BATCH_SIZE = 1;
+
+export function preferenceGenerationLimit(remaining) {
+  const normalized = Math.max(Math.floor(Number(remaining) || 0), 0);
+  return Math.min(normalized, PREFERENCE_GENERATION_BATCH_SIZE);
+}
+
+export function preferenceEmptyMessage(stats) {
+  if (Number(stats?.remaining || 0) === 0) {
+    return 'このsessionのレビューは完了しました．';
+  }
+  const duplicateCount = Number(stats?.duplicate_generation || 0);
+  if (duplicateCount > 0) {
+    return `同一出力だった候補を${duplicateCount}組除外しました．Resumeでもう1組生成できます．`;
+  }
+  return '未評価候補を準備できませんでした．生成状態を確認してください．';
+}
+
 export function preferenceSelectionForKey(key) {
   const normalized = String(key || '').toLowerCase();
   return {

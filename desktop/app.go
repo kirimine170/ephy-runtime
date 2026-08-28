@@ -24,10 +24,11 @@ import (
 )
 
 type App struct {
-	ctx        context.Context
-	ctxMu      sync.RWMutex
-	baseURL    string
-	httpClient *http.Client
+	ctx                  context.Context
+	ctxMu                sync.RWMutex
+	baseURL              string
+	httpClient           *http.Client
+	preferenceHTTPClient *http.Client
 
 	mu                 sync.Mutex
 	modelLifecycleMu   sync.Mutex
@@ -624,6 +625,9 @@ func NewApp() *App {
 		httpClient: &http.Client{
 			Timeout: 90 * time.Second,
 		},
+		preferenceHTTPClient: &http.Client{
+			Timeout: 20 * time.Minute,
+		},
 	}
 }
 
@@ -1058,7 +1062,7 @@ func (a *App) CreatePreferenceSession(request PreferenceSessionRequest) (map[str
 func (a *App) GeneratePreferencePairs(sessionID string, request PreferenceGenerateRequest) (map[string]any, error) {
 	var response map[string]any
 	path := fmt.Sprintf("/v1/eval/preferences/sessions/%s/generate", url.PathEscape(sessionID))
-	err := a.postJSON(path, request, &response)
+	err := a.postJSONWithClient(a.preferenceHTTPClient, path, request, &response)
 	a.recordPreferenceExecution("Preference A/B Generate", err, sessionID, "candidate pairs generated")
 	return response, err
 }
@@ -5283,12 +5287,16 @@ func (a *App) getJSON(path string, out any) error {
 }
 
 func (a *App) postJSON(path string, payload any, out any) error {
+	return a.postJSONWithClient(a.httpClient, path, payload, out)
+}
+
+func (a *App) postJSONWithClient(client *http.Client, path string, payload any, out any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 
-	response, err := a.httpClient.Post(a.baseURL+path, "application/json", bytes.NewReader(body))
+	response, err := client.Post(a.baseURL+path, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

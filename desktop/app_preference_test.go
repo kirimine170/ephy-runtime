@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newPreferenceTestApp(t *testing.T, handler http.Handler) (*App, *httptest.Server) {
@@ -14,6 +15,7 @@ func newPreferenceTestApp(t *testing.T, handler http.Handler) (*App, *httptest.S
 	app := newTestAppWithWorkspace(t)
 	app.baseURL = server.URL
 	app.httpClient = server.Client()
+	app.preferenceHTTPClient = server.Client()
 	return app, server
 }
 
@@ -118,5 +120,23 @@ func TestPreferenceGatewayUnavailableReturnsError(t *testing.T) {
 
 	if _, err := app.ListPreferenceSessions(); err == nil {
 		t.Fatal("expected unavailable gateway error")
+	}
+}
+
+func TestPreferenceGenerationUsesLongRunningClient(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/eval/preferences/sessions/session-1/generate", func(writer http.ResponseWriter, _ *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		_, _ = writer.Write([]byte(`{"generated":[{"pair_id":"pair-1"}]}`))
+	})
+	app, server := newPreferenceTestApp(t, mux)
+	defer server.Close()
+	app.httpClient = &http.Client{Timeout: time.Millisecond}
+
+	if _, err := app.GeneratePreferencePairs("session-1", PreferenceGenerateRequest{Limit: 1}); err != nil {
+		t.Fatalf("preference generation used the standard client timeout: %v", err)
+	}
+	if NewApp().preferenceHTTPClient.Timeout != 20*time.Minute {
+		t.Fatalf("unexpected preference generation timeout: %s", NewApp().preferenceHTTPClient.Timeout)
 	}
 }
