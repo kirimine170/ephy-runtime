@@ -9,7 +9,7 @@ def test_packaged_launcher_preserves_root_environment_and_arguments(tmp_path):
     scripts.mkdir(parents=True)
     launcher = scripts / "start_conversation_app.sh"
     shutil.copyfile(Path(__file__).parents[1] / "scripts" / launcher.name, launcher)
-    binary = root / "desktop/build/bin/desktop.app/Contents/MacOS/desktop"
+    binary = root / "desktop/build/bin/ephy-runtime.app/Contents/MacOS/ephy-runtime"
     binary.parent.mkdir(parents=True)
     binary.write_text('#!/bin/bash\nprintf "%s\\n" "$PWD" "$EPHY_START_CONVERSATION" "$1"\n')
     binary.chmod(0o700)

@@ -373,9 +373,9 @@ app.innerHTML = `
   >
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">LW</div>
+        <div class="brand-mark">ER</div>
         <div>
-          <div class="brand-title">Local LLM Workbench</div>
+          <div class="brand-title">Ephy Runtime</div>
           <div class="brand-subtitle">Chat-first workspace</div>
         </div>
         <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Hide sidebar">Hide</button>
@@ -405,7 +405,7 @@ app.innerHTML = `
                   <span class="gmail-hamburger"></span>
                 </button>
                 <div class="chat-toolbar-brand">
-                  <div class="gmail-brand-mark">LW</div>
+                  <div class="gmail-brand-mark">ER</div>
                 </div>
                 <select id="chat-history-select" class="text-input chat-toolbar-select chat-toolbar-current" aria-label="Current Chat">
                   <option value="">Current Chat</option>
