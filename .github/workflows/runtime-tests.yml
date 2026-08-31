@@ -9,6 +9,23 @@ permissions:
   contents: read
 
 jobs:
+  karte-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Ephy Runtime
+        uses: actions/checkout@v4
+      - name: Check out Karte contract owner
+        uses: actions/checkout@v4
+        with:
+          repository: kirimine170/Karte
+          ref: main
+          path: .contract/karte
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify Karte-Ephy V1 contract
+        run: python scripts/check_karte_contract.py --karte-root .contract/karte
+
   python:
     runs-on: ubuntu-latest
     steps:

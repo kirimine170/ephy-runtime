@@ -3,9 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from pathlib import Path
 
 from packages.config_core.loader import load_app_config
 from packages.karte_core.service import export_karte_bundle, import_karte_bundle
+from packages.karte_core.contracts import KarteChangeProposal
+from packages.karte_core.outbox import KarteOutbox
+from packages.karte_core.source import KarteSourceAdapter
+from packages.karte_core.watcher import KarteWatchService
 from packages.runtime_core.smoke import SmokeRunner
 from packages.runtime_core.watch import run_watch_loop
 from packages.llm_runtime.adapter import LlamaCppChatAdapter
@@ -107,6 +113,27 @@ def build_parser() -> argparse.ArgumentParser:
     karte_export.add_argument("--project")
     karte_export.add_argument("--source-query")
     karte_export.add_argument("--tags", nargs="*", default=[])
+
+    karte_index = subparsers.add_parser("karte-index")
+    karte_index.add_argument("--data-dir", required=True)
+    karte_index.add_argument("--project", default="karte")
+    karte_index.add_argument("--tags", nargs="*", default=[])
+
+    karte_watch = subparsers.add_parser("karte-watch")
+    karte_watch.add_argument("--data-dir", required=True)
+    karte_watch.add_argument("--project", default="karte")
+    karte_watch.add_argument("--tags", nargs="*", default=[])
+    karte_watch.add_argument("--interval", type=float, default=2.0)
+    karte_watch.add_argument("--debounce", type=float, default=0.25)
+    karte_watch.add_argument("--cycles", type=int)
+    karte_watch.add_argument("--max-events", type=int, default=256)
+
+    karte_propose = subparsers.add_parser("karte-propose")
+    karte_propose.add_argument("proposal_path")
+    karte_propose.add_argument("--data-dir", required=True)
+
+    karte_receipts = subparsers.add_parser("karte-receipts")
+    karte_receipts.add_argument("--data-dir", required=True)
 
     return parser
 
@@ -262,6 +289,50 @@ async def run_async(args: argparse.Namespace) -> int:
             tags=args.tags,
         )
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "karte-index":
+        payload = rag_service.ingest_karte(
+            KarteSourceAdapter(args.data_dir),
+            project=args.project,
+            tags=args.tags,
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "karte-watch":
+        watcher = KarteWatchService(
+            adapter=KarteSourceAdapter(args.data_dir),
+            rag_service=rag_service,
+            project=args.project,
+            tags=args.tags,
+            interval_seconds=args.interval,
+            debounce_seconds=args.debounce,
+            max_events=args.max_events,
+        )
+        watcher.full_rescan()
+        cycles = 0
+        try:
+            while args.cycles is None or cycles < args.cycles:
+                cycles += 1
+                time.sleep(args.interval)
+                watcher.poll_once()
+        except KeyboardInterrupt:
+            pass
+        print(json.dumps({"health": watcher.health(), "events": watcher.events()}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "karte-propose":
+        proposal = KarteChangeProposal.model_validate_json(
+            Path(args.proposal_path).read_text(encoding="utf-8")
+        )
+        result = KarteOutbox(args.data_dir).publish(proposal)
+        print(json.dumps(result.__dict__, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "karte-receipts":
+        receipts = [receipt.model_dump(mode="json") for receipt in KarteOutbox(args.data_dir).list_receipts()]
+        print(json.dumps(receipts, ensure_ascii=False, indent=2))
         return 0
 
     return 1

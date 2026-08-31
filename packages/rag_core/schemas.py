@@ -54,6 +54,11 @@ class IndexedChunk(BaseModel):
     chunk_id: str
     source_path: str
     original_source_path: str | None = None
+    doc_id: str | None = None
+    title: str | None = None
+    relative_path: str | None = None
+    updated_at: str | None = None
+    source_sha256: str | None = None
     heading_path: list[str] = Field(default_factory=list)
     project: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -68,6 +73,11 @@ class SearchResult(BaseModel):
     chunk_id: str
     source_path: str
     original_source_path: str | None = None
+    doc_id: str | None = None
+    title: str | None = None
+    relative_path: str | None = None
+    updated_at: str | None = None
+    source_sha256: str | None = None
     heading_path: list[str] = Field(default_factory=list)
     project: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -88,6 +98,11 @@ class IndexSourceSummary(BaseModel):
 
     source_path: str
     original_source_path: str | None = None
+    doc_id: str | None = None
+    title: str | None = None
+    relative_path: str | None = None
+    updated_at: str | None = None
+    source_sha256: str | None = None
     project: str | None = None
     chunk_count: int
     sample_heading: str | None = None
