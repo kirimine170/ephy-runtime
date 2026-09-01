@@ -21,7 +21,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$(dirname "${FAKE_EXECUTABLE}")"
-printf '#!/usr/bin/env bash\nprintf "%%s" "$KARTE_DATA_DIR" > "%s/observed-data-dir"\nsleep 30\n' "${TEST_ROOT}" > "${FAKE_EXECUTABLE}"
+printf '#!/usr/bin/env python3\nimport os\nimport time\nfrom pathlib import Path\nPath(r"%s/observed-data-dir").write_text(os.environ["KARTE_DATA_DIR"])\ntime.sleep(30)\n' "${TEST_ROOT}" > "${FAKE_EXECUTABLE}"
 chmod +x "${FAKE_EXECUTABLE}"
 
 resolved="$(resolve_karte_runtime_executable "${TEST_ROOT}")"
