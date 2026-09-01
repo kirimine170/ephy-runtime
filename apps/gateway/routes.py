@@ -11,6 +11,7 @@ from packages.eval_core.preference_schemas import (
     GeneratePreferencePairsRequest,
     SubmitPreferenceVoteRequest,
 )
+from packages.karte_core.conversation import KarteConversationRequest
 from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage, EmbeddingRequest, RequestMetadata
 from packages.rag_core.schemas import IndexBrowseRequest, IndexSourceRequest, IngestRequest, RAGQueryRequest, SearchRequest
 from packages.router_core.schemas import RouteDecision, RoutePlanResponse
@@ -80,6 +81,16 @@ def _mark_local_sources(sources: list[dict]) -> list[dict]:
     return marked
 
 
+def _karte_conversation_service(request: Request):
+    service = getattr(request.app.state, "karte_conversation_service", None)
+    if service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Karte integration is unavailable. Set KARTE_DATA_DIR to a valid Karte workspace and restart Ephy.",
+        )
+    return service
+
+
 def build_router() -> APIRouter:
     router = APIRouter()
 
@@ -92,6 +103,7 @@ def build_router() -> APIRouter:
             "configured_models": sorted(config.models.keys()),
             "web_search_enabled": config.web_search.enabled,
             "ephy_enabled": request.app.state.ephy_context is not None,
+            "karte_enabled": getattr(request.app.state, "karte_conversation_service", None) is not None,
         }
 
     @router.get("/v1/models")
@@ -204,6 +216,33 @@ def build_router() -> APIRouter:
         if web_search_status:
             response["web_search_status"] = web_search_status
         return response
+
+    @router.post("/v1/karte/conversations/plan")
+    async def karte_conversation_plan(payload: KarteConversationRequest, request: Request) -> dict:
+        try:
+            return _karte_conversation_service(request).plan(payload).model_dump(mode="json")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="Karte workspace could not be read") from exc
+
+    @router.post("/v1/karte/conversations/publish")
+    async def karte_conversation_publish(payload: KarteConversationRequest, request: Request) -> dict:
+        try:
+            return _karte_conversation_service(request).publish(payload).model_dump(mode="json")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="Karte outbox could not be updated") from exc
+
+    @router.get("/v1/karte/proposals/{candidate_id}")
+    async def karte_proposal_status(candidate_id: str, request: Request) -> dict:
+        try:
+            return _karte_conversation_service(request).status(candidate_id).model_dump(mode="json")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="Karte outbox could not be read") from exc
 
     @router.post("/v1/web/search/plan")
     async def web_search_plan(payload: WebSearchPlanRequest, request: Request) -> dict:

@@ -429,6 +429,7 @@ export namespace main {
 	    service: string;
 	    configured_models: string[];
 	    web_search_enabled: boolean;
+	    karte_enabled: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new HealthResponse(source);
@@ -440,6 +441,7 @@ export namespace main {
 	        this.service = source["service"];
 	        this.configured_models = source["configured_models"];
 	        this.web_search_enabled = source["web_search_enabled"];
+	        this.karte_enabled = source["karte_enabled"];
 	    }
 	}
 	export class ImportLocalModelRequest {
@@ -508,6 +510,187 @@ export namespace main {
 	        this.tags = source["tags"];
 	    }
 	}
+	export class KarteConversationMessage {
+	    role: string;
+	    content: string;
+
+	    static createFrom(source: any = {}) {
+	        return new KarteConversationMessage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.content = source["content"];
+	    }
+	}
+	export class KarteSimilarDocument {
+	    doc_id: string;
+	    title: string;
+	    relative_path: string;
+	    project?: string;
+	    kind?: string;
+	    similarity: number;
+
+	    static createFrom(source: any = {}) {
+	        return new KarteSimilarDocument(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.doc_id = source["doc_id"];
+	        this.title = source["title"];
+	        this.relative_path = source["relative_path"];
+	        this.project = source["project"];
+	        this.kind = source["kind"];
+	        this.similarity = source["similarity"];
+	    }
+	}
+	export class KarteConversationPlanResponse {
+	    candidate_id: string;
+	    recommendation: string;
+	    publishable: boolean;
+	    needs_project: boolean;
+	    reasons: string[];
+	    summary_title: string;
+	    summary_markdown: string;
+	    similar_documents: KarteSimilarDocument[];
+	    proposal: Record<string, any>;
+
+	    static createFrom(source: any = {}) {
+	        return new KarteConversationPlanResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.candidate_id = source["candidate_id"];
+	        this.recommendation = source["recommendation"];
+	        this.publishable = source["publishable"];
+	        this.needs_project = source["needs_project"];
+	        this.reasons = source["reasons"];
+	        this.summary_title = source["summary_title"];
+	        this.summary_markdown = source["summary_markdown"];
+	        this.similar_documents = this.convertValues(source["similar_documents"], KarteSimilarDocument);
+	        this.proposal = source["proposal"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class KarteConversationPublishResponse {
+	    candidate_id: string;
+	    state: string;
+	    path: string;
+	    plan: KarteConversationPlanResponse;
+
+	    static createFrom(source: any = {}) {
+	        return new KarteConversationPublishResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.candidate_id = source["candidate_id"];
+	        this.state = source["state"];
+	        this.path = source["path"];
+	        this.plan = this.convertValues(source["plan"], KarteConversationPlanResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class KarteConversationRequest {
+	    conversation_id: string;
+	    messages: KarteConversationMessage[];
+	    occurred_at: string;
+	    project?: string;
+	    kind?: string;
+	    sensitivity: string;
+	    tags: string[];
+	    resolution: string;
+	    intended_doc_id?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new KarteConversationRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.conversation_id = source["conversation_id"];
+	        this.messages = this.convertValues(source["messages"], KarteConversationMessage);
+	        this.occurred_at = source["occurred_at"];
+	        this.project = source["project"];
+	        this.kind = source["kind"];
+	        this.sensitivity = source["sensitivity"];
+	        this.tags = source["tags"];
+	        this.resolution = source["resolution"];
+	        this.intended_doc_id = source["intended_doc_id"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class KarteConversationStatusResponse {
+	    candidate_id: string;
+	    state: string;
+	    receipt?: Record<string, any>;
+
+	    static createFrom(source: any = {}) {
+	        return new KarteConversationStatusResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.candidate_id = source["candidate_id"];
+	        this.state = source["state"];
+	        this.receipt = source["receipt"];
+	    }
+	}
+
 	export class LocalAdapterArtifact {
 	    id: string;
 	    base_model_id: string;

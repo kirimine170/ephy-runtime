@@ -51,3 +51,25 @@ Read final receipts with:
 ```
 
 Publication writes a same-directory temporary file，flushes it，and renames it to `<candidate_id>.json`．Retrying identical content is idempotent．Reusing a `candidate_id` with different content is rejected．Neither command reads from nor writes to canonical Markdown．
+
+## Conversation-to-Karte flow
+
+Set `KARTE_DATA_DIR` before starting Ephy．After each completed Chat response，Ephy prepares a Karte card from the completed user／assistant conversation．The card shows the proposed title，complete create document or append-only fragment，project，kind，confidence，and similar canonical documents．A proposal with a missing project or ambiguous similar document remains local to the UI until the user resolves it．Nothing is written to canonical Karte content from Ephy．
+
+The Gateway exposes the same reviewed flow through:
+
+- `POST /v1/karte/conversations/plan` — build a deterministic，non-writing plan．
+- `POST /v1/karte/conversations/publish` — re-plan，require all consultations to be resolved，and atomically write the V1.1 proposal to the pending outbox．
+- `GET /v1/karte/proposals/<candidate_id>` — read pending／accepted／rejected／processed status and any receipt．
+
+Conversation timestamps must include a timezone．Create proposals contain the complete proposed Markdown document．Append proposals contain only the document-end fragment and require a user-confirmed `doc_id` plus the current canonical SHA-256．The candidate identity includes the conversation，placement choice，tags，sensitivity，and operation so an identical retry is safe while any reviewed change receives a new identity．
+
+## Native acceptance test
+
+Build Ephy with `bash scripts/build_conversation_app.sh` and Karte with its `bash scripts/build_local_app.sh`．A compatible Wails CLI may instead package either app with `wails build`．Start Karte and Ephy with the same absolute data directory:
+
+```bash
+export KARTE_DATA_DIR=/absolute/path/to/karte_data
+```
+
+In Ephy Chat，select a project or leave it empty to exercise consultation，then complete a conversation．Review the automatically displayed Karte card and choose `Karteへ送る`．Within five seconds Karte's top-bar button changes to `Ephy候補 (1)`．Open it，review the full create preview or append diff，then use `採用`，`編集して採用`，or `破棄`．Back in Ephy，`Karteの処理結果を確認` reads the receipt．An accepted create must appear below `content/projects/<project>/<kind>/<YYYY-MM>` with a stable `doc_id`．

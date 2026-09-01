@@ -22,6 +22,7 @@ class ProposalPlanningPolicy:
     minimum_confidence: float = 0.75
     minimum_candidate_margin: float = 0.15
     similar_document_threshold: float = 0.82
+    minimum_append_similarity: float = 0.12
 
 
 @dataclass(frozen=True)
@@ -54,9 +55,11 @@ class KarteProposalPlanner:
         created_at: datetime,
         intended_doc_id: str | None = None,
         document_matches: list[ExistingDocumentMatch] | None = None,
+        additional_consultation_reasons: list[str] | None = None,
+        content_match_confirmed: bool = False,
     ) -> ProposalPlan:
         matches = document_matches or []
-        consultation_reasons: list[str] = []
+        consultation_reasons: list[str] = list(additional_consultation_reasons or [])
         if confidence < self.policy.minimum_confidence:
             consultation_reasons.append("placement confidence is below the publish threshold")
         ranked = sorted((candidate.confidence for candidate in placement_candidates), reverse=True)
@@ -75,6 +78,8 @@ class KarteProposalPlanner:
                 consultation_reasons.append("the intended doc_id was not found in canonical Karte content")
             elif exact.project != project or exact.kind != kind:
                 consultation_reasons.append("the exact doc_id has different project or kind metadata")
+            elif exact.similarity < self.policy.minimum_append_similarity and not content_match_confirmed:
+                consultation_reasons.append("the exact doc_id content is not similar enough for automatic append")
             else:
                 operation = "append"
                 target_doc_id = exact.doc_id

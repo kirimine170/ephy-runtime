@@ -7,6 +7,7 @@ from packages.eval_core.runner import EvalRunner
 from packages.eval_core.preference_service import PreferenceService
 from packages.llm_runtime.adapter import LlamaCppChatAdapter
 from packages.identity_core.service import IdentityService
+from packages.karte_core.conversation import KarteConversationService
 from packages.prompt_core.loader import PromptManager
 from packages.profile_core.runtime import load_ephy_context
 from packages.rag_core.service import RagService
@@ -37,6 +38,7 @@ def initialize_app_state(app: FastAPI, config) -> None:
             adapter=app.state.chat_adapter,
         ),
         "web_search_service": WebSearchService(config=config, adapter=app.state.chat_adapter),
+        "karte_conversation_service": KarteConversationService.from_environment(),
     }
     for name, value in replacement.items():
         setattr(app.state, name, value)
