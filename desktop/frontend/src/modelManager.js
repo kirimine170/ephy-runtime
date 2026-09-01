@@ -5,12 +5,22 @@ export function compatibleAdapters(catalog, modelId) {
     && item.base_model_id === modelId && item.base_sha256 === model.sha256);
 }
 
+export function modelManagerErrorMessage(error) {
+  const detail = String(error || '');
+  if (detail.includes("reading 'main'") || detail.includes('window.go')) {
+    return 'Developer Mode設定はデスクトップ版で利用できます．';
+  }
+  return detail;
+}
+
 export function mountModelManager(container, api) {
   container.innerHTML = `
-    <div class="panel-head"><h2>Model &amp; LoRA</h2></div>
-    <label class="developer-toggle"><input type="checkbox" data-model="enabled"> 開発者モード</label>
-    <p class="helper-text">登録済みGGUFを選択します．稼働中の対象モデルだけを再起動し，失敗時は元の選択へ戻します．</p>
-    <fieldset class="developer-model-controls" data-model="controls" disabled>
+    <div class="panel-head"><h2>Developer Mode</h2></div>
+    <label class="developer-toggle"><input type="checkbox" data-model="enabled"> Developer Modeを有効にする</label>
+    <p class="helper-text">通常の会話やKarte連携には不要です．model，LoRA，runtime，routing，evaluationの実験・診断機能を使う場合だけ有効にします．</p>
+    <fieldset class="developer-model-controls" data-model="controls" disabled hidden>
+      <h3>Model &amp; LoRA</h3>
+      <p class="helper-text">登録済みGGUFを選択します．稼働中の対象モデルだけを再起動し，失敗時は元の選択へ戻します．</p>
       <div class="developer-model-grid">
         <label>役割<select class="text-input" data-model="role"><option value="fast">Fast · 会話</option><option value="work">Work · 詳細作業</option><option value="code">Code · 開発</option></select></label>
         <label>モデル<select class="text-input" data-model="model"></select></label>
@@ -61,7 +71,10 @@ export function mountModelManager(container, api) {
   }
   function render(next) {
     catalog = next;
-    element('enabled').checked = Boolean(catalog.developer_mode);
+    const enabled = Boolean(catalog.developer_mode);
+    element('enabled').checked = enabled;
+    element('controls').hidden = !enabled;
+    api.onDeveloperModeChange?.(enabled);
     renderRole();
     setBusy(busy);
   }
@@ -75,7 +88,7 @@ export function mountModelManager(container, api) {
       message(success);
     } catch (error) {
       element('enabled').checked = Boolean(catalog.developer_mode);
-      message(String(error));
+      message(modelManagerErrorMessage(error));
     } finally { setBusy(false); }
   }
   element('role').addEventListener('change', renderRole);
