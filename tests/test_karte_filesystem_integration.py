@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -175,6 +176,45 @@ def test_watcher_emits_incremental_changes_with_bounded_history_and_recovers(tmp
     watcher.stop()
     assert watcher.health()["running"] is False
     assert watcher.health()["generation"] == 1
+
+
+def test_watcher_stop_timeout_preserves_live_thread_and_prevents_overlapping_restart(tmp_path: Path) -> None:
+    data_root = tmp_path / "karte_data"
+    (data_root / "content").mkdir(parents=True)
+    _write_document(data_root, "content/first.md", doc_id="doc:first")
+    entered_sync = threading.Event()
+    release_sync = threading.Event()
+
+    class BlockingRagService:
+        def sync_karte_documents(self, **_kwargs) -> dict:
+            entered_sync.set()
+            release_sync.wait(timeout=2)
+            return {"indexed_documents": 1}
+
+    watcher = KarteWatchService(
+        adapter=KarteSourceAdapter(data_root),
+        rag_service=BlockingRagService(),  # type: ignore[arg-type]
+        interval_seconds=0.01,
+        debounce_seconds=0,
+    )
+    watcher.start()
+    assert entered_sync.wait(timeout=1)
+
+    watcher.stop(timeout_seconds=0.01)
+    live_thread = watcher._thread  # noqa: SLF001
+    assert live_thread is not None and live_thread.is_alive()
+    assert watcher.health()["running"] is True
+
+    watcher.restart(timeout_seconds=0.01)
+    assert watcher._thread is live_thread  # noqa: SLF001
+    assert watcher.health()["generation"] == 1
+
+    release_sync.set()
+    live_thread.join(timeout=1)
+    assert not live_thread.is_alive()
+    watcher.start()
+    assert watcher.health()["generation"] == 2
+    watcher.stop()
 
 
 def test_outbox_atomic_publish_is_idempotent_and_never_touches_content(tmp_path: Path) -> None:

@@ -70,19 +70,22 @@ class KarteWatchService:
             self._thread.start()
 
     def stop(self, timeout_seconds: float = 5.0) -> None:
+        if timeout_seconds < 0:
+            raise ValueError("timeout_seconds cannot be negative")
         with self._lock:
             thread = self._thread
             self._stop_event.set()
         if thread is not None:
             thread.join(timeout=timeout_seconds)
         with self._lock:
-            self._running = False
-            self._thread = None
+            if self._thread is thread and (thread is None or not thread.is_alive()):
+                self._running = False
+                self._thread = None
 
     cancel = stop
 
-    def restart(self) -> None:
-        self.stop()
+    def restart(self, timeout_seconds: float = 5.0) -> None:
+        self.stop(timeout_seconds=timeout_seconds)
         self.start()
 
     def full_rescan(self) -> dict:
