@@ -33,13 +33,56 @@ karte_runtime_pid_is_live() {
   [[ -f "${pid_file}" ]] || return 1
   IFS= read -r pid < "${pid_file}" || return 1
   [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
-  kill -0 "${pid}" 2>/dev/null || return 1
+  karte_runtime_pid_matches_executable "${pid}" "${executable}"
+}
+
+karte_runtime_pid_matches_executable() {
+  local pid=$1
+  local executable=$2
+  local command
   command="$(ps -ww -p "${pid}" -o command= 2>/dev/null || true)"
   if [[ -n "${command}" ]]; then
-    [[ "${command}" == *"${executable}"* ]]
+    [[ "${command}" == "${executable}" || "${command}" == "${executable} "* ]]
     return
   fi
-  return 0
+  if command -v lsof >/dev/null 2>&1; then
+    while IFS= read -r command; do
+      if [[ "${command}" == "n${executable}" ]]; then
+        return 0
+      fi
+    done < <(lsof -a -p "${pid}" -d txt -Fn 2>/dev/null)
+  fi
+  return 1
+}
+
+karte_runtime_pid_from_data_dir() {
+  local data_dir=$1
+  local executable=$2
+  local expected_pid=${3:-}
+  local marker="${data_dir}/.mdsys/runtime/karte.pid"
+  local pid
+
+  [[ -f "${marker}" ]] || return 1
+  IFS= read -r pid < "${marker}" || return 1
+  [[ "${pid}" =~ ^[0-9]+$ ]] || return 1
+  if [[ -n "${expected_pid}" ]]; then
+    [[ "${pid}" == "${expected_pid}" ]] || return 1
+    kill -0 "${pid}" 2>/dev/null || return 1
+  elif ! karte_runtime_pid_matches_executable "${pid}" "${executable}"; then
+    return 1
+  fi
+  printf '%s\n' "${pid}"
+}
+
+persist_karte_runtime_data_dir() {
+  local app_placed_dir=$1
+  local data_dir=$2
+  local config_path="${app_placed_dir}/.karte-data-dir"
+  local temp_path="${config_path}.tmp.$$"
+
+  mkdir -p "${app_placed_dir}"
+  printf '%s\n' "${data_dir}" > "${temp_path}"
+  mv -f "${temp_path}" "${config_path}"
 }
 
 karte_runtime_find_process_pid() {
@@ -61,10 +104,11 @@ start_bundled_karte_runtime() {
   local runtime_root=$1
   local executable
   local app_bundle=""
-  local process_identity
+  local packaged_app_bundle=""
   local pid_file
   local log_file
   local pid
+  local marker_pid
 
   if [[ "${EPHY_START_KARTE:-1}" == "0" ]]; then
     return 0
@@ -73,24 +117,30 @@ start_bundled_karte_runtime() {
     return 0
   fi
 
-  export KARTE_DATA_DIR="${KARTE_DATA_DIR:-${runtime_root}/data/runtime/karte-data}"
+  KARTE_DATA_DIR="${KARTE_DATA_DIR:-${runtime_root}/data/runtime/karte-data}"
   mkdir -p "${KARTE_DATA_DIR}/content" "${runtime_root}/data/runtime/pids" "${runtime_root}/data/runtime/logs"
+  KARTE_DATA_DIR="$(cd "${KARTE_DATA_DIR}" && pwd -P)"
+  export KARTE_DATA_DIR
   pid_file="${runtime_root}/data/runtime/pids/karte.pid"
   log_file="${runtime_root}/data/runtime/logs/karte.log"
-  process_identity="${executable}"
-  if [[ "$(uname -s)" == "Darwin" && "${EPHY_KARTE_LAUNCH_MODE:-auto}" != "direct" && "${executable}" == */Contents/MacOS/karte ]]; then
-    app_bundle="${executable%/Contents/MacOS/karte}"
+  if [[ "${executable}" == */Contents/MacOS/karte ]]; then
+    packaged_app_bundle="${executable%/Contents/MacOS/karte}"
+    persist_karte_runtime_data_dir "${packaged_app_bundle%/*}" "${KARTE_DATA_DIR}"
+    if [[ "$(uname -s)" == "Darwin" && "${EPHY_KARTE_LAUNCH_MODE:-auto}" != "direct" ]]; then
+      app_bundle="${packaged_app_bundle}"
+    fi
   fi
 
-  if karte_runtime_pid_is_live "${pid_file}" "${process_identity}"; then
+  if pid="$(karte_runtime_pid_from_data_dir "${KARTE_DATA_DIR}" "${executable}" || true)"; [[ "${pid}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${pid}" > "${pid_file}"
     return 0
   fi
 
   if [[ -n "${app_bundle}" ]]; then
-    open --env "KARTE_DATA_DIR=${KARTE_DATA_DIR}" "${app_bundle}" >>"${log_file}" 2>&1
+    open -n --env "KARTE_DATA_DIR=${KARTE_DATA_DIR}" "${app_bundle}" >>"${log_file}" 2>&1
     pid=""
-    for _ in {1..50}; do
-      pid="$(karte_runtime_find_process_pid "${executable}" || true)"
+    for _ in {1..100}; do
+      pid="$(karte_runtime_pid_from_data_dir "${KARTE_DATA_DIR}" "${executable}" || true)"
       [[ "${pid}" =~ ^[0-9]+$ ]] && break
       sleep 0.1
     done
@@ -101,6 +151,21 @@ start_bundled_karte_runtime() {
   else
     nohup env KARTE_DATA_DIR="${KARTE_DATA_DIR}" "${executable}" >>"${log_file}" 2>&1 &
     pid=$!
+    marker_pid=""
+    for _ in {1..100}; do
+      marker_pid="$(karte_runtime_pid_from_data_dir "${KARTE_DATA_DIR}" "${executable}" "${pid}" || true)"
+      [[ "${marker_pid}" == "${pid}" ]] && break
+      if ! kill -0 "${pid}" 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "${marker_pid}" != "${pid}" ]]; then
+      kill "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+      printf 'Bundled Karte did not publish its data-root identity．See %s\n' "${log_file}" >&2
+      return 1
+    fi
   fi
   printf '%s\n' "${pid}" > "${pid_file}"
   sleep 1
