@@ -581,6 +581,44 @@ def test_chat_endpoint_continues_when_karte_personal_context_is_unavailable() ->
     )
 
 
+def test_chat_endpoint_continues_when_karte_personal_context_request_is_invalid() -> None:
+    class ValidationFailingKarteContextClient:
+        def search(self, query, **kwargs):
+            raise ValueError("synthetic request validation failure")
+
+    async def fake_create_chat_completion(*, model_config, request_payload):
+        return {"choices": [{"message": {"content": "plain chat answer"}}]}
+
+    with TestClient(app) as client:
+        original_context = app.state.karte_context_client
+        original_chat = app.state.chat_adapter.create_chat_completion
+        app.state.karte_context_client = ValidationFailingKarteContextClient()
+        app.state.chat_adapter.create_chat_completion = AsyncMock(side_effect=fake_create_chat_completion)
+        try:
+            response = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "auto",
+                    "messages": [{"role": "user", "content": "legacy project context"}],
+                    "metadata": {
+                        "mode": "rag",
+                        "project": "Legacy Project Name",
+                        "source_scope": "personal_context",
+                        "top_k": 25,
+                    },
+                },
+            )
+        finally:
+            app.state.karte_context_client = original_context
+            app.state.chat_adapter.create_chat_completion = original_chat
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "plain chat answer"
+    assert payload["karte_context_status"] == {"status": "unavailable", "source_count": 0}
+    assert "sources" not in payload
+
+
 def test_chat_streaming_emits_sources_event_when_grounded(tmp_path) -> None:
     doc = tmp_path / "meeting.md"
     doc.write_text("# Meeting\n\nEmployee roster review was completed by Nagao.", encoding="utf-8")

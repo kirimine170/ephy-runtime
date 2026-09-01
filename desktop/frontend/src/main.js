@@ -11,6 +11,7 @@ import {
   renderSinglePresetBatchActionButtons,
 } from './presetBatchRender';
 import {prepareWebSearchRequest} from './webSearchFlow';
+import {shouldUseGenericRagEndpoint} from './chatRouting';
 import {
   buildKarteConversationRequest,
   formatLocalISOString,
@@ -7551,6 +7552,7 @@ async function exportPreference(format) {
 
 async function runChatFromForm() {
   const mode = document.getElementById('chat-mode').value;
+  const sourceScope = document.getElementById('chat-source-scope-select').value;
   const promptInput = document.getElementById('chat-prompt');
   const prompt = promptInput.value;
   if (!prompt.trim()) {
@@ -7578,7 +7580,11 @@ async function runChatFromForm() {
     modeLabel: getChatModeLabel(mode),
   });
   setChatSendState(true);
-  if (mode === 'rag' && !webSearch.web_search) {
+  if (shouldUseGenericRagEndpoint({
+    mode,
+    webSearchEnabled: webSearch.web_search,
+    sourceScope,
+  })) {
     document.getElementById('rag-query').value = prompt;
     try {
       const result = await runRagRequest({answer: true, queryOverride: prompt, origin: 'chat', requestId});

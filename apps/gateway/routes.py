@@ -192,7 +192,7 @@ def build_router() -> APIRouter:
                             "source_count": len(local_sources),
                             "diagnostics": [item.model_dump() for item in context_response.diagnostics],
                         }
-                    except KarteContextError:
+                    except (KarteContextError, ValueError):
                         karte_context_status = {"status": "unavailable", "source_count": 0}
             elif query_text:
                 try:
