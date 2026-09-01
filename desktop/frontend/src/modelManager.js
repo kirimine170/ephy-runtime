@@ -13,6 +13,32 @@ export function modelManagerErrorMessage(error) {
   return detail;
 }
 
+function contextLabel(tokens) {
+  if (!tokens) return '';
+  return tokens >= 1000000 ? `${(tokens / 1000000).toFixed(1)}M`
+    : tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : String(tokens);
+}
+
+export function formatModelLabel(model) {
+  const size = `${(model.size_bytes / 1024 ** 3).toFixed(1)} GiB`;
+  const profile = model.profile_id
+    ? ` · ${model.parameter_count_billions}B · ctx ${contextLabel(model.context_size)}` : '';
+  const warning = model.resource_fit === false ? ' · メモリ要確認' : '';
+  const missing = model.available ? '' : ' · ファイル未検出';
+  return `${model.id} · ${size}${profile}${warning}${missing}`;
+}
+
+export function formatModelProfile(model) {
+  if (!model?.profile_id) return 'プロファイル未設定．登録済みのコンテキスト値で起動します．';
+  const enabled = (model.enabled_capabilities || []).join('・') || 'なし';
+  const unavailable = (model.capabilities || [])
+    .filter((capability) => !(model.enabled_capabilities || []).includes(capability));
+  const pending = unavailable.length ? ` ／ 未接続：${unavailable.join('・')}` : '';
+  const warning = model.resource_warning ? ' ／ ホストメモリが目安を下回ります' : '';
+  return `${model.family} ／ ${model.parameter_count_billions}B ／ Runtime有効：${enabled}${pending}`
+    + ` ／ 起動待ち：${model.startup_timeout_seconds}秒${warning}．`;
+}
+
 export function mountModelManager(container, api) {
   container.innerHTML = `
     <div class="panel-head"><h2>Developer Mode</h2></div>
@@ -27,10 +53,12 @@ export function mountModelManager(container, api) {
         <label>口調LoRA<select class="text-input" data-model="adapter"></select></label>
       </div>
       <p class="helper-text" data-model="current"></p>
+      <p class="helper-text" data-model="profile"></p>
       <div class="actions"><button class="primary-btn" data-model="apply">選択を適用</button><button class="ghost-btn" data-model="refresh">再読込</button></div>
       <details class="developer-import"><summary>手元のGGUFを追加</summary>
         <p class="helper-text">ファイルは移動・再ダウンロードしません．登録IDは英小文字・数字・ハイフン等で指定します．LoRAは現在選択中のbase modelに結び付けます．</p>
         <label>登録ID<input class="text-input" data-model="import-id" placeholder="qwen3-8b-q6-k" autocomplete="off"></label>
+        <label>Runtimeプロファイル<select class="text-input" data-model="import-profile"></select></label>
         <div class="actions"><button class="ghost-btn" data-model="import-model">モデルを選んで登録</button><button class="ghost-btn" data-model="import-adapter">LoRAを選んで登録</button></div>
       </details>
     </fieldset>
@@ -63,11 +91,13 @@ export function mountModelManager(container, api) {
   function renderRole() {
     const selection = catalog.selections?.[element('role').value] || {};
     fill(element('model'), catalog.models.map((item) => ({id: item.id,
-      label: `${item.id} · ${(item.size_bytes / 1024 ** 3).toFixed(1)} GiB${item.available ? '' : ' · ファイル未検出'}`,
+      label: formatModelLabel(item),
       disabled: !item.available})), '既定モデル · 起動スクリプトの設定');
     element('model').value = selection.model_id || '';
     renderAdapters(selection.adapter_id);
     element('current').textContent = `保存中：${selection.model_id || '既定モデル'} ／ LoRA：${selection.adapter_id || 'なし'}．停止中のモデルは次回起動時に適用します．`;
+    element('profile').textContent = formatModelProfile(
+      catalog.models.find((item) => item.id === element('model').value));
   }
   function render(next) {
     catalog = next;
@@ -75,6 +105,9 @@ export function mountModelManager(container, api) {
     element('enabled').checked = enabled;
     element('controls').hidden = !enabled;
     api.onDeveloperModeChange?.(enabled);
+    fill(element('import-profile'), Object.entries(catalog.profiles || {}).map(([id, profile]) => ({
+      id, label: `${id} · ${profile.parameter_count_billions}B · ctx ${contextLabel(profile.default_context_size)}`,
+    })), '自動判定または汎用');
     renderRole();
     setBusy(busy);
   }
@@ -92,7 +125,11 @@ export function mountModelManager(container, api) {
     } finally { setBusy(false); }
   }
   element('role').addEventListener('change', renderRole);
-  element('model').addEventListener('change', () => renderAdapters());
+  element('model').addEventListener('change', () => {
+    renderAdapters();
+    element('profile').textContent = formatModelProfile(
+      catalog.models.find((item) => item.id === element('model').value));
+  });
   element('enabled').addEventListener('change', () => perform(async () => {
     await api.SetDeveloperMode(element('enabled').checked);
     return api.GetLocalModelCatalog();
@@ -110,7 +147,8 @@ export function mountModelManager(container, api) {
         message('登録IDを入力してください．LoRAの場合はbase modelも選択してください．');
         return;
       }
-      perform(() => api.ImportLocalModel({id, path: '', base_model_id: base}),
+      perform(() => api.ImportLocalModel({id, path: '', base_model_id: base,
+        profile_id: kind === 'model' ? element('import-profile').value : '', context_size: 0}),
         'ファイルを選択し，checksumを計算します…', '登録処理が完了しました．適用するモデルを選んでください．');
     });
   }

@@ -45,6 +45,31 @@ def test_build_payload_preserves_thinking_for_non_fast_modes() -> None:
     assert "chat_template_kwargs" not in payload
 
 
+def test_build_payload_applies_profile_thinking_policy_for_large_model() -> None:
+    adapter = LlamaCppChatAdapter()
+    model_config = ModelConfig(
+        provider="llama_cpp",
+        model="qwen3.8-27b",
+        base_url="http://localhost:8082/v1",
+        thinking_mode="optional",
+        default_reasoning_effort="medium",
+        preserve_thinking=True,
+    )
+    request = ChatCompletionRequest(
+        model="auto",
+        messages=[ChatMessage(role="user", content="analyze this")],
+        metadata=RequestMetadata(mode="work"),
+    )
+
+    payload = adapter._build_payload(model_config=model_config, request_payload=request)
+
+    assert payload["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "preserve_thinking": True,
+        "reasoning_effort": "medium",
+    }
+
+
 def test_build_payload_adds_request_scoped_lora_control() -> None:
     adapter = LlamaCppChatAdapter()
     model_config = ModelConfig(

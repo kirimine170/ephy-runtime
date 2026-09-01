@@ -5,6 +5,7 @@ Settingsの`Model & LoRA`で開発者モードを有効にすると，Fast／Wor
 ## 操作
 
 1. `手元のGGUFを追加`に登録IDを入力し，既存ファイルを選択します．コピーや再ダウンロードはしません．checksum計算中は操作を無効にします．
+   Qwen3-8B又はQwen3.8-27B相当の別IDを登録する場合は，Runtimeプロファイルも選択します．IDがプロファイルIDと一致する場合は自動判定します．
 2. 役割とモデルを選び，必要なら対応するLoRAを選択します．LoRAなしでもProfileは適用されます．
 3. `選択を適用`で保存します．Desktopが起動したモデルなら対象だけを停止し，新モデルの応答準備を確認してGatewayをreloadします．停止中なら次回起動時から反映します．
 
@@ -20,11 +21,30 @@ Settingsの`Model & LoRA`で開発者モードを有効にすると，Fast／Wor
 - Desktop外からbackendへ直接送られるrequestは管理対象外です．切替中の直接アクセスは避けてください．
 - GPU memoryの自動配分や複数modelのschedulerは未実装です．同時稼働数を抑え，大きなモデルを使う前に不要な役割を停止してください．
 
+## Runtime model profile
+
+モデル固有の方針は`configs/model-profiles.yaml`へ集約します．モデルの学習コードやKarte連携へ条件分岐を散らさず，次の情報をRuntimeが読み取ります．
+
+- モデル本来のcapabilityと，現在のRuntimeで有効なcapability
+- thinking mode，reasoning effort，thinking保持方針
+- native／maximum／local default context
+- 起動待ち時間，resource class，host memoryの目安
+- llama-serverへ渡すGPU layer数
+
+Qwen3.8-27BはVision capabilityを持ちますが，現在のRuntimeはprojectorと画像入力経路を接続していないため，UIでは`未接続：vision`と表示します．メモリ判定は量子化方式やcontextで変動するため，強制拒否ではなくadvisory warningです．既存registryに保存済みのcontext値は暗黙に変更せず，新規登録時だけプロファイルのlocal defaultを使います．
+
+現行プロファイルは次の2種類です．
+
+- `qwen3-8b`：local default 32K，起動待ち180秒
+- `qwen3.8-27b`：local default 32K，native 262K，maximum 1M，起動待ち420秒
+
+モデル開発／fine-tuningはこの仕組みの主経路ではありません．RuntimeとKarteは，profile contractを満たすモデルを差し替えて利用する側として実装します．
+
 ## CLI
 
 ```sh
 .venv/bin/python -m packages.model_registry list
-.venv/bin/python -m packages.model_registry import /absolute/path/model.gguf --id my-model --quantization Q6_K
+.venv/bin/python -m packages.model_registry import /absolute/path/model.gguf --id my-model --quantization Q6_K --profile qwen3-8b
 .venv/bin/python -m packages.model_registry import-adapter /absolute/path/style.gguf --id style-v0 --base-model my-model
 .venv/bin/python -m packages.model_registry check --role fast --model-id my-model --adapter-id style-v0
 ```

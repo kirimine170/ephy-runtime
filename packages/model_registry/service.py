@@ -12,12 +12,16 @@ from typing import Annotated, Literal
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,95}$")]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Role = Literal["fast", "work", "code"]
+Capability = Literal["text", "vision", "reasoning", "tool_use", "long_context"]
+ThinkingMode = Literal["disabled", "optional", "always"]
+ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
 PORTS = {"fast": 8081, "work": 8082, "code": 8083}
 
 
@@ -38,7 +42,42 @@ class ModelArtifact(Artifact):
     backend_model: Identifier
     role: Literal["chat"] = "chat"
     quantization: str = "unknown"
-    context_size: int = Field(default=8192, ge=512, le=131072)
+    context_size: int = Field(default=8192, ge=512, le=1_000_000)
+    profile_id: Identifier | None = None
+
+
+class RuntimeModelProfile(StrictModel):
+    family: str = Field(min_length=1)
+    parameter_count_billions: float = Field(gt=0)
+    capabilities: list[Capability] = Field(min_length=1)
+    enabled_capabilities: list[Capability] = Field(min_length=1)
+    thinking_mode: ThinkingMode = "disabled"
+    default_reasoning_effort: ReasoningEffort | None = None
+    preserve_thinking: bool = False
+    native_context_size: int = Field(ge=512, le=1_000_000)
+    maximum_context_size: int = Field(ge=512, le=1_000_000)
+    default_context_size: int = Field(ge=512, le=1_000_000)
+    startup_timeout_seconds: int = Field(default=180, ge=30, le=900)
+    resource_class: Literal["light", "medium", "large"]
+    estimated_minimum_memory_bytes: int = Field(ge=0)
+    gpu_layers: int = Field(default=99, ge=0, le=999)
+
+    @model_validator(mode="after")
+    def validate_profile(self):
+        if not set(self.enabled_capabilities).issubset(self.capabilities):
+            raise ValueError("Enabled capabilities must be native model capabilities")
+        if self.default_context_size > self.maximum_context_size:
+            raise ValueError("Default context exceeds the maximum context")
+        if self.native_context_size > self.maximum_context_size:
+            raise ValueError("Native context exceeds the maximum context")
+        if self.default_reasoning_effort and self.thinking_mode == "disabled":
+            raise ValueError("Reasoning effort requires thinking support")
+        return self
+
+
+class RuntimeModelProfiles(StrictModel):
+    schema_version: Literal[1] = 1
+    profiles: dict[Identifier, RuntimeModelProfile] = Field(default_factory=dict)
 
 
 class AdapterArtifact(Artifact):
@@ -107,11 +146,26 @@ def _read(path: Path, schema):
     return schema.model_validate_json(path.read_text(encoding="utf-8")) if path.exists() else schema()
 
 
+def _read_yaml(path: Path, schema):
+    if not path.exists():
+        return schema()
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return schema.model_validate(payload)
+
+
+def physical_memory_bytes() -> int | None:
+    try:
+        return int(os.sysconf("SC_PHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 class ModelRegistry:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.registry_path = self.root / "configs/model-registry.local.json"
         self.selection_path = self.root / "configs/runtime-selection.local.json"
+        self.profiles_path = self.root / "configs/model-profiles.yaml"
 
     @contextmanager
     def _lock(self):
@@ -136,6 +190,19 @@ class ModelRegistry:
     def selections(self) -> Selections:
         return _read(self.selection_path, Selections)
 
+    def profiles(self) -> RuntimeModelProfiles:
+        return _read_yaml(self.profiles_path, RuntimeModelProfiles)
+
+    def profile_for_model(self, model: ModelArtifact) -> tuple[str, RuntimeModelProfile] | None:
+        profiles = self.profiles().profiles
+        profile_id = model.profile_id or (model.id if model.id in profiles else None)
+        if profile_id is None:
+            return None
+        profile = profiles.get(profile_id)
+        if profile is None:
+            raise ValueError(f"Unknown Runtime model profile: {profile_id}")
+        return profile_id, profile
+
     def revision(self) -> str:
         data = self.selection_path.read_bytes() if self.selection_path.exists() else b""
         return hashlib.sha256(data).hexdigest()
@@ -144,19 +211,57 @@ class ModelRegistry:
         with self._lock():
             registry = self.registry()
             data = registry.model_dump()
-            for entry in [*data["models"], *data["adapters"]]:
+            host_memory = physical_memory_bytes()
+            model_records = {model.id: model for model in registry.models}
+            for entry in data["models"]:
                 path = Path(entry["path"])
                 entry["available"] = path.is_file() and path.stat().st_size == entry["size_bytes"]
-            return {**data, "selections": self.selections().model_dump()["roles"], "revision": self.revision()}
+                profile_match = self.profile_for_model(model_records[entry["id"]])
+                if profile_match:
+                    profile_id, profile = profile_match
+                    profile_data = profile.model_dump()
+                    entry.update(profile_data)
+                    entry["profile_id"] = profile_id
+                    entry["resource_fit"] = (
+                        None if host_memory is None
+                        else host_memory >= profile.estimated_minimum_memory_bytes
+                    )
+                    entry["resource_warning"] = (
+                        "Host memory is below this profile's advisory estimate"
+                        if entry["resource_fit"] is False else None
+                    )
+            for entry in data["adapters"]:
+                path = Path(entry["path"])
+                entry["available"] = path.is_file() and path.stat().st_size == entry["size_bytes"]
+            return {
+                **data,
+                "profiles": {
+                    profile_id: profile.model_dump()
+                    for profile_id, profile in self.profiles().profiles.items()
+                },
+                "host_memory_bytes": host_memory,
+                "selections": self.selections().model_dump()["roles"],
+                "revision": self.revision(),
+            }
 
     def import_model(self, path: Path, *, model_id: str, backend_model: str | None = None,
                      source: str = "local", revision: str | None = None,
-                     quantization: str = "unknown", context_size: int = 8192) -> ModelArtifact:
+                     quantization: str = "unknown", context_size: int | None = None,
+                     profile_id: str | None = None) -> ModelArtifact:
         resolved, size, checksum = inspect_artifact(path)
+        profiles = self.profiles().profiles
+        inferred_profile_id = profile_id or (model_id if model_id in profiles else None)
+        profile = profiles.get(inferred_profile_id) if inferred_profile_id else None
+        if inferred_profile_id and profile is None:
+            raise ValueError(f"Unknown Runtime model profile: {inferred_profile_id}")
+        selected_context = context_size or (profile.default_context_size if profile else 8192)
+        if profile and selected_context > profile.maximum_context_size:
+            raise ValueError("Context size exceeds the Runtime model profile maximum")
         record = ModelArtifact(id=model_id, backend_model=backend_model or model_id,
                                path=str(resolved), size_bytes=size, sha256=checksum,
                                source=source, revision=revision or checksum,
-                               quantization=quantization, context_size=context_size)
+                               quantization=quantization, context_size=selected_context,
+                               profile_id=inferred_profile_id)
         self._register(record)
         return record
 
@@ -194,6 +299,9 @@ class ModelRegistry:
         model = next((m for m in registry.models if m.id == selection.model_id), None)
         if model is None:
             raise ValueError("Unknown model ID")
+        profile_match = self.profile_for_model(model)
+        if profile_match and model.context_size > profile_match[1].maximum_context_size:
+            raise ValueError("Selected context exceeds the Runtime model profile maximum")
         adapter = None
         if selection.adapter_id:
             adapter = next((a for a in registry.adapters if a.id == selection.adapter_id), None)
@@ -225,9 +333,18 @@ class ModelRegistry:
         overrides = {}
         for role, selection in self.selections().roles.items():
             model, _ = self.resolve(selection, verify=False)
-            overrides[role] = {"provider": "llama_cpp", "model": model.backend_model,
-                               "base_url": f"http://127.0.0.1:{PORTS[role]}/v1",
-                               "max_context": model.context_size}
+            override = {"provider": "llama_cpp", "model": model.backend_model,
+                        "base_url": f"http://127.0.0.1:{PORTS[role]}/v1",
+                        "max_context": model.context_size}
+            profile_match = self.profile_for_model(model)
+            if profile_match:
+                _, profile = profile_match
+                override.update({
+                    "thinking_mode": profile.thinking_mode,
+                    "default_reasoning_effort": profile.default_reasoning_effort,
+                    "preserve_thinking": profile.preserve_thinking,
+                })
+            overrides[role] = override
         return overrides
 
     def plan_download(self, *, model_id: str, url: str, sha256: str, size_bytes: int,

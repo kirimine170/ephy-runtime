@@ -1,0 +1,47 @@
+schema_version: 1
+profiles:
+  qwen3-8b:
+    family: qwen3
+    parameter_count_billions: 8.2
+    capabilities:
+      - text
+      - reasoning
+      - tool_use
+    enabled_capabilities:
+      - text
+      - reasoning
+      - tool_use
+    thinking_mode: optional
+    native_context_size: 32768
+    maximum_context_size: 131072
+    default_context_size: 32768
+    startup_timeout_seconds: 180
+    resource_class: light
+    estimated_minimum_memory_bytes: 12884901888
+    gpu_layers: 99
+  qwen3.8-27b:
+    family: qwen3.8
+    parameter_count_billions: 27
+    capabilities:
+      - text
+      - vision
+      - reasoning
+      - tool_use
+      - long_context
+    # Vision requires a projector/input path that Runtime has not enabled yet．
+    enabled_capabilities:
+      - text
+      - reasoning
+      - tool_use
+      - long_context
+    thinking_mode: optional
+    default_reasoning_effort: medium
+    preserve_thinking: true
+    native_context_size: 262144
+    maximum_context_size: 1000000
+    # Keep the local default bounded; larger contexts remain an explicit choice．
+    default_context_size: 32768
+    startup_timeout_seconds: 420
+    resource_class: large
+    estimated_minimum_memory_bytes: 27917287424
+    gpu_layers: 99

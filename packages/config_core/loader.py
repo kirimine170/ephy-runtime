@@ -21,6 +21,9 @@ class ModelConfig(BaseModel):
     base_url: str | None = None
     max_context: int | None = None
     default_temperature: float | None = None
+    thinking_mode: str | None = None
+    default_reasoning_effort: str | None = None
+    preserve_thinking: bool = False
 
 
 class RouteConfig(BaseModel):

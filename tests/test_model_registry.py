@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,13 @@ def registry(tmp_path):
     return service
 
 
+def copy_profiles(tmp_path):
+    configs = tmp_path / "configs"
+    configs.mkdir(exist_ok=True)
+    shutil.copyfile(Path(__file__).parents[1] / "configs/model-profiles.yaml",
+                    configs / "model-profiles.yaml")
+
+
 def test_import_is_local_idempotent_and_records_digest(registry, tmp_path):
     first = registry.registry().models[0]
     assert first.sha256 == hashlib.sha256((tmp_path / "base.gguf").read_bytes()).hexdigest()
@@ -36,6 +44,47 @@ def test_import_never_replaces_an_existing_id(registry, tmp_path):
     with pytest.raises(ValueError, match="already exists"):
         registry.import_model(gguf(tmp_path / "other.gguf", b"other"), model_id="base")
     assert registry.registry().models[0].backend_model == "backend-base"
+
+
+def test_qwen_profiles_keep_runtime_policy_out_of_model_code(tmp_path, monkeypatch):
+    copy_profiles(tmp_path)
+    service = ModelRegistry(tmp_path)
+    model = service.import_model(gguf(tmp_path / "large.gguf"), model_id="qwen3.8-27b")
+    assert model.profile_id == "qwen3.8-27b"
+    assert model.context_size == 32768
+
+    monkeypatch.setattr("packages.model_registry.service.physical_memory_bytes", lambda: 16 * 1024 ** 3)
+    catalog = service.catalog()
+    large = catalog["models"][0]
+    assert large["native_context_size"] == 262144
+    assert large["maximum_context_size"] == 1_000_000
+    assert large["startup_timeout_seconds"] == 420
+    assert large["resource_fit"] is False
+    assert "vision" in large["capabilities"]
+    assert "vision" not in large["enabled_capabilities"]
+
+
+def test_profile_context_limit_and_explicit_profile_are_enforced(tmp_path):
+    copy_profiles(tmp_path)
+    service = ModelRegistry(tmp_path)
+    with pytest.raises(ValueError, match="profile maximum"):
+        service.import_model(gguf(tmp_path / "too-wide.gguf"), model_id="custom",
+                             profile_id="qwen3-8b", context_size=262144)
+    model = service.import_model(gguf(tmp_path / "small.gguf"), model_id="custom",
+                                 profile_id="qwen3-8b")
+    assert model.context_size == 32768
+    assert service.catalog()["models"][0]["family"] == "qwen3"
+
+
+def test_model_override_carries_thinking_policy(tmp_path):
+    copy_profiles(tmp_path)
+    service = ModelRegistry(tmp_path)
+    service.import_model(gguf(tmp_path / "large.gguf"), model_id="qwen3.8-27b")
+    service.select("work", Selection(model_id="qwen3.8-27b"), expected_revision=service.revision())
+    override = service.model_overrides()["work"]
+    assert override["thinking_mode"] == "optional"
+    assert override["default_reasoning_effort"] == "medium"
+    assert override["preserve_thinking"] is True
 
 
 @pytest.mark.parametrize("payload", [b"not a model", b"GGUF\x03\0\0\0", b"GGUF\x01\0\0\0" + bytes(32)])

@@ -112,9 +112,16 @@ class LlamaCppChatAdapter:
         body = request_payload.model_dump(exclude_none=True)
         body["model"] = model_config.model
         metadata = body.pop("metadata", {})
+        template_kwargs = dict(body.get("chat_template_kwargs") or {})
         if metadata.get("mode") == "fast":
-            template_kwargs = dict(body.get("chat_template_kwargs") or {})
             template_kwargs["enable_thinking"] = False
+        elif model_config.thinking_mode in {"optional", "always"}:
+            template_kwargs["enable_thinking"] = True
+            if model_config.preserve_thinking:
+                template_kwargs["preserve_thinking"] = True
+            if model_config.default_reasoning_effort:
+                template_kwargs["reasoning_effort"] = model_config.default_reasoning_effort
+        if template_kwargs:
             body["chat_template_kwargs"] = template_kwargs
         if "temperature" not in body and model_config.default_temperature is not None:
             body["temperature"] = model_config.default_temperature
