@@ -11,12 +11,14 @@ import {
   renderSinglePresetBatchActionButtons,
 } from './presetBatchRender';
 import {prepareWebSearchRequest} from './webSearchFlow';
+import {shouldUseGenericRagEndpoint} from './chatRouting';
 import {
   buildKarteConversationRequest,
   formatLocalISOString,
   renderKarteConversationCard,
 } from './karteConversation';
 import {mountModelManager} from './modelManager';
+import {applyDeveloperModeVisibility, resolveDeveloperTab} from './developerMode';
 import {
   assertBlindPreferencePair,
   PREFERENCE_GENERATION_BATCH_SIZE,
@@ -154,6 +156,7 @@ let chatStreamListenerBound = false;
 let chatSendInFlight = false;
 let webSearchAvailable = false;
 let karteAvailable = false;
+let developerModeEnabled = false;
 let sidebarCollapsed = false;
 let activePanelTab = 'chat';
 const tabScrollPositions = new Map();
@@ -406,7 +409,7 @@ app.innerHTML = `
         <button class="nav-btn utility-hidden" data-tab="router">Routing</button>
         <button class="nav-btn utility-hidden" data-tab="eval">Evaluation</button>
       </nav>
-      <div class="sidebar-foot">
+      <div class="sidebar-foot" data-developer-only hidden>
         <div class="eyebrow">Gateway URL</div>
         <input id="gateway-url" class="text-input" />
         <button id="save-url" class="ghost-btn">Apply</button>
@@ -437,9 +440,10 @@ app.innerHTML = `
                 <select id="chat-source-scope-select" class="text-input chat-toolbar-select" aria-label="Source Scope">
                   <option value="all">All</option>
                   <option value="project">Current Project</option>
+                  <option value="personal_context">Karte Personal Context</option>
                   <option value="selected_docs">Selected Docs</option>
                 </select>
-                <select id="chat-top-k-select" class="text-input chat-toolbar-select chat-toolbar-topk" aria-label="Top K">
+                <select id="chat-top-k-select" class="text-input chat-toolbar-select chat-toolbar-topk" aria-label="Top K" data-developer-only hidden>
                   <option value="3">Top K 3</option>
                   <option value="5" selected>Top K 5</option>
                   <option value="8">Top K 8</option>
@@ -453,7 +457,7 @@ app.innerHTML = `
                 <span id="chat-web-status" class="chat-web-status">Local only</span>
                 <button id="start-conversation" class="ghost-btn" type="button">Ephyを起動</button>
                 <span id="conversation-start-status" role="status" class="helper-text"></span>
-                <div id="chat-source-scope" class="chat-toolbar-meta">scope=all | project=(default) | top_k=5</div>
+                <div id="chat-source-scope" class="chat-toolbar-meta" data-developer-only hidden>scope=all | project=(default) | top_k=5</div>
                 <div class="chat-header-actions">
                   <details id="chat-more-menu" class="chat-more-menu">
                     <summary class="ghost-btn">More</summary>
@@ -964,7 +968,7 @@ app.innerHTML = `
             data-drop-ingest-zone="chat"
             data-drop-overlay="Drop files or folders to ingest into RAG"
           >
-            <div class="chat-toolbar-shell">
+            <div class="chat-toolbar-shell" data-developer-only hidden>
               <details class="route-inspector route-inspector-popover">
                 <summary>Route Inspector</summary>
                 <div id="chat-route-output" class="runtime-result"></div>
@@ -974,12 +978,12 @@ app.innerHTML = `
             <div class="chat-composer">
               <div id="chat-drop-status" class="chat-drop-status helper-text"></div>
               <label class="field composer-field">
-                <span>Prompt</span>
-                <textarea id="chat-prompt" class="text-area chat-input" placeholder="Ask the gateway something..."></textarea>
-                <span class="helper-text">Send with Cmd+Enter on macOS or Ctrl+Enter on other platforms.</span>
+                <span class="visually-hidden">Message</span>
+                <textarea id="chat-prompt" class="text-area chat-input" placeholder="Ephyにメッセージを送る"></textarea>
               </label>
               <div class="actions composer-actions">
-                <button id="send-chat" class="primary-btn">Send</button>
+                <span class="composer-shortcut">⌘↵ で送信</span>
+                <button id="send-chat" class="primary-btn">送信</button>
               </div>
             </div>
           </article>
@@ -1418,35 +1422,35 @@ app.innerHTML = `
       </section>
       <section class="tab" data-tab-panel="settings">
         <div class="settings-hub">
-          <article class="panel" id="developer-model-manager"></article>
           <article class="panel">
             <div class="panel-head">
               <h2>Settings</h2>
             </div>
-            <p class="helper-text">Runtime, evaluation, logs, and routing tools are grouped here so Chat remains the default workspace.</p>
+            <p class="helper-text">日常利用ではChat，Projects，Library，Karte Personal Contextだけを表示します．実験・診断機能はDeveloper Modeにまとめます．</p>
             <div class="settings-shortcut-grid">
-              <button id="settings-open-runtime" class="settings-shortcut-card">
+              <button id="settings-open-dashboard" class="settings-shortcut-card">
+                <span class="eyebrow dark">Status</span>
+                <strong>Dashboard</strong>
+                <span>Open recent activity，presets，and workflow summary.</span>
+              </button>
+              <button id="settings-open-runtime" class="settings-shortcut-card" data-developer-only hidden>
                 <span class="eyebrow dark">Advanced</span>
                 <strong>Runtime</strong>
                 <span>Servers, models, stack control, and logs.</span>
               </button>
-              <button id="settings-open-routing" class="settings-shortcut-card">
+              <button id="settings-open-routing" class="settings-shortcut-card" data-developer-only hidden>
                 <span class="eyebrow dark">Advanced</span>
                 <strong>Routing</strong>
                 <span>Inspect route decisions and backend model selection.</span>
               </button>
-              <button id="settings-open-eval" class="settings-shortcut-card">
+              <button id="settings-open-eval" class="settings-shortcut-card" data-developer-only hidden>
                 <span class="eyebrow dark">Advanced</span>
                 <strong>Evaluation</strong>
                 <span>Run eval datasets, compare metrics, and inspect regressions.</span>
               </button>
-              <button id="settings-open-dashboard" class="settings-shortcut-card">
-                <span class="eyebrow dark">Status</span>
-                <strong>Dashboard</strong>
-                <span>Open recent activity, presets, and workflow summary.</span>
-              </button>
             </div>
           </article>
+          <article class="panel" id="developer-model-manager"></article>
         </div>
       </section>
     </main>
@@ -1470,8 +1474,20 @@ app.innerHTML = `
   </div>
 `;
 
+function applyWorkspaceDeveloperMode(enabled) {
+  developerModeEnabled = applyDeveloperModeVisibility(document, enabled);
+  if (!developerModeEnabled && ['runtime', 'router', 'eval'].includes(activePanelTab)) {
+    activateTab('settings');
+  }
+}
+
+applyWorkspaceDeveloperMode(false);
 mountModelManager(document.getElementById('developer-model-manager'), {
-  GetLocalModelCatalog, SetDeveloperMode, ImportLocalModel, ApplyLocalModel,
+  GetLocalModelCatalog,
+  SetDeveloperMode,
+  ImportLocalModel,
+  ApplyLocalModel,
+  onDeveloperModeChange: applyWorkspaceDeveloperMode,
 });
 
 document.getElementById('start-conversation').addEventListener('click', async () => {
@@ -1532,8 +1548,9 @@ function restorePanelScroll(panelTab) {
 
 function activateTab(tab) {
   saveActivePanelScroll();
-  const visibleTab = resolveVisibleTab(tab);
-  const panelTab = resolvePanelTab(tab);
+  const allowedTab = resolveDeveloperTab(tab, developerModeEnabled);
+  const visibleTab = resolveVisibleTab(allowedTab);
+  const panelTab = resolvePanelTab(allowedTab);
   document.querySelectorAll('.nav-btn').forEach((item) => item.classList.toggle('active', item.dataset.tab === visibleTab));
   document.querySelectorAll('.tab').forEach((panel) => {
     panel.classList.toggle('active', panel.dataset.tabPanel === panelTab);
@@ -1781,6 +1798,7 @@ function updateChatScopeSummary() {
   const scopeLabelMap = {
     all: 'all',
     project: 'current project',
+    personal_context: 'Karte Personal Context',
     selected_docs: 'selected docs',
   };
   const parts = [`scope=${scopeLabelMap[chatSourceScope] || 'all'}`, `project=${project}`, `top_k=${topK}`];
@@ -1970,7 +1988,7 @@ function setChatSendState(inFlight) {
   const promptInput = document.getElementById('chat-prompt');
   if (sendButton) {
     sendButton.disabled = inFlight;
-    sendButton.textContent = inFlight ? 'Streaming...' : 'Send';
+    sendButton.textContent = inFlight ? '応答中…' : '送信';
   }
   if (promptInput) {
     promptInput.dataset.streaming = inFlight ? 'true' : 'false';
@@ -2015,9 +2033,14 @@ function renderChatThread() {
   if (chatThreadEntries.length === 0) {
     container.innerHTML = `
       <div class="empty-chat-state">
-        <div class="eyebrow dark">Chat-first Workspace</div>
-        <h3>Start a new conversation.</h3>
-        <p>Use Quick, Deep Work, With Sources, or Code modes. Source-backed answers will appear in the right pane.</p>
+        <div class="empty-chat-mark">E</div>
+        <h3>Ephyに何を頼みますか？</h3>
+        <p>会話，実装，資料の検索，Karteへの整理を，この画面から始められます．</p>
+        <div class="empty-chat-actions" aria-label="会話の例">
+          <button class="starter-prompt" type="button" data-starter-prompt="このプロジェクトの現在地と，次に進めるべき作業を整理して">プロジェクトの現在地を整理</button>
+          <button class="starter-prompt" type="button" data-starter-prompt="KarteのPersonal Contextから，この話題に関連する資料を探して">Karteから関連資料を探す</button>
+          <button class="starter-prompt" type="button" data-starter-prompt="ここまでの会話をKarteへ残すための文書案を作って">会話をKarteへまとめる</button>
+        </div>
       </div>
     `;
     return;
@@ -2321,6 +2344,9 @@ function bindChatStreamEvents() {
   if (chatStreamListenerBound) {
     return;
   }
+  if (!window.runtime?.EventsOnMultiple) {
+    return;
+  }
   chatStreamListenerBound = true;
   EventsOn('chat-stream', (payload) => {
     if (!payload || !payload.request_id || payload.request_id !== activeChatStreamRequestId) {
@@ -2346,6 +2372,15 @@ function bindChatStreamEvents() {
       } else {
         setChatWebStatus('Web unavailable', 'warning');
         setChatDropStatus(status.detail || 'Web search unavailable. Continuing with local context.');
+      }
+      return;
+    }
+    if (payload.kind === 'karte_context_status') {
+      const status = payload.karte_context_status || {};
+      if (status.status === 'ok') {
+        setChatDropStatus(`Karte Personal Context · ${status.source_count || 0} sources`);
+      } else {
+        setChatDropStatus('Karte Personal Context is unavailable. Continuing without saved context.');
       }
       return;
     }
@@ -2377,11 +2412,12 @@ function renderChatSourcePreview(index = 0) {
   activeChatSourceIndex = Math.max(0, Math.min(index, latestChatSources.length - 1));
   const source = latestChatSources[activeChatSourceIndex];
   const isWeb = source.source_type === 'web';
+  const isKarte = source.source_type === 'karte_context';
   container.innerHTML = `
     <div class="runtime-result-card">
       <div class="runtime-result-head">
-        <span class="runtime-result-title">${escapeHtml(isWeb ? (source.title || source.source_id || 'Web Source') : (source.heading_path?.slice(-1)?.[0] || source.source_path || 'Source Preview'))}</span>
-        <span class="runtime-pill ${isWeb ? 'optional' : 'neutral'}">${escapeHtml(isWeb ? 'external untrusted' : (source.score != null ? source.score.toFixed(3) : (source.project || '-')))}</span>
+        <span class="runtime-result-title">${escapeHtml(isWeb || isKarte ? (source.title || source.source_id || (isWeb ? 'Web Source' : 'Karte Context')) : (source.heading_path?.slice(-1)?.[0] || source.source_path || 'Source Preview'))}</span>
+        <span class="runtime-pill ${isWeb ? 'optional' : 'neutral'}">${escapeHtml(isWeb ? 'external untrusted' : (isKarte ? 'Karte · local untrusted' : (source.score != null ? source.score.toFixed(3) : (source.project || '-'))))}</span>
       </div>
       ${isWeb ? `
         <div class="runtime-result-meta">${escapeHtml(source.source_id || '-')} · ${escapeHtml(source.url || '-')}</div>
@@ -2401,6 +2437,7 @@ function renderChatSourcePreview(index = 0) {
 function renderChatSourcesPane({sources = [], title = 'Sources'} = {}) {
   latestChatSourceTitle = title;
   latestChatSources = Array.isArray(sources) ? sources : [];
+  document.querySelector('.chat-first-layout')?.classList.toggle('has-sources', latestChatSources.length > 0);
   const meta = document.getElementById('chat-sources-meta');
   const list = document.getElementById('chat-source-list');
   if (!meta || !list) {
@@ -2417,8 +2454,8 @@ function renderChatSourcesPane({sources = [], title = 'Sources'} = {}) {
   list.innerHTML = latestChatSources.map((source, index) => `
     <button class="source-card ${index === activeChatSourceIndex ? 'active' : ''}" data-source-index="${index}">
       <div class="source-card-top">
-        <strong>${escapeHtml(source.source_type === 'web' ? (source.title || source.source_id || `Web ${index + 1}`) : (source.heading_path?.slice(-1)?.[0] || `Source ${index + 1}`))}</strong>
-        <span>${escapeHtml(source.source_type === 'web' ? 'WEB' : (source.score != null ? source.score.toFixed(3) : '-'))}</span>
+        <strong>${escapeHtml(source.source_type === 'web' || source.source_type === 'karte_context' ? (source.title || source.source_id || `${source.source_type === 'web' ? 'Web' : 'Karte'} ${index + 1}`) : (source.heading_path?.slice(-1)?.[0] || `Source ${index + 1}`))}</strong>
+        <span>${escapeHtml(source.source_type === 'web' ? 'WEB' : (source.source_type === 'karte_context' ? 'KARTE' : (source.score != null ? source.score.toFixed(3) : '-')))}</span>
       </div>
       <div class="source-card-path">${escapeHtml(source.source_type === 'web' ? (source.url || '-') : (source.source_path || '-'))}</div>
       <div class="source-card-meta">${escapeHtml(source.source_type === 'web' ? 'external_untrusted' : (source.project || '(default)'))}</div>
@@ -5199,6 +5236,11 @@ function renderChatResult(response, mode, prompt = '', routeState = null, {appen
     });
   }
   renderChatSourcesPane({sources: response?.sources || [], title: response?.sources?.length ? 'Used Sources' : 'Sources'});
+  if (response?.karte_context_status?.status === 'ok') {
+    setChatDropStatus(`Karte Personal Context · ${response.karte_context_status.source_count || 0} sources`);
+  } else if (response?.karte_context_status) {
+    setChatDropStatus('Karte Personal Context is unavailable. Continuing without saved context.');
+  }
   renderRouteInspectorCard(routeState);
 }
 
@@ -6768,7 +6810,9 @@ async function refreshSavedRequests() {
     });
     syncChatContextBarFromRagState();
   } catch (error) {
-    setOutput('chat-output', String(error));
+    // Saved-request failures must not replace an in-progress conversation or
+    // the useful empty state. Diagnostics remain available in Developer Mode.
+    setOutput('runtime-config-status', String(error));
     setOutput('rag-output', String(error));
     setOutput('ingest-output', String(error));
     setOutput('eval-output', String(error));
@@ -7098,6 +7142,10 @@ function bindIngestDropTargets() {
       setActiveIngestDropZone('');
     });
   });
+
+  if (!window.runtime?.OnFileDrop) {
+    return;
+  }
 
   OnFileDrop(async (x, y, droppedPaths) => {
     const zone = findDropIngestZoneFromPoint(x, y);
@@ -7504,6 +7552,7 @@ async function exportPreference(format) {
 
 async function runChatFromForm() {
   const mode = document.getElementById('chat-mode').value;
+  const sourceScope = document.getElementById('chat-source-scope-select').value;
   const promptInput = document.getElementById('chat-prompt');
   const prompt = promptInput.value;
   if (!prompt.trim()) {
@@ -7531,7 +7580,11 @@ async function runChatFromForm() {
     modeLabel: getChatModeLabel(mode),
   });
   setChatSendState(true);
-  if (mode === 'rag' && !webSearch.web_search) {
+  if (shouldUseGenericRagEndpoint({
+    mode,
+    webSearchEnabled: webSearch.web_search,
+    sourceScope,
+  })) {
     document.getElementById('rag-query').value = prompt;
     try {
       const result = await runRagRequest({answer: true, queryOverride: prompt, origin: 'chat', requestId});
@@ -8378,6 +8431,13 @@ document.getElementById('send-chat').addEventListener('click', async () => {
 });
 
 document.getElementById('chat-output').addEventListener('click', async (event) => {
+  const starter = event.target.closest('[data-starter-prompt]');
+  if (starter) {
+    const prompt = document.getElementById('chat-prompt');
+    prompt.value = starter.dataset.starterPrompt || '';
+    prompt.focus();
+    return;
+  }
   const karteButton = event.target.closest('[data-karte-action]');
   if (karteButton) {
     await handleKarteConversationAction(karteButton);
@@ -8797,14 +8857,14 @@ bindValidationAction('runtime-preset-validation');
 async function initializeWorkbench() {
   setSidebarCollapsed(false);
   activateTab('chat');
-  bindChatStreamEvents();
-  bindIngestDropTargets();
   renderChatThread();
   renderChatSourcesPane({sources: [], title: 'Sources'});
   renderRouteInspectorCard(null);
   setChatDropStatus('');
   syncChatContextBarFromRagState();
   updateChatScopeSummary();
+  bindChatStreamEvents();
+  bindIngestDropTargets();
   restorePresetCatalogControls();
   restoreEvalDatasetTrendControls();
   await restoreRegressionWatchState();

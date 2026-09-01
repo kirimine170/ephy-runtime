@@ -52,7 +52,7 @@ WailsのChat画面で「こんにちは，自己紹介して」と送信し，st
 - Wails ベースのデスクトップ UI
 - Chat / Library からの Drag & Drop ingest
 - ingest / search / query / eval / preference / karte import-export用CLI
-- `/health` `/v1/models` `/v1/chat/completions` `/v1/embeddings` `/v1/router/plan` `/v1/web/search/plan` `/v1/web/search/approve` `/v1/ingest` `/v1/rag/search` `/v1/rag/query` `/v1/rag/index` `/v1/rag/source` `/v1/eval/run` `/v1/eval/preferences/*`
+- `/health` `/v1/models` `/v1/chat/completions` `/v1/karte/context/search` `/v1/karte/context/read` `/v1/embeddings` `/v1/router/plan` `/v1/web/search/plan` `/v1/web/search/approve` `/v1/ingest` `/v1/rag/search` `/v1/rag/query` `/v1/rag/index` `/v1/rag/source` `/v1/eval/run` `/v1/eval/preferences/*`
 
 ## ディレクトリ
 
