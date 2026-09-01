@@ -21,7 +21,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$(dirname "${FAKE_EXECUTABLE}")"
-printf '#!/usr/bin/env bash\nprintf "%%s" "$KARTE_DATA_DIR" > "%s/observed-data-dir"\nexec -a "$0" sleep 30\n' "${TEST_ROOT}" > "${FAKE_EXECUTABLE}"
+printf '#!/usr/bin/env bash\nprintf "%%s" "$KARTE_DATA_DIR" > "%s/observed-data-dir"\nwhile :; do sleep 1; done\n' "${TEST_ROOT}" > "${FAKE_EXECUTABLE}"
 chmod +x "${FAKE_EXECUTABLE}"
 
 resolved="$(resolve_karte_runtime_executable "${TEST_ROOT}")"
