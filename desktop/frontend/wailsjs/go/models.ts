@@ -474,6 +474,8 @@ export namespace main {
 	    id: string;
 	    path: string;
 	    base_model_id: string;
+	    profile_id: string;
+	    context_size: number;
 
 	    static createFrom(source: any = {}) {
 	        return new ImportLocalModelRequest(source);
@@ -484,6 +486,8 @@ export namespace main {
 	        this.id = source["id"];
 	        this.path = source["path"];
 	        this.base_model_id = source["base_model_id"];
+	        this.profile_id = source["profile_id"];
+	        this.context_size = source["context_size"];
 	    }
 	}
 	export class IndexBrowseRequest {
@@ -777,6 +781,18 @@ export namespace main {
 	    backend_model: string;
 	    quantization: string;
 	    context_size: number;
+	    profile_id?: string;
+	    family?: string;
+	    parameter_count_billions?: number;
+	    capabilities?: string[];
+	    enabled_capabilities?: string[];
+	    thinking_mode?: string;
+	    native_context_size?: number;
+	    maximum_context_size?: number;
+	    startup_timeout_seconds?: number;
+	    resource_class?: string;
+	    resource_fit?: boolean;
+	    resource_warning?: string;
 	    available: boolean;
 
 	    static createFrom(source: any = {}) {
@@ -792,6 +808,18 @@ export namespace main {
 	        this.backend_model = source["backend_model"];
 	        this.quantization = source["quantization"];
 	        this.context_size = source["context_size"];
+	        this.profile_id = source["profile_id"];
+	        this.family = source["family"];
+	        this.parameter_count_billions = source["parameter_count_billions"];
+	        this.capabilities = source["capabilities"];
+	        this.enabled_capabilities = source["enabled_capabilities"];
+	        this.thinking_mode = source["thinking_mode"];
+	        this.native_context_size = source["native_context_size"];
+	        this.maximum_context_size = source["maximum_context_size"];
+	        this.startup_timeout_seconds = source["startup_timeout_seconds"];
+	        this.resource_class = source["resource_class"];
+	        this.resource_fit = source["resource_fit"];
+	        this.resource_warning = source["resource_warning"];
 	        this.available = source["available"];
 	    }
 	}
@@ -809,9 +837,42 @@ export namespace main {
 	        this.adapter_id = source["adapter_id"];
 	    }
 	}
+	export class RuntimeModelProfile {
+	    family: string;
+	    parameter_count_billions: number;
+	    capabilities: string[];
+	    enabled_capabilities: string[];
+	    thinking_mode: string;
+	    native_context_size: number;
+	    maximum_context_size: number;
+	    default_context_size: number;
+	    startup_timeout_seconds: number;
+	    resource_class: string;
+	    estimated_minimum_memory_bytes: number;
+
+	    static createFrom(source: any = {}) {
+	        return new RuntimeModelProfile(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.family = source["family"];
+	        this.parameter_count_billions = source["parameter_count_billions"];
+	        this.capabilities = source["capabilities"];
+	        this.enabled_capabilities = source["enabled_capabilities"];
+	        this.thinking_mode = source["thinking_mode"];
+	        this.native_context_size = source["native_context_size"];
+	        this.maximum_context_size = source["maximum_context_size"];
+	        this.default_context_size = source["default_context_size"];
+	        this.startup_timeout_seconds = source["startup_timeout_seconds"];
+	        this.resource_class = source["resource_class"];
+	        this.estimated_minimum_memory_bytes = source["estimated_minimum_memory_bytes"];
+	    }
+	}
 	export class LocalModelCatalog {
 	    models: LocalModelArtifact[];
 	    adapters: LocalAdapterArtifact[];
+	    profiles: Record<string, RuntimeModelProfile>;
 	    selections: Record<string, LocalModelSelection>;
 	    revision: string;
 	    developer_mode: boolean;
@@ -824,6 +885,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.models = this.convertValues(source["models"], LocalModelArtifact);
 	        this.adapters = this.convertValues(source["adapters"], LocalAdapterArtifact);
+	        this.profiles = this.convertValues(source["profiles"], RuntimeModelProfile, true);
 	        this.selections = this.convertValues(source["selections"], LocalModelSelection, true);
 	        this.revision = source["revision"];
 	        this.developer_mode = source["developer_mode"];

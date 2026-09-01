@@ -140,3 +140,37 @@ func TestModelRoleAndArgumentValidation(t *testing.T) {
 		t.Fatal(args)
 	}
 }
+
+func TestModelReadinessUsesProfileTimeout(t *testing.T) {
+	catalog := &LocalModelCatalog{Models: []LocalModelArtifact{
+		{ID: "qwen3-8b", BackendModel: "fast-model", StartupTimeoutSeconds: 180},
+		{ID: "qwen3.8-27b", BackendModel: "large-model", StartupTimeoutSeconds: 420},
+	}}
+	alias, timeout := modelReadiness(catalog, LocalModelSelection{ModelID: "qwen3.8-27b"})
+	if alias != "large-model" || timeout != 420*time.Second {
+		t.Fatalf("alias=%q timeout=%s", alias, timeout)
+	}
+	alias, timeout = modelReadiness(catalog, LocalModelSelection{ModelID: "unknown"})
+	if alias != "" || timeout != 180*time.Second {
+		t.Fatalf("fallback alias=%q timeout=%s", alias, timeout)
+	}
+}
+
+func TestConversationReadinessUsesSelectedFastProfile(t *testing.T) {
+	catalog := &LocalModelCatalog{
+		Models: []LocalModelArtifact{
+			{ID: "qwen3.8-27b", BackendModel: "large-model", StartupTimeoutSeconds: 420},
+		},
+		Selections: map[string]LocalModelSelection{
+			"fast": {ModelID: "qwen3.8-27b"},
+		},
+	}
+	alias, timeout := conversationReadiness(catalog)
+	if alias != "large-model" || timeout != 420*time.Second {
+		t.Fatalf("alias=%q timeout=%s", alias, timeout)
+	}
+	alias, timeout = conversationReadiness(nil)
+	if alias != "" || timeout != 180*time.Second {
+		t.Fatalf("fallback alias=%q timeout=%s", alias, timeout)
+	}
+}

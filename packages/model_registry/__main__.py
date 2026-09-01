@@ -13,12 +13,15 @@ def launch_command(registry, role, server, fallback_path, fallback_alias):
     if selection:
         model, adapter = registry.resolve(selection)
         path, alias, context = model.path, model.backend_model, model.context_size
+        profile_match = registry.profile_for_model(model)
+        gpu_layers = profile_match[1].gpu_layers if profile_match else 99
     else:
         if not Path(fallback_path).is_file():
             raise ValueError("Default model file is missing")
         path, alias, context = fallback_path, fallback_alias, 32768
+        gpu_layers = 99
     command = [str(server), "-m", path, "--host", "127.0.0.1", "--port", str(PORTS[role]),
-               "--ctx-size", str(context), "--alias", alias, "--n-gpu-layers", "99"]
+               "--ctx-size", str(context), "--alias", alias, "--n-gpu-layers", str(gpu_layers)]
     if adapter:
         command.extend(["--lora", adapter.path])
     return command
@@ -34,7 +37,8 @@ def main():
     import_parser.add_argument("--id", required=True)
     import_parser.add_argument("--backend-model")
     import_parser.add_argument("--quantization", default="unknown")
-    import_parser.add_argument("--context-size", type=int, default=8192)
+    import_parser.add_argument("--context-size", type=int)
+    import_parser.add_argument("--profile")
     adapter_parser = commands.add_parser("import-adapter")
     adapter_parser.add_argument("path", type=Path)
     adapter_parser.add_argument("--id", required=True)
@@ -64,7 +68,8 @@ def main():
             result = registry.catalog()
         elif args.command == "import":
             result = registry.import_model(args.path, model_id=args.id, backend_model=args.backend_model,
-                                           quantization=args.quantization, context_size=args.context_size).model_dump()
+                                           quantization=args.quantization, context_size=args.context_size,
+                                           profile_id=args.profile).model_dump()
         elif args.command == "import-adapter":
             result = registry.import_adapter(args.path, adapter_id=args.id, base_model_id=args.base_model).model_dump()
         elif args.command in ("check", "select"):

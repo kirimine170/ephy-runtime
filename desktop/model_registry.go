@@ -18,14 +18,40 @@ import (
 )
 
 type LocalModelArtifact struct {
-	ID           string `json:"id"`
-	Path         string `json:"path"`
-	SHA256       string `json:"sha256"`
-	SizeBytes    int64  `json:"size_bytes"`
-	BackendModel string `json:"backend_model"`
-	Quantization string `json:"quantization"`
-	ContextSize  int    `json:"context_size"`
-	Available    bool   `json:"available"`
+	ID                     string   `json:"id"`
+	Path                   string   `json:"path"`
+	SHA256                 string   `json:"sha256"`
+	SizeBytes              int64    `json:"size_bytes"`
+	BackendModel           string   `json:"backend_model"`
+	Quantization           string   `json:"quantization"`
+	ContextSize            int      `json:"context_size"`
+	ProfileID              string   `json:"profile_id,omitempty"`
+	Family                 string   `json:"family,omitempty"`
+	ParameterCountBillions float64  `json:"parameter_count_billions,omitempty"`
+	Capabilities           []string `json:"capabilities,omitempty"`
+	EnabledCapabilities    []string `json:"enabled_capabilities,omitempty"`
+	ThinkingMode           string   `json:"thinking_mode,omitempty"`
+	NativeContextSize      int      `json:"native_context_size,omitempty"`
+	MaximumContextSize     int      `json:"maximum_context_size,omitempty"`
+	StartupTimeoutSeconds  int      `json:"startup_timeout_seconds,omitempty"`
+	ResourceClass          string   `json:"resource_class,omitempty"`
+	ResourceFit            *bool    `json:"resource_fit,omitempty"`
+	ResourceWarning        string   `json:"resource_warning,omitempty"`
+	Available              bool     `json:"available"`
+}
+
+type RuntimeModelProfile struct {
+	Family                      string   `json:"family"`
+	ParameterCountBillions      float64  `json:"parameter_count_billions"`
+	Capabilities                []string `json:"capabilities"`
+	EnabledCapabilities         []string `json:"enabled_capabilities"`
+	ThinkingMode                string   `json:"thinking_mode"`
+	NativeContextSize           int      `json:"native_context_size"`
+	MaximumContextSize          int      `json:"maximum_context_size"`
+	DefaultContextSize          int      `json:"default_context_size"`
+	StartupTimeoutSeconds       int      `json:"startup_timeout_seconds"`
+	ResourceClass               string   `json:"resource_class"`
+	EstimatedMinimumMemoryBytes int64    `json:"estimated_minimum_memory_bytes"`
 }
 
 type LocalAdapterArtifact struct {
@@ -44,6 +70,7 @@ type LocalModelSelection struct {
 type LocalModelCatalog struct {
 	Models        []LocalModelArtifact           `json:"models"`
 	Adapters      []LocalAdapterArtifact         `json:"adapters"`
+	Profiles      map[string]RuntimeModelProfile `json:"profiles"`
 	Selections    map[string]LocalModelSelection `json:"selections"`
 	Revision      string                         `json:"revision"`
 	DeveloperMode bool                           `json:"developer_mode"`
@@ -53,6 +80,8 @@ type ImportLocalModelRequest struct {
 	ID          string `json:"id"`
 	Path        string `json:"path"`
 	BaseModelID string `json:"base_model_id"`
+	ProfileID   string `json:"profile_id"`
+	ContextSize int    `json:"context_size"`
 }
 
 type ApplyLocalModelRequest struct {
@@ -148,6 +177,12 @@ func (a *App) ImportLocalModel(request ImportLocalModelRequest) (*LocalModelCata
 		}
 	}
 	args := []string{"import", path, "--id", request.ID}
+	if request.ProfileID != "" {
+		args = append(args, "--profile", request.ProfileID)
+	}
+	if request.ContextSize > 0 {
+		args = append(args, "--context-size", fmt.Sprint(request.ContextSize))
+	}
 	if request.BaseModelID != "" {
 		args = []string{"import-adapter", path, "--id", request.ID, "--base-model", request.BaseModelID}
 	}
@@ -247,6 +282,20 @@ func portListening(port string) bool {
 	return true
 }
 
+func modelReadiness(catalog *LocalModelCatalog, selection LocalModelSelection) (string, time.Duration) {
+	timeout := 180 * time.Second
+	for _, model := range catalog.Models {
+		if model.ID != selection.ModelID {
+			continue
+		}
+		if model.StartupTimeoutSeconds > 0 {
+			timeout = time.Duration(model.StartupTimeoutSeconds) * time.Second
+		}
+		return model.BackendModel, timeout
+	}
+	return "", timeout
+}
+
 func (a *App) roleProcess(role string) (**exec.Cmd, *bool, func(string), func(*exec.Cmd)) {
 	switch role {
 	case "fast":
@@ -323,13 +372,8 @@ func (a *App) ApplyLocalModel(request ApplyLocalModelRequest) (result *LocalMode
 			return err
 		},
 		Ready: func(selection LocalModelSelection) error {
-			alias := ""
-			for _, model := range catalog.Models {
-				if model.ID == selection.ModelID {
-					alias = model.BackendModel
-				}
-			}
-			return waitLocalModelReady(port, alias, 180*time.Second, func() bool {
+			alias, timeout := modelReadiness(catalog, selection)
+			return waitLocalModelReady(port, alias, timeout, func() bool {
 				a.mu.Lock()
 				defer a.mu.Unlock()
 				return *runningRef

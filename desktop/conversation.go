@@ -7,6 +7,13 @@ import (
 	"time"
 )
 
+func conversationReadiness(catalog *LocalModelCatalog) (string, time.Duration) {
+	if catalog == nil {
+		return "", 180 * time.Second
+	}
+	return modelReadiness(catalog, catalog.Selections["fast"])
+}
+
 // The conversation MVP owns only Fast and Gateway, keeping the other models unloaded．
 func (a *App) startConversation() (*StackActionResponse, error) {
 	if a.baseURL != "http://127.0.0.1:8000" && a.baseURL != "http://localhost:8000" {
@@ -18,10 +25,15 @@ func (a *App) startConversation() (*StackActionResponse, error) {
 	if !managed && portListening("8081") {
 		return nil, fmt.Errorf("Fast is running outside Desktop; stop its launcher before starting the managed conversation stack")
 	}
+	var catalog *LocalModelCatalog
+	if current, err := a.GetLocalModelCatalog(); err == nil {
+		catalog = current
+	}
+	alias, timeout := conversationReadiness(catalog)
 	if _, err := a.StartFast(); err != nil {
 		return nil, err
 	}
-	if err := waitLocalModelReady("8081", "", 180*time.Second, func() bool {
+	if err := waitLocalModelReady("8081", alias, timeout, func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		return a.fastRunning
