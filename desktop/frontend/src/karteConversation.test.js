@@ -34,9 +34,14 @@ test('conversation request keeps only completed user and assistant messages', ()
 
 
 test('local ISO timestamp preserves the local offset', () => {
-  const date = new Date('2026-09-01T10:30:45+09:00');
+  const date = new Date(2026, 8, 1, 10, 30, 45);
   const rendered = formatLocalISOString(date);
-  assert.match(rendered, /^2026-09-01T10:30:45[+-]\d{2}:\d{2}$/);
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const offset = `${sign}${String(Math.floor(absoluteOffset / 60)).padStart(2, '0')}:${String(absoluteOffset % 60).padStart(2, '0')}`;
+
+  assert.equal(rendered, `2026-09-01T10:30:45${offset}`);
 });
 
 
