@@ -134,12 +134,30 @@ export namespace main {
 	        this.source_count = source["source_count"];
 	    }
 	}
+	export class KarteContextStatus {
+	    status: string;
+	    source_count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new KarteContextStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.source_count = source["source_count"];
+	    }
+	}
 	export class SearchItem {
 	    chunk_id: string;
+	    doc_id?: string;
 	    source_path: string;
+	    relative_path?: string;
 	    heading_path: string[];
 	    project: string;
+	    kind?: string;
 	    tags: string[];
+	    sensitivity?: string;
 	    chunk_text: string;
 	    score: number;
 	    source_type?: string;
@@ -157,10 +175,14 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.chunk_id = source["chunk_id"];
+	        this.doc_id = source["doc_id"];
 	        this.source_path = source["source_path"];
+	        this.relative_path = source["relative_path"];
 	        this.heading_path = source["heading_path"];
 	        this.project = source["project"];
+	        this.kind = source["kind"];
 	        this.tags = source["tags"];
+	        this.sensitivity = source["sensitivity"];
 	        this.chunk_text = source["chunk_text"];
 	        this.score = source["score"];
 	        this.source_type = source["source_type"];
@@ -179,6 +201,7 @@ export namespace main {
 	    finish_reason?: string;
 	    raw: any;
 	    web_search_status?: WebSearchStatus;
+	    karte_context_status?: KarteContextStatus;
 
 	    static createFrom(source: any = {}) {
 	        return new ChatResponse(source);
@@ -192,6 +215,7 @@ export namespace main {
 	        this.finish_reason = source["finish_reason"];
 	        this.raw = source["raw"];
 	        this.web_search_status = this.convertValues(source["web_search_status"], WebSearchStatus);
+	        this.karte_context_status = this.convertValues(source["karte_context_status"], KarteContextStatus);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -430,6 +454,7 @@ export namespace main {
 	    configured_models: string[];
 	    web_search_enabled: boolean;
 	    karte_enabled: boolean;
+	    karte_context_enabled: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new HealthResponse(source);
@@ -442,6 +467,7 @@ export namespace main {
 	        this.configured_models = source["configured_models"];
 	        this.web_search_enabled = source["web_search_enabled"];
 	        this.karte_enabled = source["karte_enabled"];
+	        this.karte_context_enabled = source["karte_context_enabled"];
 	    }
 	}
 	export class ImportLocalModelRequest {
@@ -1716,4 +1742,3 @@ export namespace main {
 	}
 
 }
-

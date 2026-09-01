@@ -57,11 +57,12 @@ type App struct {
 }
 
 type HealthResponse struct {
-	Status           string   `json:"status"`
-	Service          string   `json:"service"`
-	ConfiguredModels []string `json:"configured_models"`
-	WebSearchEnabled bool     `json:"web_search_enabled"`
-	KarteEnabled     bool     `json:"karte_enabled"`
+	Status              string   `json:"status"`
+	Service             string   `json:"service"`
+	ConfiguredModels    []string `json:"configured_models"`
+	WebSearchEnabled    bool     `json:"web_search_enabled"`
+	KarteEnabled        bool     `json:"karte_enabled"`
+	KarteContextEnabled bool     `json:"karte_context_enabled"`
 }
 
 type ModelListResponse struct {
@@ -118,12 +119,13 @@ type GatewayMetadata struct {
 }
 
 type ChatResponse struct {
-	Answer          string           `json:"answer"`
-	Thinking        string           `json:"thinking,omitempty"`
-	Sources         []SearchItem     `json:"sources,omitempty"`
-	FinishReason    string           `json:"finish_reason,omitempty"`
-	Raw             any              `json:"raw"`
-	WebSearchStatus *WebSearchStatus `json:"web_search_status,omitempty"`
+	Answer             string              `json:"answer"`
+	Thinking           string              `json:"thinking,omitempty"`
+	Sources            []SearchItem        `json:"sources,omitempty"`
+	FinishReason       string              `json:"finish_reason,omitempty"`
+	Raw                any                 `json:"raw"`
+	WebSearchStatus    *WebSearchStatus    `json:"web_search_status,omitempty"`
+	KarteContextStatus *KarteContextStatus `json:"karte_context_status,omitempty"`
 }
 
 type KarteConversationMessage struct {
@@ -188,6 +190,11 @@ type WebSearchPlanResponse struct {
 type WebSearchStatus struct {
 	Status      string `json:"status"`
 	Detail      string `json:"detail,omitempty"`
+	SourceCount int    `json:"source_count"`
+}
+
+type KarteContextStatus struct {
+	Status      string `json:"status"`
 	SourceCount int    `json:"source_count"`
 }
 
@@ -297,10 +304,14 @@ type SearchResponse struct {
 
 type SearchItem struct {
 	ChunkID            string   `json:"chunk_id"`
+	DocID              string   `json:"doc_id,omitempty"`
 	SourcePath         string   `json:"source_path"`
+	RelativePath       string   `json:"relative_path,omitempty"`
 	HeadingPath        []string `json:"heading_path"`
 	Project            string   `json:"project"`
+	Kind               string   `json:"kind,omitempty"`
 	Tags               []string `json:"tags"`
+	Sensitivity        string   `json:"sensitivity,omitempty"`
 	ChunkText          string   `json:"chunk_text"`
 	Score              float64  `json:"score"`
 	SourceType         string   `json:"source_type,omitempty"`
@@ -320,16 +331,17 @@ type QueryResponse struct {
 }
 
 type ChatStreamEvent struct {
-	RequestID       string           `json:"request_id"`
-	Kind            string           `json:"kind"`
-	Channel         string           `json:"channel,omitempty"`
-	Delta           string           `json:"delta,omitempty"`
-	Thinking        string           `json:"thinking,omitempty"`
-	Answer          string           `json:"answer,omitempty"`
-	Sources         []SearchItem     `json:"sources,omitempty"`
-	FinishReason    string           `json:"finish_reason,omitempty"`
-	Error           string           `json:"error,omitempty"`
-	WebSearchStatus *WebSearchStatus `json:"web_search_status,omitempty"`
+	RequestID          string              `json:"request_id"`
+	Kind               string              `json:"kind"`
+	Channel            string              `json:"channel,omitempty"`
+	Delta              string              `json:"delta,omitempty"`
+	Thinking           string              `json:"thinking,omitempty"`
+	Answer             string              `json:"answer,omitempty"`
+	Sources            []SearchItem        `json:"sources,omitempty"`
+	FinishReason       string              `json:"finish_reason,omitempty"`
+	Error              string              `json:"error,omitempty"`
+	WebSearchStatus    *WebSearchStatus    `json:"web_search_status,omitempty"`
+	KarteContextStatus *KarteContextStatus `json:"karte_context_status,omitempty"`
 }
 
 type EvalResponse struct {
@@ -799,12 +811,13 @@ func (a *App) Chat(request ChatRequest) (*ChatResponse, error) {
 	}
 
 	return &ChatResponse{
-		Answer:          extractChatAnswer(raw),
-		Thinking:        extractChatReasoning(raw),
-		Sources:         extractChatSources(raw),
-		FinishReason:    extractFinishReason(raw),
-		Raw:             raw,
-		WebSearchStatus: extractWebSearchStatus(raw),
+		Answer:             extractChatAnswer(raw),
+		Thinking:           extractChatReasoning(raw),
+		Sources:            extractChatSources(raw),
+		FinishReason:       extractFinishReason(raw),
+		Raw:                raw,
+		WebSearchStatus:    extractWebSearchStatus(raw),
+		KarteContextStatus: extractKarteContextStatus(raw),
 	}, nil
 }
 
@@ -945,6 +958,7 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 	sources := []SearchItem{}
 	finishReason := ""
 	var webSearchStatus *WebSearchStatus
+	var karteContextStatus *KarteContextStatus
 
 	err := a.streamGatewayResponse("/v1/chat/completions", payload, func(eventType string, data string) error {
 		if data == "[DONE]" {
@@ -963,6 +977,19 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 				RequestID:       requestID,
 				Kind:            "web_search_status",
 				WebSearchStatus: &status,
+			})
+			return nil
+		}
+		if eventType == "karte_context_status" {
+			var status KarteContextStatus
+			if err := json.Unmarshal([]byte(data), &status); err != nil {
+				return nil
+			}
+			karteContextStatus = &status
+			a.emitChatStreamEvent(ChatStreamEvent{
+				RequestID:          requestID,
+				Kind:               "karte_context_status",
+				KarteContextStatus: &status,
 			})
 			return nil
 		}
@@ -1019,11 +1046,13 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 		Sources:      sources,
 		FinishReason: finishReason,
 		Raw: map[string]any{
-			"stream":        true,
-			"finish_reason": finishReason,
-			"sources":       sources,
+			"stream":               true,
+			"finish_reason":        finishReason,
+			"sources":              sources,
+			"karte_context_status": karteContextStatus,
 		},
-		WebSearchStatus: webSearchStatus,
+		WebSearchStatus:    webSearchStatus,
+		KarteContextStatus: karteContextStatus,
 	}
 	a.emitChatStreamEvent(ChatStreamEvent{
 		RequestID:    requestID,
@@ -6462,6 +6491,22 @@ func extractWebSearchStatus(raw map[string]any) *WebSearchStatus {
 		return nil
 	}
 	var status WebSearchStatus
+	if err := json.Unmarshal(encoded, &status); err != nil {
+		return nil
+	}
+	return &status
+}
+
+func extractKarteContextStatus(raw map[string]any) *KarteContextStatus {
+	payload, ok := raw["karte_context_status"]
+	if !ok {
+		return nil
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	var status KarteContextStatus
 	if err := json.Unmarshal(encoded, &status); err != nil {
 		return nil
 	}

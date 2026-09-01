@@ -1,10 +1,75 @@
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 import apps.gateway.main as gateway_main
 
 from fastapi.testclient import TestClient
 
 from apps.gateway.main import app
+from packages.karte_core.context import (
+    ContextDocument,
+    ContextProvenance,
+    ContextResponse,
+    ContextSearchResult,
+    KarteContextTimeout,
+)
+
+
+def _karte_search_response() -> ContextResponse:
+    timestamp = datetime(2026, 9, 1, tzinfo=UTC)
+    return ContextResponse(
+        request_id="test-search-request",
+        request_sha256="a" * 64,
+        operation="search",
+        status="ok",
+        results=[
+            ContextSearchResult(
+                doc_id="doc:context-001",
+                title="Personal Context boundary",
+                project="ephy",
+                kind="decision",
+                tags=["architecture"],
+                sensitivity="internal",
+                relative_path="content/projects/ephy/decision/2026-09/context.md",
+                updated_at=timestamp,
+                sha256="b" * 64,
+                snippet="Karte owns durable Personal Context and Ephy reads it as a client.",
+                score=10,
+                provenance=[ContextProvenance(type="canonical", reference="doc:context-001", sha256="b" * 64)],
+            )
+        ],
+        document=None,
+        diagnostics=[],
+        error=None,
+        processed_at=timestamp,
+    )
+
+
+def _karte_read_response() -> ContextResponse:
+    timestamp = datetime(2026, 9, 1, tzinfo=UTC)
+    return ContextResponse(
+        request_id="test-read-request",
+        request_sha256="c" * 64,
+        operation="read",
+        status="ok",
+        results=[],
+        document=ContextDocument(
+            doc_id="doc:context-001",
+            title="Personal Context boundary",
+            project="ephy",
+            kind="decision",
+            tags=["architecture"],
+            sensitivity="internal",
+            relative_path="content/projects/ephy/decision/2026-09/context.md",
+            updated_at=timestamp,
+            sha256="b" * 64,
+            body="Karte owns durable Personal Context and Ephy reads it as a client.\n",
+            provenance=[ContextProvenance(type="canonical", reference="doc:context-001", sha256="b" * 64)],
+        ),
+        diagnostics=[],
+        error=None,
+        processed_at=timestamp,
+    )
 
 
 def test_health_endpoint() -> None:
@@ -359,6 +424,161 @@ def test_chat_endpoint_grounds_non_rag_mode_with_retrieved_sources(tmp_path) -> 
     assert any("非信頼の参照データ" in message.content for message in sent_request.messages if message.role == "system")
     assert not any(str(doc.resolve()) in message.content for message in sent_request.messages if message.role == "system")
     assert any(str(doc.resolve()) in message.content for message in sent_request.messages if message.role == "user")
+
+
+def test_karte_context_search_and_read_endpoints_use_typed_client() -> None:
+    calls = []
+
+    class FakeKarteContextClient:
+        def search(self, query, **kwargs):
+            calls.append(("search", query, kwargs))
+            return _karte_search_response()
+
+        def read(self, doc_id, **kwargs):
+            calls.append(("read", doc_id, kwargs))
+            return _karte_read_response()
+
+    with TestClient(app) as client:
+        original = app.state.karte_context_client
+        app.state.karte_context_client = FakeKarteContextClient()
+        try:
+            search_response = client.post(
+                "/v1/karte/context/search",
+                json={
+                    "query": "Personal Context boundary",
+                    "projects": ["ephy"],
+                    "tags": ["architecture"],
+                    "sensitivity_ceiling": "internal",
+                    "top_k": 3,
+                },
+            )
+            read_response = client.post(
+                "/v1/karte/context/read",
+                json={
+                    "doc_id": "doc:context-001",
+                    "projects": ["ephy"],
+                    "sensitivity_ceiling": "internal",
+                },
+            )
+        finally:
+            app.state.karte_context_client = original
+
+    assert search_response.status_code == 200
+    assert search_response.json()["results"][0]["doc_id"] == "doc:context-001"
+    assert read_response.status_code == 200
+    assert read_response.json()["document"]["doc_id"] == "doc:context-001"
+    assert calls == [
+        (
+            "search",
+            "Personal Context boundary",
+            {
+                "projects": ["ephy"],
+                "tags": ["architecture"],
+                "sensitivity_ceiling": "internal",
+                "top_k": 3,
+            },
+        ),
+        (
+            "read",
+            "doc:context-001",
+            {"projects": ["ephy"], "tags": [], "sensitivity_ceiling": "internal"},
+        ),
+    ]
+
+
+def test_chat_endpoint_grounds_with_karte_personal_context() -> None:
+    captured = {}
+
+    class FakeKarteContextClient:
+        def search(self, query, **kwargs):
+            captured["search"] = (query, kwargs)
+            return _karte_search_response()
+
+    async def fake_create_chat_completion(*, model_config, request_payload):
+        captured["request_payload"] = request_payload
+        return {"choices": [{"message": {"content": "grounded Personal Context answer"}}]}
+
+    with TestClient(app) as client:
+        original_context = app.state.karte_context_client
+        original_chat = app.state.chat_adapter.create_chat_completion
+        app.state.karte_context_client = FakeKarteContextClient()
+        app.state.chat_adapter.create_chat_completion = AsyncMock(side_effect=fake_create_chat_completion)
+        try:
+            response = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "auto",
+                    "messages": [{"role": "user", "content": "EphyとKarteの責務境界は？"}],
+                    "metadata": {
+                        "mode": "fast",
+                        "project": "ephy",
+                        "source_scope": "personal_context",
+                        "tags": ["architecture"],
+                        "top_k": 3,
+                    },
+                },
+            )
+        finally:
+            app.state.karte_context_client = original_context
+            app.state.chat_adapter.create_chat_completion = original_chat
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["karte_context_status"] == {"status": "ok", "source_count": 1, "diagnostics": []}
+    assert payload["sources"][0]["source_type"] == "karte_context"
+    assert payload["sources"][0]["doc_id"] == "doc:context-001"
+    assert captured["search"] == (
+        "EphyとKarteの責務境界は？",
+        {"projects": ["ephy"], "tags": ["architecture"], "top_k": 3},
+    )
+    sent_request = captured["request_payload"]
+    assert any(
+        "Karte owns durable Personal Context" in str(message.content)
+        for message in sent_request.messages
+        if message.role == "user"
+    )
+    assert any("非信頼の参照データ" in str(message.content) for message in sent_request.messages if message.role == "system")
+
+
+def test_chat_endpoint_continues_when_karte_personal_context_is_unavailable() -> None:
+    captured = {}
+
+    class TimeoutKarteContextClient:
+        def search(self, query, **kwargs):
+            raise KarteContextTimeout("synthetic timeout")
+
+    async def fake_create_chat_completion(*, model_config, request_payload):
+        captured["request_payload"] = request_payload
+        return {"choices": [{"message": {"content": "plain chat answer"}}]}
+
+    with TestClient(app) as client:
+        original_context = app.state.karte_context_client
+        original_chat = app.state.chat_adapter.create_chat_completion
+        app.state.karte_context_client = TimeoutKarteContextClient()
+        app.state.chat_adapter.create_chat_completion = AsyncMock(side_effect=fake_create_chat_completion)
+        try:
+            response = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "auto",
+                    "messages": [{"role": "user", "content": "こんにちは"}],
+                    "metadata": {"mode": "fast", "source_scope": "personal_context"},
+                },
+            )
+        finally:
+            app.state.karte_context_client = original_context
+            app.state.chat_adapter.create_chat_completion = original_chat
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "plain chat answer"
+    assert response.json()["karte_context_status"] == {"status": "unavailable", "source_count": 0}
+    assert "sources" not in response.json()
+    sent_request = captured["request_payload"]
+    assert all(
+        "Retrieved workspace context:" not in str(message.content)
+        for message in sent_request.messages
+        if message.role == "system"
+    )
 
 
 def test_chat_streaming_emits_sources_event_when_grounded(tmp_path) -> None:

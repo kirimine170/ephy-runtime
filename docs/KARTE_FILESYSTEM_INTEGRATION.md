@@ -2,7 +2,7 @@
 
 ## Boundary
 
-Karte owns canonical Markdown under `KARTE_DATA_DIR/content`．Ephy's V1 integration reads only `content/**/*.md` and never routes canonical sources through the generic ingest copy into `LW_data`．Ephy writes only versioned proposal JSON below `.mdsys/ephy/outbox/pending` and reads receipts below `.mdsys/ephy/outbox/receipts`．The JSON bundle in `packages/karte_core` remains a compatibility bridge．
+Karte owns canonical Markdown under `KARTE_DATA_DIR/content`．Ephy does not treat canonical paths as durable identity．The formal Personal Context read path is Karte Context Protocol V1 under `.mdsys/context/v1`，while the older direct `content/**/*.md` index remains a migration fallback．Ephy writes reviewed proposal JSON below `.mdsys/ephy/outbox/pending` and reads receipts below `.mdsys/ephy/outbox/receipts`．The JSON bundle in `packages/karte_core` remains a compatibility bridge．
 
 The versioned proposal／receipt schemas and synthetic fixtures are under `schemas/karte-ephy/v1`．Create and append are the only enabled proposal operations．Create contains a complete document candidate and no final path．Append contains only a frontmatter patch and Markdown fragment，and requires a stable `doc_id`，canonical path，and base hash．
 
@@ -13,6 +13,18 @@ When classification is unresolved or a similar document may be the correct appen
 Ephy recommends append only when a stable `doc_id` matches，the current document's project and kind agree with the placement hint，and the proposal was based on the current canonical byte hash．A project／kind mismatch or a semantic similarity match without exact `doc_id` requires consultation．With no exact or similar document，Ephy recommends create．Karte repeats the identity，content-classification，and byte-hash checks before saving．
 
 The `karte-contract` job in `.github/workflows/runtime-tests.yml` checks out public Karte `main` and compares every contract JSON byte-for-byte with `scripts/check_karte_contract.py`．A coordinated contract change must therefore land in Karte before the Ephy Runtime check can pass against the new version．The checker logs only relative filenames and hashes when drift occurs．
+
+## Personal Context search／read
+
+Karte owns search，read，scope policy，sensitivity filtering，canonical `doc_id`，content hash，and provenance．Ephy publishes atomic requests below `.mdsys/context/v1/requests` and reads matching responses below `.mdsys/context/v1/responses`．Karte archives processed requests below `.mdsys/context/v1/processed`．The request and response schemas plus synthetic fixtures live in `schemas/karte-context/v1` and must remain byte-identical across both repositories．
+
+The Gateway exposes the typed client through:
+
+- `POST /v1/karte/context/search` — search within the actor's effective project，tag，and sensitivity scope．
+- `POST /v1/karte/context/read` — read one allowed document by stable `doc_id`．
+- `POST /v1/chat/completions` with `metadata.source_scope=personal_context` — ground a normal Ephy conversation with Karte results．
+
+Karte Personal Context is always injected as `local_untrusted` reference data．Karte timeout，invalid response，or app shutdown does not stop the conversation．The response instead reports `karte_context_status=unavailable` and continues without saved context．The default Ephy actor policy is capped at `internal`; confidential and restricted data remain denied until an explicit local `.mdsys/context/v1/policy.json` grants a narrower actor scope．
 
 ## Read-only indexing
 
@@ -72,6 +84,6 @@ Build Ephy with `bash scripts/build_conversation_app.sh` and Karte with its `bas
 export KARTE_DATA_DIR=/absolute/path/to/karte_data
 ```
 
-In Ephy Chat，select a project or leave it empty to exercise consultation，then complete a conversation．Review the automatically displayed Karte card and choose `Karteへ送る`．Within five seconds Karte's top-bar button changes to `Ephy候補 (1)`．Open it，review the full create preview or append diff，then use `採用`，`編集して採用`，or `破棄`．Back in Ephy，`Karteの処理結果を確認` reads the receipt．An accepted create must appear below `content/projects/<project>/<kind>/<YYYY-MM>` with a stable `doc_id`．
+In Ephy Chat，choose `Karte Personal Context` as Source Scope and select a project，then ask about an existing canonical document．The Sources pane must label the result `KARTE`．Next，complete a conversation，review the automatically displayed Karte card，and choose `Karteへ送る`．Within five seconds Karte's top-bar button changes to `Ephy候補 (1)`．Open it，review the full create preview or append diff，then use `採用`，`編集して採用`，or `破棄`．Back in Ephy，`Karteの処理結果を確認` reads the receipt．An accepted create must appear below `content/projects/<project>/<kind>/<YYYY-MM>` with a stable `doc_id`．A subsequent Personal Context search must return that `doc_id` without requiring generic ingest．
 
 For a self-contained local Runtime，install an Apple Silicon `Karte.app` artifact with `bash scripts/install_karte_runtime.sh /absolute/path/to/Karte-macOS-apple-silicon.zip`．The bundle is copied to the Git-ignored `data/runtime/karte/Karte.app`．`scripts/start_conversation_app.sh` then starts that Karte bundle automatically and passes the same `KARTE_DATA_DIR` to Karte，Ephy Desktop，and Gateway．When `KARTE_DATA_DIR` is not set，the launcher creates `data/runtime/karte-data` for isolated acceptance testing．Set `EPHY_START_KARTE=0` to suppress automatic Karte startup，or `EPHY_KARTE_EXECUTABLE` to test an explicit non-symlink executable．

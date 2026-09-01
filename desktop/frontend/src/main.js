@@ -437,6 +437,7 @@ app.innerHTML = `
                 <select id="chat-source-scope-select" class="text-input chat-toolbar-select" aria-label="Source Scope">
                   <option value="all">All</option>
                   <option value="project">Current Project</option>
+                  <option value="personal_context">Karte Personal Context</option>
                   <option value="selected_docs">Selected Docs</option>
                 </select>
                 <select id="chat-top-k-select" class="text-input chat-toolbar-select chat-toolbar-topk" aria-label="Top K">
@@ -1781,6 +1782,7 @@ function updateChatScopeSummary() {
   const scopeLabelMap = {
     all: 'all',
     project: 'current project',
+    personal_context: 'Karte Personal Context',
     selected_docs: 'selected docs',
   };
   const parts = [`scope=${scopeLabelMap[chatSourceScope] || 'all'}`, `project=${project}`, `top_k=${topK}`];
@@ -2349,6 +2351,15 @@ function bindChatStreamEvents() {
       }
       return;
     }
+    if (payload.kind === 'karte_context_status') {
+      const status = payload.karte_context_status || {};
+      if (status.status === 'ok') {
+        setChatDropStatus(`Karte Personal Context · ${status.source_count || 0} sources`);
+      } else {
+        setChatDropStatus('Karte Personal Context is unavailable. Continuing without saved context.');
+      }
+      return;
+    }
     if (payload.kind === 'done') {
       finalizeStreamingChat({
         requestId: payload.request_id,
@@ -2377,11 +2388,12 @@ function renderChatSourcePreview(index = 0) {
   activeChatSourceIndex = Math.max(0, Math.min(index, latestChatSources.length - 1));
   const source = latestChatSources[activeChatSourceIndex];
   const isWeb = source.source_type === 'web';
+  const isKarte = source.source_type === 'karte_context';
   container.innerHTML = `
     <div class="runtime-result-card">
       <div class="runtime-result-head">
-        <span class="runtime-result-title">${escapeHtml(isWeb ? (source.title || source.source_id || 'Web Source') : (source.heading_path?.slice(-1)?.[0] || source.source_path || 'Source Preview'))}</span>
-        <span class="runtime-pill ${isWeb ? 'optional' : 'neutral'}">${escapeHtml(isWeb ? 'external untrusted' : (source.score != null ? source.score.toFixed(3) : (source.project || '-')))}</span>
+        <span class="runtime-result-title">${escapeHtml(isWeb || isKarte ? (source.title || source.source_id || (isWeb ? 'Web Source' : 'Karte Context')) : (source.heading_path?.slice(-1)?.[0] || source.source_path || 'Source Preview'))}</span>
+        <span class="runtime-pill ${isWeb ? 'optional' : 'neutral'}">${escapeHtml(isWeb ? 'external untrusted' : (isKarte ? 'Karte · local untrusted' : (source.score != null ? source.score.toFixed(3) : (source.project || '-'))))}</span>
       </div>
       ${isWeb ? `
         <div class="runtime-result-meta">${escapeHtml(source.source_id || '-')} · ${escapeHtml(source.url || '-')}</div>
@@ -2417,8 +2429,8 @@ function renderChatSourcesPane({sources = [], title = 'Sources'} = {}) {
   list.innerHTML = latestChatSources.map((source, index) => `
     <button class="source-card ${index === activeChatSourceIndex ? 'active' : ''}" data-source-index="${index}">
       <div class="source-card-top">
-        <strong>${escapeHtml(source.source_type === 'web' ? (source.title || source.source_id || `Web ${index + 1}`) : (source.heading_path?.slice(-1)?.[0] || `Source ${index + 1}`))}</strong>
-        <span>${escapeHtml(source.source_type === 'web' ? 'WEB' : (source.score != null ? source.score.toFixed(3) : '-'))}</span>
+        <strong>${escapeHtml(source.source_type === 'web' || source.source_type === 'karte_context' ? (source.title || source.source_id || `${source.source_type === 'web' ? 'Web' : 'Karte'} ${index + 1}`) : (source.heading_path?.slice(-1)?.[0] || `Source ${index + 1}`))}</strong>
+        <span>${escapeHtml(source.source_type === 'web' ? 'WEB' : (source.source_type === 'karte_context' ? 'KARTE' : (source.score != null ? source.score.toFixed(3) : '-')))}</span>
       </div>
       <div class="source-card-path">${escapeHtml(source.source_type === 'web' ? (source.url || '-') : (source.source_path || '-'))}</div>
       <div class="source-card-meta">${escapeHtml(source.source_type === 'web' ? 'external_untrusted' : (source.project || '(default)'))}</div>
@@ -5199,6 +5211,11 @@ function renderChatResult(response, mode, prompt = '', routeState = null, {appen
     });
   }
   renderChatSourcesPane({sources: response?.sources || [], title: response?.sources?.length ? 'Used Sources' : 'Sources'});
+  if (response?.karte_context_status?.status === 'ok') {
+    setChatDropStatus(`Karte Personal Context · ${response.karte_context_status.source_count || 0} sources`);
+  } else if (response?.karte_context_status) {
+    setChatDropStatus('Karte Personal Context is unavailable. Continuing without saved context.');
+  }
   renderRouteInspectorCard(routeState);
 }
 

@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import json
 
@@ -12,6 +13,11 @@ from packages.eval_core.preference_schemas import (
     SubmitPreferenceVoteRequest,
 )
 from packages.karte_core.conversation import KarteConversationRequest
+from packages.karte_core.context import (
+    KarteContextError,
+    KarteContextReadRequest,
+    KarteContextSearchRequest,
+)
 from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage, EmbeddingRequest, RequestMetadata
 from packages.rag_core.schemas import IndexBrowseRequest, IndexSourceRequest, IngestRequest, RAGQueryRequest, SearchRequest
 from packages.router_core.schemas import RouteDecision, RoutePlanResponse
@@ -47,7 +53,7 @@ def _resolve_grounding_scope(metadata: RequestMetadata | None) -> tuple[str | No
     top_k = metadata.top_k if metadata.top_k and metadata.top_k > 0 else None
     if source_scope == "selected_docs":
         return project, source_path, tags, top_k
-    if source_scope == "project":
+    if source_scope in {"project", "personal_context"}:
         return project, None, tags, top_k
     return None, source_path if source_scope == "selected_docs" else None, tags, top_k
 
@@ -81,6 +87,25 @@ def _mark_local_sources(sources: list[dict]) -> list[dict]:
     return marked
 
 
+def _mark_karte_context_sources(sources: list[dict]) -> list[dict]:
+    marked: list[dict] = []
+    for index, source in enumerate(sources, start=1):
+        marked.append(
+            {
+                **source,
+                "chunk_id": f"karte:{source.get('doc_id', '')}",
+                "source_path": source.get("relative_path"),
+                "original_source_path": None,
+                "heading_path": [],
+                "chunk_text": source.get("snippet", ""),
+                "source_type": "karte_context",
+                "source_id": f"K{index}",
+                "trust_level": "local_untrusted",
+            }
+        )
+    return marked
+
+
 def _karte_conversation_service(request: Request):
     service = getattr(request.app.state, "karte_conversation_service", None)
     if service is None:
@@ -89,6 +114,16 @@ def _karte_conversation_service(request: Request):
             detail="Karte integration is unavailable. Set KARTE_DATA_DIR to a valid Karte workspace and restart Ephy.",
         )
     return service
+
+
+def _karte_context_client(request: Request):
+    client = getattr(request.app.state, "karte_context_client", None)
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Karte Personal Context is unavailable. Set KARTE_DATA_DIR and start Karte.",
+        )
+    return client
 
 
 def build_router() -> APIRouter:
@@ -104,6 +139,7 @@ def build_router() -> APIRouter:
             "web_search_enabled": config.web_search.enabled,
             "ephy_enabled": request.app.state.ephy_context is not None,
             "karte_enabled": getattr(request.app.state, "karte_conversation_service", None) is not None,
+            "karte_context_enabled": getattr(request.app.state, "karte_context_client", None) is not None,
         }
 
     @router.get("/v1/models")
@@ -133,7 +169,32 @@ def build_router() -> APIRouter:
             query_text = _latest_user_message_text(payload.messages)
             project, source_path, tags, top_k = _resolve_grounding_scope(payload.metadata)
             local_sources = []
-            if query_text:
+            karte_context_status: dict | None = None
+            source_scope = ((payload.metadata.source_scope if payload.metadata else None) or "").strip().lower()
+            if query_text and source_scope == "personal_context":
+                context_client = getattr(request.app.state, "karte_context_client", None)
+                if context_client is None:
+                    karte_context_status = {"status": "unavailable", "source_count": 0}
+                else:
+                    try:
+                        context_response = await asyncio.to_thread(
+                            context_client.search,
+                            query_text,
+                            projects=[project] if project else [],
+                            tags=tags,
+                            top_k=top_k or 5,
+                        )
+                        local_sources = _mark_karte_context_sources(
+                            [item.model_dump(mode="json") for item in context_response.results]
+                        )
+                        karte_context_status = {
+                            "status": context_response.status,
+                            "source_count": len(local_sources),
+                            "diagnostics": [item.model_dump() for item in context_response.diagnostics],
+                        }
+                    except KarteContextError:
+                        karte_context_status = {"status": "unavailable", "source_count": 0}
+            elif query_text:
                 try:
                     local_sources = _mark_local_sources(
                         rag_service.search_grounding_sources(
@@ -190,6 +251,8 @@ def build_router() -> APIRouter:
                 async def generate_chat_stream():
                     if web_search_status:
                         yield f"event: web_search_status\ndata: {json.dumps(web_search_status, ensure_ascii=False)}\n\n".encode("utf-8")
+                    if karte_context_status:
+                        yield f"event: karte_context_status\ndata: {json.dumps(karte_context_status, ensure_ascii=False)}\n\n".encode("utf-8")
                     if sources:
                         yield f"event: sources\ndata: {json.dumps({'sources': sources}, ensure_ascii=False)}\n\n".encode("utf-8")
                     try:
@@ -215,7 +278,42 @@ def build_router() -> APIRouter:
             response["sources"] = sources
         if web_search_status:
             response["web_search_status"] = web_search_status
+        if karte_context_status:
+            response["karte_context_status"] = karte_context_status
         return response
+
+    @router.post("/v1/karte/context/search")
+    async def karte_context_search(payload: KarteContextSearchRequest, request: Request) -> dict:
+        try:
+            response = await asyncio.to_thread(
+                _karte_context_client(request).search,
+                payload.query,
+                projects=payload.projects,
+                tags=payload.tags,
+                sensitivity_ceiling=payload.sensitivity_ceiling,
+                top_k=payload.top_k,
+            )
+            return response.model_dump(mode="json")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KarteContextError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @router.post("/v1/karte/context/read")
+    async def karte_context_read(payload: KarteContextReadRequest, request: Request) -> dict:
+        try:
+            response = await asyncio.to_thread(
+                _karte_context_client(request).read,
+                payload.doc_id,
+                projects=payload.projects,
+                tags=payload.tags,
+                sensitivity_ceiling=payload.sensitivity_ceiling,
+            )
+            return response.model_dump(mode="json")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KarteContextError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @router.post("/v1/karte/conversations/plan")
     async def karte_conversation_plan(payload: KarteConversationRequest, request: Request) -> dict:

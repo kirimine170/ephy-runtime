@@ -1,4 +1,17 @@
 from .contracts import KarteChangeProposal, KarteReceipt, PlacementCandidate, PlacementHint, SourceRef
+from .context import (
+    ContextDocument,
+    ContextRequest,
+    ContextResponse,
+    ContextScope,
+    ContextSearchResult,
+    KarteContextReadRequest,
+    KarteContextSearchRequest,
+    KarteContextClient,
+    KarteContextError,
+    KarteContextProtocolError,
+    KarteContextTimeout,
+)
 from .conversation import (
     ConversationMessage,
     KarteConversationPlanResponse,
@@ -14,6 +27,12 @@ from .source import KarteDocument, KarteScanResult, KarteSourceAdapter, KarteSou
 
 __all__ = [
     "KarteChangeProposal",
+    "KarteContextClient",
+    "KarteContextError",
+    "KarteContextProtocolError",
+    "KarteContextReadRequest",
+    "KarteContextSearchRequest",
+    "KarteContextTimeout",
     "KarteConversationPlanResponse",
     "KarteConversationPublishResponse",
     "KarteConversationRequest",
@@ -29,6 +48,11 @@ __all__ = [
     "KarteSourceAdapter",
     "KarteSourceIssue",
     "ConversationMessage",
+    "ContextDocument",
+    "ContextRequest",
+    "ContextResponse",
+    "ContextScope",
+    "ContextSearchResult",
     "ExistingDocumentMatch",
     "ProposalPublishResult",
     "ProposalPlan",

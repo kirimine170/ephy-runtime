@@ -67,3 +67,29 @@ func TestParseStreamErrorHandlesMalformedPayload(t *testing.T) {
 		t.Fatalf("parseStreamError() = %v", err)
 	}
 }
+
+func TestExtractKarteContextStatusAndDocumentIdentity(t *testing.T) {
+	raw := map[string]any{
+		"karte_context_status": map[string]any{"status": "ok", "source_count": float64(1)},
+		"sources": []any{
+			map[string]any{
+				"chunk_id": "karte:doc:context-001", "doc_id": "doc:context-001",
+				"source_path":   "content/projects/ephy/decision/2026-09/context.md",
+				"relative_path": "content/projects/ephy/decision/2026-09/context.md",
+				"heading_path":  []any{}, "project": "ephy", "kind": "decision",
+				"tags": []any{"architecture"}, "sensitivity": "internal",
+				"chunk_text": "Karte owns Personal Context.", "score": float64(10),
+				"source_type": "karte_context", "source_id": "K1",
+			},
+		},
+	}
+
+	status := extractKarteContextStatus(raw)
+	if status == nil || status.Status != "ok" || status.SourceCount != 1 {
+		t.Fatalf("unexpected Karte context status: %#v", status)
+	}
+	sources := extractChatSources(raw)
+	if len(sources) != 1 || sources[0].DocID != "doc:context-001" || sources[0].Sensitivity != "internal" {
+		t.Fatalf("Karte source identity was not preserved: %#v", sources)
+	}
+}
