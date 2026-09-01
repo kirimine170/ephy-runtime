@@ -2,6 +2,7 @@
 set -euo pipefail
 
 EPHY_RUNTIME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${EPHY_RUNTIME_ROOT}/scripts/_karte_runtime.sh"
 EPHY_DESKTOP_EXECUTABLE="${EPHY_RUNTIME_ROOT}/desktop/build/bin/ephy-runtime.app/Contents/MacOS/ephy-runtime"
 if [[ ! -x "${EPHY_DESKTOP_EXECUTABLE}" ]]; then
   EPHY_DESKTOP_EXECUTABLE="${EPHY_RUNTIME_ROOT}/desktop/build/bin/ephy-runtime"
@@ -11,5 +12,6 @@ if [[ ! -x "${EPHY_DESKTOP_EXECUTABLE}" ]]; then
   exit 1
 fi
 cd "${EPHY_RUNTIME_ROOT}"
+start_bundled_karte_runtime "${EPHY_RUNTIME_ROOT}"
 export EPHY_START_CONVERSATION=1
 exec "${EPHY_DESKTOP_EXECUTABLE}" "$@"
