@@ -73,3 +73,5 @@ export KARTE_DATA_DIR=/absolute/path/to/karte_data
 ```
 
 In Ephy Chat，select a project or leave it empty to exercise consultation，then complete a conversation．Review the automatically displayed Karte card and choose `Karteへ送る`．Within five seconds Karte's top-bar button changes to `Ephy候補 (1)`．Open it，review the full create preview or append diff，then use `採用`，`編集して採用`，or `破棄`．Back in Ephy，`Karteの処理結果を確認` reads the receipt．An accepted create must appear below `content/projects/<project>/<kind>/<YYYY-MM>` with a stable `doc_id`．
+
+For a self-contained local Runtime，install an Apple Silicon `Karte.app` artifact with `bash scripts/install_karte_runtime.sh /absolute/path/to/Karte-macOS-apple-silicon.zip`．The bundle is copied to the Git-ignored `data/runtime/karte/Karte.app`．`scripts/start_conversation_app.sh` then starts that Karte bundle automatically and passes the same `KARTE_DATA_DIR` to Karte，Ephy Desktop，and Gateway．When `KARTE_DATA_DIR` is not set，the launcher creates `data/runtime/karte-data` for isolated acceptance testing．Set `EPHY_START_KARTE=0` to suppress automatic Karte startup，or `EPHY_KARTE_EXECUTABLE` to test an explicit non-symlink executable．
