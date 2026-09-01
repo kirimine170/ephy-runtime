@@ -11,6 +11,11 @@ import {
   renderSinglePresetBatchActionButtons,
 } from './presetBatchRender';
 import {prepareWebSearchRequest} from './webSearchFlow';
+import {
+  buildKarteConversationRequest,
+  formatLocalISOString,
+  renderKarteConversationCard,
+} from './karteConversation';
 import {mountModelManager} from './modelManager';
 import {
   assertBlindPreferencePair,
@@ -51,6 +56,7 @@ import {
   GetBatchWorkflowState,
   GetExecutionHistory,
   GetGatewayURL,
+  GetKarteProposalStatus,
   GetIndexSource,
   ListExportedResults,
   ListPreferenceSessions,
@@ -65,7 +71,9 @@ import {
   NextPreferencePair,
   OpenWebSource,
   PlanWebSearch,
+  PlanKarteConversation,
   PreferenceStats,
+  PublishKarteConversation,
   ApproveWebSearch,
   RecordExecution,
   ReloadGatewayConfig,
@@ -135,6 +143,8 @@ let preferencePrefetchPromise = null;
 let preferenceLastVote = null;
 let preferenceCorrectionVoteId = '';
 let chatThreadEntries = [];
+let chatConversationId = createKarteConversationId();
+let chatOccurredAt = formatLocalISOString();
 let latestChatSources = [];
 let activeChatSourceIndex = 0;
 let latestRouteInspectorState = null;
@@ -143,6 +153,7 @@ let activeChatStreamRequestId = '';
 let chatStreamListenerBound = false;
 let chatSendInFlight = false;
 let webSearchAvailable = false;
+let karteAvailable = false;
 let sidebarCollapsed = false;
 let activePanelTab = 'chat';
 const tabScrollPositions = new Map();
@@ -1620,8 +1631,10 @@ async function refreshWebSearchCapability() {
   try {
     const health = await Health();
     webSearchAvailable = Boolean(health?.web_search_enabled);
+    karteAvailable = Boolean(health?.karte_enabled);
   } catch (_error) {
     webSearchAvailable = false;
+    karteAvailable = false;
   }
   toggle.disabled = !webSearchAvailable;
   toggle.checked = webSearchAvailable && toggle.checked;
@@ -1633,6 +1646,15 @@ async function refreshWebSearchCapability() {
       : 'Web search is disabled. Run setup_searxng.sh and enable configs/web.local.yaml.',
   );
   setChatWebStatus(webSearchAvailable ? 'Local only' : 'Web unavailable', webSearchAvailable ? '' : 'warning');
+}
+
+async function refreshKarteCapability() {
+  try {
+    const health = await Health();
+    karteAvailable = Boolean(health?.karte_enabled);
+  } catch (_error) {
+    karteAvailable = false;
+  }
 }
 
 function setSidebarCollapsed(collapsed) {
@@ -1908,6 +1930,11 @@ function createChatRequestId() {
   return `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function createKarteConversationId() {
+  const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `conversation-${randomPart}`;
+}
+
 function getChatModeLabel(mode) {
   const option = [...(document.getElementById('chat-mode')?.options || [])].find((item) => item.value === mode);
   return option?.textContent || mode || 'Auto';
@@ -1952,6 +1979,8 @@ function setChatSendState(inFlight) {
 
 function startNewChat() {
   chatThreadEntries = [];
+  chatConversationId = createKarteConversationId();
+  chatOccurredAt = formatLocalISOString();
   latestChatSources = [];
   activeChatSourceIndex = 0;
   latestRouteInspectorState = null;
@@ -2012,19 +2041,30 @@ function renderChatThread() {
       }
       <div class="message-body">${escapeHtml(entry.text || (entry.streaming ? '…' : ''))}</div>
       ${
-        entry.role === 'assistant' && entry.canContinue
+        entry.role === 'assistant' && !entry.streaming
           ? `
             <div class="message-actions">
-              <button
-                class="ghost-btn compact-btn"
-                type="button"
-                data-chat-action="continue"
-                data-request-id="${escapeHtml(entry.requestId || '')}"
-              >Continue</button>
+              ${entry.canContinue ? `
+                <button
+                  class="ghost-btn compact-btn"
+                  type="button"
+                  data-chat-action="continue"
+                  data-request-id="${escapeHtml(entry.requestId || '')}"
+                >Continue</button>
+              ` : ''}
+              ${entry.karteMemory ? '' : `
+                <button
+                  class="ghost-btn compact-btn"
+                  type="button"
+                  data-karte-action="plan"
+                  data-request-id="${escapeHtml(entry.requestId || '')}"
+                >Karteにまとめる</button>
+              `}
             </div>
           `
           : ''
       }
+      ${entry.role === 'assistant' ? renderKarteConversationCard(entry.karteMemory, entry.requestId || '') : ''}
     </article>
   `).join('');
   container.scrollTop = container.scrollHeight;
@@ -2136,6 +2176,145 @@ function failStreamingChat({requestId, message}) {
     }
     return entry;
   });
+}
+
+function chatEntriesThrough(requestId) {
+  const index = chatThreadEntries.findIndex((entry) => entry.requestId === requestId);
+  return index < 0 ? [] : chatThreadEntries.slice(0, index + 1);
+}
+
+function defaultKarteProject() {
+  return document.getElementById('chat-project-select')?.value?.trim()
+    || document.getElementById('rag-project')?.value?.trim()
+    || '';
+}
+
+function buildKarteRequest(requestId, overrides = {}) {
+  const current = chatThreadEntries.find((entry) => entry.requestId === requestId)?.karteMemory || {};
+  return buildKarteConversationRequest({
+    conversationId: chatConversationId,
+    occurredAt: chatOccurredAt,
+    entries: chatEntriesThrough(requestId),
+    project: overrides.project ?? current.project ?? defaultKarteProject(),
+    kind: overrides.kind ?? current.kind ?? '',
+    sensitivity: 'internal',
+    tags: parseTagList(document.getElementById('rag-tags')?.value || ''),
+    resolution: overrides.resolution ?? current.resolution ?? 'auto',
+    intendedDocId: overrides.intendedDocId ?? current.intendedDocId ?? '',
+  });
+}
+
+function setKarteMemory(requestId, updater) {
+  updateChatThreadEntry(requestId, (entry) => {
+    entry.karteMemory = typeof updater === 'function' ? updater(entry.karteMemory || {}) : updater;
+    return entry;
+  });
+}
+
+async function planKarteConversation(requestId, overrides = {}) {
+  let request;
+  try {
+    request = buildKarteRequest(requestId, overrides);
+  } catch (error) {
+    setKarteMemory(requestId, (current) => ({...current, ...overrides, state: 'error', error: String(error)}));
+    return null;
+  }
+  setKarteMemory(requestId, (current) => ({...current, ...overrides, state: 'planning', dismissed: false}));
+  try {
+    const plan = await PlanKarteConversation(request);
+    setKarteMemory(requestId, (current) => ({
+      ...current,
+      ...overrides,
+      state: plan.publishable ? 'ready' : 'consultation',
+      plan,
+      error: '',
+      project: request.project || '',
+      kind: request.kind || '',
+      resolution: request.resolution || 'auto',
+      intendedDocId: request.intended_doc_id || '',
+    }));
+    return plan;
+  } catch (error) {
+    setKarteMemory(requestId, (current) => ({...current, ...overrides, state: 'error', error: String(error)}));
+    return null;
+  }
+}
+
+async function autoPlanKarteConversation(requestId) {
+  if (!karteAvailable) return null;
+  return planKarteConversation(requestId);
+}
+
+function readKarteResolution(requestId) {
+  const card = document.querySelector(`[data-karte-card="${requestId}"]`);
+  if (!card) return {};
+  return {
+    project: card.querySelector('[data-karte-field="project"]')?.value?.trim() || '',
+    kind: card.querySelector('[data-karte-field="kind"]')?.value || '',
+    resolution: card.querySelector('[data-karte-field="resolution"]')?.value || 'auto',
+    intendedDocId: card.querySelector('[data-karte-field="intended-doc-id"]')?.value || '',
+  };
+}
+
+async function publishKarteConversation(requestId) {
+  const overrides = readKarteResolution(requestId);
+  let request;
+  try {
+    request = buildKarteRequest(requestId, overrides);
+  } catch (error) {
+    setKarteMemory(requestId, (current) => ({...current, state: 'error', error: String(error)}));
+    return;
+  }
+  setKarteMemory(requestId, (current) => ({...current, ...overrides, state: 'planning'}));
+  try {
+    const latestPlan = await PlanKarteConversation(request);
+    if (!latestPlan.publishable) {
+      setKarteMemory(requestId, (current) => ({...current, ...overrides, state: 'consultation', plan: latestPlan}));
+      return;
+    }
+    const published = await PublishKarteConversation(request);
+    setKarteMemory(requestId, (current) => ({
+      ...current,
+      ...overrides,
+      state: published.state,
+      plan: published.plan,
+      candidateId: published.candidate_id,
+      error: '',
+    }));
+  } catch (error) {
+    setKarteMemory(requestId, (current) => ({...current, ...overrides, state: 'error', error: String(error)}));
+  }
+}
+
+async function refreshKarteProposal(requestId) {
+  const entry = chatThreadEntries.find((item) => item.requestId === requestId);
+  const candidateId = entry?.karteMemory?.candidateId || entry?.karteMemory?.plan?.candidate_id || '';
+  if (!candidateId) return;
+  try {
+    const status = await GetKarteProposalStatus(candidateId);
+    setKarteMemory(requestId, (current) => ({...current, state: status.state, receipt: status.receipt || null}));
+  } catch (error) {
+    setKarteMemory(requestId, (current) => ({...current, state: 'error', error: String(error)}));
+  }
+}
+
+async function handleKarteConversationAction(button) {
+  const requestId = button.dataset.requestId || '';
+  if (!requestId) return;
+  const action = button.dataset.karteAction;
+  if (action === 'dismiss') {
+    setKarteMemory(requestId, (current) => ({...current, dismissed: true}));
+    return;
+  }
+  if (action === 'publish') {
+    await publishKarteConversation(requestId);
+    return;
+  }
+  if (action === 'refresh') {
+    await refreshKarteProposal(requestId);
+    return;
+  }
+  await planKarteConversation(requestId, readKarteResolution(requestId));
 }
 
 function bindChatStreamEvents() {
@@ -7358,6 +7537,9 @@ async function runChatFromForm() {
       const result = await runRagRequest({answer: true, queryOverride: prompt, origin: 'chat', requestId});
       if (result?.ok) {
         promptInput.value = '';
+        if (!isLengthLimitedFinishReason(result?.finishReason)) {
+          await autoPlanKarteConversation(requestId);
+        }
       }
       return result;
     } catch (error) {
@@ -7414,6 +7596,9 @@ async function runChatFromForm() {
       thinking: response?.thinking || '',
       finishReason: response?.finish_reason || '',
     });
+    if (!isLengthLimitedFinishReason(response?.finish_reason)) {
+      await autoPlanKarteConversation(requestId);
+    }
     await refreshExecutionHistory();
     promptInput.value = '';
     return {
@@ -7468,6 +7653,9 @@ async function continueChatGeneration(requestId) {
           : `${modeLabel} · continued`,
         finishReason: result?.finishReason || '',
       });
+      if (result?.ok && !isLengthLimitedFinishReason(result?.finishReason)) {
+        await autoPlanKarteConversation(continuationRequestId);
+      }
       await refreshExecutionHistory();
       return result;
     } catch (error) {
@@ -7499,6 +7687,9 @@ async function continueChatGeneration(requestId) {
       thinking: response?.thinking || '',
       finishReason: response?.finish_reason || '',
     });
+    if (!isLengthLimitedFinishReason(response?.finish_reason)) {
+      await autoPlanKarteConversation(continuationRequestId);
+    }
     await refreshExecutionHistory();
     return {
       ok: true,
@@ -8187,6 +8378,11 @@ document.getElementById('send-chat').addEventListener('click', async () => {
 });
 
 document.getElementById('chat-output').addEventListener('click', async (event) => {
+  const karteButton = event.target.closest('[data-karte-action]');
+  if (karteButton) {
+    await handleKarteConversationAction(karteButton);
+    return;
+  }
   const button = event.target.closest('[data-chat-action="continue"]');
   if (!button) {
     return;
@@ -8624,6 +8820,7 @@ async function initializeWorkbench() {
   refreshPreferenceSessions({quiet: true});
   restoreBatchWorkflowState();
   window.setInterval(refreshRuntime, 4000);
+  window.setInterval(refreshKarteCapability, 4000);
   window.setInterval(restoreBatchWorkflowState, 2000);
 }
 

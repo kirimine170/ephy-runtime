@@ -12,7 +12,8 @@ from packages.llm_runtime.adapter import LlamaCppChatAdapter
 from packages.llm_runtime.schemas import ChatCompletionRequest, RequestMetadata
 from packages.prompt_core.loader import PromptManager
 from packages.router_core.router import ModelRouter
-from .chunker import chunk_text
+from packages.karte_core.source import KarteDocument, KarteSourceAdapter
+from .chunker import chunk_text, split_markdown_sections
 from .embedding import build_embedder
 from .loaders import load_document_sections
 from .reranker import build_reranker
@@ -132,6 +133,58 @@ class RagService:
             "copied_files": copied_files,
         }
 
+    def ingest_karte(
+        self,
+        adapter: KarteSourceAdapter,
+        *,
+        project: str = "karte",
+        tags: list[str] | None = None,
+    ) -> dict:
+        scan = adapter.scan()
+        previous_paths = {
+            chunk.doc_id: chunk.relative_path
+            for chunk in self._vector_store.load_chunks(project=project)
+            if chunk.doc_id and chunk.relative_path
+        }
+        result = self.sync_karte_documents(
+            documents=scan.documents,
+            replace_paths={str(adapter.content_root)},
+            project=project,
+            tags=tags or [],
+        )
+        result["issues"] = [issue.__dict__ for issue in scan.issues]
+        result["renamed_documents"] = [
+            {"doc_id": document.doc_id, "from": previous_paths[document.doc_id], "to": document.relative_path}
+            for document in scan.documents
+            if document.doc_id in previous_paths and previous_paths[document.doc_id] != document.relative_path
+        ]
+        result["content_root"] = str(adapter.content_root)
+        result["copied_files"] = []
+        return result
+
+    def sync_karte_documents(
+        self,
+        *,
+        documents: list[KarteDocument],
+        replace_paths: set[str],
+        project: str = "karte",
+        tags: list[str] | None = None,
+    ) -> dict:
+        indexed_chunks: list[IndexedChunk] = []
+        requested_tags = tags or []
+        for document in documents:
+            indexed_chunks.extend(self._index_karte_document(document, project=project, tags=requested_tags))
+        self._embed_indexed_chunks(indexed_chunks)
+        vector_size = len(indexed_chunks[0].embedding or []) if indexed_chunks else self._config.rag.embedding_dimensions
+        total_chunks = self._vector_store.replace_for_paths(replace_paths, indexed_chunks, vector_size=vector_size)
+        return {
+            "indexed_documents": len(documents),
+            "indexed_chunks": len(indexed_chunks),
+            "total_chunks": total_chunks,
+            "collection": self._config.vector_db.collection,
+            "provider": self._config.vector_db.provider,
+        }
+
     def search(self, payload: SearchRequest) -> dict:
         retrieval_query = self._expand_retrieval_query(payload.query)
         query_vector = self._embedder.embed(retrieval_query)
@@ -206,6 +259,11 @@ class RagService:
                 {
                     "source_path": chunk.source_path,
                     "original_source_path": chunk.original_source_path,
+                    "doc_id": chunk.doc_id,
+                    "title": chunk.title,
+                    "relative_path": chunk.relative_path,
+                    "updated_at": chunk.updated_at,
+                    "source_sha256": chunk.source_sha256,
                     "project": chunk.project,
                     "chunk_count": 0,
                     "sample_heading": " > ".join(chunk.heading_path) if chunk.heading_path else None,
@@ -228,6 +286,11 @@ class RagService:
             IndexSourceSummary(
                 source_path=item["source_path"],
                 original_source_path=item["original_source_path"],
+                doc_id=item["doc_id"],
+                title=item["title"],
+                relative_path=item["relative_path"],
+                updated_at=item["updated_at"],
+                source_sha256=item["source_sha256"],
                 project=item["project"],
                 chunk_count=item["chunk_count"],
                 sample_heading=item["sample_heading"],
@@ -417,6 +480,44 @@ class RagService:
                         heading_path=heading_path,
                         project=project,
                         tags=tags,
+                        chunk_text=text_chunk,
+                        hash=hashlib.sha256(text_chunk.encode("utf-8")).hexdigest(),
+                        embedding=None,
+                    )
+                )
+        return chunks
+
+    def _index_karte_document(
+        self,
+        document: KarteDocument,
+        *,
+        project: str,
+        tags: list[str],
+    ) -> list[IndexedChunk]:
+        normalized_tags = list(dict.fromkeys([*document.tags, *tags]))
+        chunks: list[IndexedChunk] = []
+        for section_index, section in enumerate(split_markdown_sections(document.body)):
+            for chunk_index, text_chunk in enumerate(
+                chunk_text(
+                    section.content,
+                    chunk_size=self._config.rag.chunk_size,
+                    overlap=self._config.rag.chunk_overlap,
+                )
+            ):
+                source_key = f"karte:{document.doc_id}:{section_index}:{chunk_index}:{text_chunk}"
+                chunks.append(
+                    IndexedChunk(
+                        chunk_id=str(uuid.uuid5(uuid.NAMESPACE_URL, source_key)),
+                        source_path=str(document.absolute_path),
+                        original_source_path=None,
+                        doc_id=document.doc_id,
+                        title=document.title,
+                        relative_path=document.relative_path,
+                        updated_at=document.updated_at,
+                        source_sha256=document.sha256,
+                        heading_path=section.heading_path,
+                        project=project,
+                        tags=normalized_tags,
                         chunk_text=text_chunk,
                         hash=hashlib.sha256(text_chunk.encode("utf-8")).hexdigest(),
                         embedding=None,

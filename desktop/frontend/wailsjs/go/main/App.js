@@ -90,6 +90,10 @@ export function GetIndexSource(arg1) {
   return window['go']['main']['App']['GetIndexSource'](arg1);
 }
 
+export function GetKarteProposalStatus(arg1) {
+  return window['go']['main']['App']['GetKarteProposalStatus'](arg1);
+}
+
 export function GetLocalConfigFiles() {
   return window['go']['main']['App']['GetLocalConfigFiles']();
 }
@@ -154,12 +158,20 @@ export function OpenWebSource(arg1) {
   return window['go']['main']['App']['OpenWebSource'](arg1);
 }
 
+export function PlanKarteConversation(arg1) {
+  return window['go']['main']['App']['PlanKarteConversation'](arg1);
+}
+
 export function PlanWebSearch(arg1) {
   return window['go']['main']['App']['PlanWebSearch'](arg1);
 }
 
 export function PreferenceStats(arg1) {
   return window['go']['main']['App']['PreferenceStats'](arg1);
+}
+
+export function PublishKarteConversation(arg1) {
+  return window['go']['main']['App']['PublishKarteConversation'](arg1);
 }
 
 export function Query(arg1) {

@@ -61,6 +61,7 @@ type HealthResponse struct {
 	Service          string   `json:"service"`
 	ConfiguredModels []string `json:"configured_models"`
 	WebSearchEnabled bool     `json:"web_search_enabled"`
+	KarteEnabled     bool     `json:"karte_enabled"`
 }
 
 type ModelListResponse struct {
@@ -123,6 +124,57 @@ type ChatResponse struct {
 	FinishReason    string           `json:"finish_reason,omitempty"`
 	Raw             any              `json:"raw"`
 	WebSearchStatus *WebSearchStatus `json:"web_search_status,omitempty"`
+}
+
+type KarteConversationMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type KarteConversationRequest struct {
+	ConversationID string                     `json:"conversation_id"`
+	Messages       []KarteConversationMessage `json:"messages"`
+	OccurredAt     string                     `json:"occurred_at"`
+	Project        string                     `json:"project,omitempty"`
+	Kind           string                     `json:"kind,omitempty"`
+	Sensitivity    string                     `json:"sensitivity"`
+	Tags           []string                   `json:"tags"`
+	Resolution     string                     `json:"resolution"`
+	IntendedDocID  string                     `json:"intended_doc_id,omitempty"`
+}
+
+type KarteSimilarDocument struct {
+	DocID        string  `json:"doc_id"`
+	Title        string  `json:"title"`
+	RelativePath string  `json:"relative_path"`
+	Project      *string `json:"project"`
+	Kind         *string `json:"kind"`
+	Similarity   float64 `json:"similarity"`
+}
+
+type KarteConversationPlanResponse struct {
+	CandidateID      string                 `json:"candidate_id"`
+	Recommendation   string                 `json:"recommendation"`
+	Publishable      bool                   `json:"publishable"`
+	NeedsProject     bool                   `json:"needs_project"`
+	Reasons          []string               `json:"reasons"`
+	SummaryTitle     string                 `json:"summary_title"`
+	SummaryMarkdown  string                 `json:"summary_markdown"`
+	SimilarDocuments []KarteSimilarDocument `json:"similar_documents"`
+	Proposal         map[string]any         `json:"proposal"`
+}
+
+type KarteConversationPublishResponse struct {
+	CandidateID string                        `json:"candidate_id"`
+	State       string                        `json:"state"`
+	Path        string                        `json:"path"`
+	Plan        KarteConversationPlanResponse `json:"plan"`
+}
+
+type KarteConversationStatusResponse struct {
+	CandidateID string         `json:"candidate_id"`
+	State       string         `json:"state"`
+	Receipt     map[string]any `json:"receipt,omitempty"`
 }
 
 type WebSearchPlanResponse struct {
@@ -683,6 +735,28 @@ func (a *App) Health() (*HealthResponse, error) {
 func (a *App) Models() (*ModelListResponse, error) {
 	var response ModelListResponse
 	err := a.getJSON("/v1/models", &response)
+	return &response, err
+}
+
+func (a *App) PlanKarteConversation(request KarteConversationRequest) (*KarteConversationPlanResponse, error) {
+	var response KarteConversationPlanResponse
+	err := a.postJSON("/v1/karte/conversations/plan", request, &response)
+	return &response, err
+}
+
+func (a *App) PublishKarteConversation(request KarteConversationRequest) (*KarteConversationPublishResponse, error) {
+	var response KarteConversationPublishResponse
+	err := a.postJSON("/v1/karte/conversations/publish", request, &response)
+	return &response, err
+}
+
+func (a *App) GetKarteProposalStatus(candidateID string) (*KarteConversationStatusResponse, error) {
+	trimmed := strings.TrimSpace(candidateID)
+	if trimmed == "" {
+		return nil, fmt.Errorf("candidate_id is required")
+	}
+	var response KarteConversationStatusResponse
+	err := a.getJSON("/v1/karte/proposals/"+url.PathEscape(trimmed), &response)
 	return &response, err
 }
 

@@ -185,7 +185,7 @@ Karte bundle を Markdown 化して index し、そのまま検索対象に入�
 
 bundle 形式は `configs/karte.sample.json` と同じで、`cards[].title` と `cards[].body` を必須にし、`project` と `tags` は card ごとに指定できる。
 
-このJSON bundle入出力は互換adapterの試作であり，Karte本体の`KARTE_DATA_DIR/content`と接続した実統合ではない．正式境界は[`ADR-0007`](docs/adr/ADR-0007-karte-adapter-is-compatibility-layer.md)で未決定事項として管理する．
+このJSON bundle入出力は互換adapterであり，productionの正式境界ではない．V1の正式境界は[`ADR-0007`](docs/adr/ADR-0007-karte-adapter-is-compatibility-layer.md)で確定したread-only filesystem adapter＋reviewed outboxである．利用方法，security report，watcher recovery，proposal／receipt commandは[`Karte filesystem integration V1`](docs/KARTE_FILESYSTEM_INTEGRATION.md)を参照する．
 
 ## RAG の簡易確認
 

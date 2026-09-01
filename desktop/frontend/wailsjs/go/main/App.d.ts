@@ -46,6 +46,8 @@ export function GetGatewayURL():Promise<string>;
 
 export function GetIndexSource(arg1:main.IndexSourceRequest):Promise<Record<string, any>>;
 
+export function GetKarteProposalStatus(arg1:string):Promise<main.KarteConversationStatusResponse>;
+
 export function GetLocalConfigFiles():Promise<Array<main.LocalConfigFile>>;
 
 export function GetLocalModelCatalog():Promise<main.LocalModelCatalog>;
@@ -78,9 +80,13 @@ export function NextPreferencePair(arg1:string):Promise<Record<string, any>>;
 
 export function OpenWebSource(arg1:string):Promise<void>;
 
+export function PlanKarteConversation(arg1:main.KarteConversationRequest):Promise<main.KarteConversationPlanResponse>;
+
 export function PlanWebSearch(arg1:string):Promise<main.WebSearchPlanResponse>;
 
 export function PreferenceStats(arg1:string):Promise<Record<string, any>>;
+
+export function PublishKarteConversation(arg1:main.KarteConversationRequest):Promise<main.KarteConversationPublishResponse>;
 
 export function Query(arg1:main.QueryRequest):Promise<main.QueryResponse>;
 
