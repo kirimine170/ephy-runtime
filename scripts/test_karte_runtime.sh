@@ -21,17 +21,23 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$(dirname "${FAKE_EXECUTABLE}")"
-printf '#!/usr/bin/env python3\nimport os\nimport time\nfrom pathlib import Path\nPath(r"%s/observed-data-dir").write_text(os.environ["KARTE_DATA_DIR"])\ntime.sleep(30)\n' "${TEST_ROOT}" > "${FAKE_EXECUTABLE}"
+printf '#!/usr/bin/env bash\nprintf "%%s" "$KARTE_DATA_DIR" > "%s/observed-data-dir"\nexec -a "$0" sleep 30\n' "${TEST_ROOT}" > "${FAKE_EXECUTABLE}"
 chmod +x "${FAKE_EXECUTABLE}"
 
 resolved="$(resolve_karte_runtime_executable "${TEST_ROOT}")"
-[[ "${resolved}" == "${FAKE_EXECUTABLE}" ]]
+if [[ "${resolved}" != "${FAKE_EXECUTABLE}" ]]; then
+  echo "Bundled Karte executable resolution failed．" >&2
+  exit 1
+fi
 
 export KARTE_DATA_DIR="${FAKE_DATA}"
 export EPHY_KARTE_LAUNCH_MODE=direct
 start_bundled_karte_runtime "${TEST_ROOT}"
 pid_file="${TEST_ROOT}/data/runtime/pids/karte.pid"
-karte_runtime_pid_is_live "${pid_file}" "${FAKE_EXECUTABLE}"
+if ! karte_runtime_pid_is_live "${pid_file}" "${FAKE_EXECUTABLE}"; then
+  echo "Fake Karte process identity was not retained．" >&2
+  exit 1
+fi
 for _ in {1..50}; do
   [[ -f "${TEST_ROOT}/observed-data-dir" ]] && break
   sleep 0.1
