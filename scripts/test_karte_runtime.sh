@@ -4,11 +4,16 @@ set -euo pipefail
 EPHY_RUNTIME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${EPHY_RUNTIME_ROOT}/scripts/_karte_runtime.sh"
 
-TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ephy-karte-runtime-test.XXXXXX")"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ephy-karte-runtime-test.(path)[v1].XXXXXX")"
 FAKE_EXECUTABLE="${TEST_ROOT}/data/runtime/karte/Karte.app/Contents/MacOS/karte"
 FAKE_DATA="${TEST_ROOT}/karte-data"
+exact_pid=""
 
 cleanup() {
+  if [[ "${exact_pid:-}" =~ ^[0-9]+$ ]]; then
+    kill "${exact_pid}" 2>/dev/null || true
+    wait "${exact_pid}" 2>/dev/null || true
+  fi
   if [[ -f "${TEST_ROOT}/data/runtime/pids/karte.pid" ]]; then
     IFS= read -r pid < "${TEST_ROOT}/data/runtime/pids/karte.pid" || true
     if [[ "${pid:-}" =~ ^[0-9]+$ ]]; then
@@ -23,6 +28,20 @@ trap cleanup EXIT
 mkdir -p "$(dirname "${FAKE_EXECUTABLE}")"
 printf '#!/usr/bin/env bash\nprintf "%%s" "$KARTE_DATA_DIR" > "%s/observed-data-dir"\nwhile :; do sleep 1; done\n' "${TEST_ROOT}" > "${FAKE_EXECUTABLE}"
 chmod +x "${FAKE_EXECUTABLE}"
+
+EXACT_EXECUTABLE="${TEST_ROOT}/Karte (1)[test]"
+if ps -ww -axo pid=,command= >/dev/null 2>&1; then
+  cp "$(command -v sleep)" "${EXACT_EXECUTABLE}"
+  "${EXACT_EXECUTABLE}" 30 &
+  exact_pid=$!
+  detected_pid="$(karte_runtime_find_process_pid "${EXACT_EXECUTABLE}")"
+  kill "${exact_pid}" 2>/dev/null || true
+  wait "${exact_pid}" 2>/dev/null || true
+  if [[ "${detected_pid}" != "${exact_pid}" ]]; then
+    echo "Karte process lookup failed for a path containing regex characters．" >&2
+    exit 1
+  fi
+fi
 
 resolved="$(resolve_karte_runtime_executable "${TEST_ROOT}")"
 if [[ "${resolved}" != "${FAKE_EXECUTABLE}" ]]; then

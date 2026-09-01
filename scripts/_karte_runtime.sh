@@ -42,6 +42,21 @@ karte_runtime_pid_is_live() {
   return 0
 }
 
+karte_runtime_find_process_pid() {
+  local executable=$1
+  local candidate_pid
+  local candidate_command
+
+  while read -r candidate_pid candidate_command; do
+    if [[ "${candidate_pid}" =~ ^[0-9]+$ ]] &&
+      [[ "${candidate_command}" == "${executable}" || "${candidate_command}" == "${executable} "* ]]; then
+      printf '%s\n' "${candidate_pid}"
+      return 0
+    fi
+  done < <(ps -ww -axo pid=,command= 2>/dev/null)
+  return 1
+}
+
 start_bundled_karte_runtime() {
   local runtime_root=$1
   local executable
@@ -75,7 +90,7 @@ start_bundled_karte_runtime() {
     open --env "KARTE_DATA_DIR=${KARTE_DATA_DIR}" "${app_bundle}" >>"${log_file}" 2>&1
     pid=""
     for _ in {1..50}; do
-      IFS= read -r pid < <(pgrep -f -x "${executable}" 2>/dev/null || true)
+      pid="$(karte_runtime_find_process_pid "${executable}" || true)"
       [[ "${pid}" =~ ^[0-9]+$ ]] && break
       sleep 0.1
     done
