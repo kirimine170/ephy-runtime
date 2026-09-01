@@ -17,7 +17,8 @@ REQUIRED_FILES = {
     Path("fixtures/accepted-receipt.json"),
     Path("fixtures/create-proposal.json"),
     Path("fixtures/invalid-traversal-proposal.json"),
-    Path("fixtures/update-proposal.json"),
+    Path("fixtures/append-proposal.json"),
+    Path("fixtures/consultation-proposal.json"),
 }
 
 

@@ -33,6 +33,7 @@ class KarteOutbox:
             self._assert_within_root(directory)
 
     def publish(self, proposal: KarteChangeProposal) -> ProposalPublishResult:
+        proposal.require_publishable()
         receipt = self.read_receipt(proposal.candidate_id)
         if receipt is not None:
             return ProposalPublishResult(proposal.candidate_id, "processed", str(self._receipt_path(proposal.candidate_id)))

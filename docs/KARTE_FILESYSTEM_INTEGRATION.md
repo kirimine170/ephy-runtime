@@ -1,10 +1,16 @@
-# Karte filesystem integration V1
+# Karte filesystem integration V1.1
 
 ## Boundary
 
 Karte owns canonical Markdown under `KARTE_DATA_DIR/content`．Ephy's V1 integration reads only `content/**/*.md` and never routes canonical sources through the generic ingest copy into `LW_data`．Ephy writes only versioned proposal JSON below `.mdsys/ephy/outbox/pending` and reads receipts below `.mdsys/ephy/outbox/receipts`．The JSON bundle in `packages/karte_core` remains a compatibility bridge．
 
-The versioned proposal／receipt schemas and synthetic fixtures are under `schemas/karte-ephy/v1`．Create and update are the only enabled proposal operations．
+The versioned proposal／receipt schemas and synthetic fixtures are under `schemas/karte-ephy/v1`．Create and append are the only enabled proposal operations．Create contains a complete document candidate and no final path．Append contains only a frontmatter patch and Markdown fragment，and requires a stable `doc_id`，canonical path，and base hash．
+
+Every proposal includes a path-safe project slug，kind，`YYYY-MM`，confidence，filename candidate，and one to three placement candidates．Supported kinds are `note`，`meeting`，`decision`，`plan`，`task`，`research`，`reference`，`report`，`person`，`organization`，and `journal`．Tags are independent retrieval metadata and never determine directory membership by themselves．
+
+When classification is unresolved or a similar document may be the correct append target，Ephy sets `consultation_required` and asks the user before publication．`KarteOutbox.publish` rejects unresolved proposals．After consultation，Karte applies its project-first `content/projects/<project>/<kind>/<YYYY-MM>` policy and remains the final owner of placement．
+
+Ephy recommends append only when a stable `doc_id` matches，the current document's project and kind agree with the placement hint，and the proposal was based on the current canonical byte hash．A project／kind mismatch or a semantic similarity match without exact `doc_id` requires consultation．With no exact or similar document，Ephy recommends create．Karte repeats the identity，content-classification，and byte-hash checks before saving．
 
 The `karte-contract` job in `.github/workflows/runtime-tests.yml` checks out public Karte `main` and compares every contract JSON byte-for-byte with `scripts/check_karte_contract.py`．A coordinated contract change must therefore land in Karte before the Ephy Runtime check can pass against the new version．The checker logs only relative filenames and hashes when drift occurs．
 

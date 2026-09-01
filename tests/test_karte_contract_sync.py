@@ -27,13 +27,13 @@ def test_cross_repository_contract_reports_byte_drift_without_content(tmp_path: 
     ephy_root = _repository_with_contract(tmp_path / "ephy")
     karte_root = _repository_with_contract(tmp_path / "karte")
     proposal_path = karte_root / CONTRACT_RELATIVE_ROOT / "fixtures" / "create-proposal.json"
-    proposal_path.write_bytes(proposal_path.read_bytes().replace(b"Synthetic memory", b"Changed fixture", 1))
+    proposal_path.write_bytes(proposal_path.read_bytes().replace(b"Synthetic placement decision", b"Changed fixture", 1))
 
     errors = compare_contracts(ephy_root, karte_root)
 
     assert len(errors) == 1
     assert errors[0].startswith("contract drift: fixtures/create-proposal.json Ephy=")
-    assert "Synthetic memory" not in errors[0]
+    assert "Synthetic placement decision" not in errors[0]
 
 
 def test_cross_repository_contract_reports_missing_file(tmp_path: Path) -> None:

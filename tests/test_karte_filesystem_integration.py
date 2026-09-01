@@ -49,15 +49,20 @@ def test_contract_fixtures_validate_against_versioned_schemas() -> None:
     proposal_schema = json.loads((root / "proposal.schema.json").read_text(encoding="utf-8"))
     receipt_schema = json.loads((root / "receipt.schema.json").read_text(encoding="utf-8"))
     create_payload = json.loads((root / "fixtures/create-proposal.json").read_text(encoding="utf-8"))
-    update_payload = json.loads((root / "fixtures/update-proposal.json").read_text(encoding="utf-8"))
+    append_payload = json.loads((root / "fixtures/append-proposal.json").read_text(encoding="utf-8"))
+    consultation_payload = json.loads((root / "fixtures/consultation-proposal.json").read_text(encoding="utf-8"))
     receipt_payload = json.loads((root / "fixtures/accepted-receipt.json").read_text(encoding="utf-8"))
     invalid_payload = json.loads((root / "fixtures/invalid-traversal-proposal.json").read_text(encoding="utf-8"))
 
     jsonschema.validate(create_payload, proposal_schema, format_checker=jsonschema.FormatChecker())
-    jsonschema.validate(update_payload, proposal_schema, format_checker=jsonschema.FormatChecker())
+    jsonschema.validate(append_payload, proposal_schema, format_checker=jsonschema.FormatChecker())
+    jsonschema.validate(consultation_payload, proposal_schema, format_checker=jsonschema.FormatChecker())
     jsonschema.validate(receipt_payload, receipt_schema, format_checker=jsonschema.FormatChecker())
     KarteChangeProposal.model_validate(create_payload)
-    KarteChangeProposal.model_validate(update_payload)
+    KarteChangeProposal.model_validate(append_payload)
+    consultation = KarteChangeProposal.model_validate(consultation_payload)
+    with pytest.raises(ValueError, match="consultation"):
+        consultation.require_publishable()
     KarteReceipt.model_validate(receipt_payload)
     with pytest.raises((jsonschema.ValidationError, ValueError)):
         jsonschema.validate(invalid_payload, proposal_schema, format_checker=jsonschema.FormatChecker())
@@ -194,17 +199,31 @@ def test_outbox_atomic_publish_is_idempotent_and_never_touches_content(tmp_path:
         outbox.publish(changed)
 
 
+def test_outbox_refuses_unresolved_placement_consultation(tmp_path: Path) -> None:
+    data_root = tmp_path / "karte_data"
+    (data_root / "content").mkdir(parents=True)
+    proposal = KarteChangeProposal.model_validate_json(
+        Path("schemas/karte-ephy/v1/fixtures/consultation-proposal.json").read_text(encoding="utf-8")
+    )
+    outbox = KarteOutbox(data_root)
+
+    with pytest.raises(ValueError, match="consultation"):
+        outbox.publish(proposal)
+
+    assert not list(outbox.pending_dir.glob("*.json"))
+
+
 def test_outbox_reads_receipts_and_rejects_symlink_escape(tmp_path: Path) -> None:
     data_root = tmp_path / "karte_data"
     (data_root / "content").mkdir(parents=True)
     outbox = KarteOutbox(data_root)
-    receipt_path = outbox.receipts_dir / "candidate-update-001.json"
+    receipt_path = outbox.receipts_dir / "candidate-append-001.json"
     receipt_path.write_text(
         Path("schemas/karte-ephy/v1/fixtures/accepted-receipt.json").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     (outbox.receipts_dir / ".partial.tmp").write_text("{", encoding="utf-8")
-    assert outbox.read_receipt("candidate-update-001").result == "accepted"
+    assert outbox.read_receipt("candidate-append-001").result == "accepted"
     assert len(outbox.list_receipts()) == 1
 
     outside_receipt = tmp_path / "outside-receipt.json"
