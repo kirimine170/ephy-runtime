@@ -70,7 +70,73 @@ def test_collision_fixture_occupies_only_the_preferred_path(tmp_path: Path) -> N
     assert OCCUPANT_DOC_ID in occupant.read_text(encoding="utf-8")
 
 
-def test_review_bridge_returns_the_revision_it_checked_out(
+def test_artifact_revision_requires_signed_embedded_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = tmp_path / "Karte.app/Contents/MacOS/karte"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"synthetic executable")
+    executable.chmod(0o700)
+    provenance = executable.parent.parent / "Resources/karte-build-provenance.json"
+    provenance.parent.mkdir(parents=True)
+    provenance.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "source_revision": "a" * 40,
+                "target": "darwin-arm64",
+            }
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs) -> SimpleNamespace:
+        commands.append(argv)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(mutation_uat.sys, "platform", "darwin")
+    monkeypatch.setattr(mutation_uat.subprocess, "run", fake_run)
+
+    revision = mutation_uat._verify_karte_artifact_revision(executable)
+
+    assert revision == "a" * 40
+    assert commands == [["codesign", "--verify", "--deep", "--verbose=2", str(executable.parents[2])]]
+
+
+def test_reject_canonical_check_requires_an_unchanged_tree(tmp_path: Path) -> None:
+    candidate_id = "ephy-chat-1234567890abcdef1234"
+    evidence = tmp_path / ".mdsys/ephy/mutation-uat-canonical-check.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "candidate_id": candidate_id,
+                "before_count": 3,
+                "after_count": 3,
+                "before_sha256": "b" * 64,
+                "after_sha256": "b" * 64,
+                "tree_unchanged": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    check = mutation_uat._verify_reject_canonical_check(tmp_path, candidate_id)
+
+    assert check["tree_unchanged"] is True
+    assert check["before_sha256"] == "b" * 64
+
+    payload = json.loads(evidence.read_text(encoding="utf-8"))
+    payload["after_sha256"] = "c" * 64
+    evidence.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="changed canonical Markdown"):
+        mutation_uat._verify_reject_canonical_check(tmp_path, candidate_id)
+
+
+def test_review_bridge_checks_out_the_artifact_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -80,12 +146,9 @@ def test_review_bridge_returns_the_revision_it_checked_out(
     (repository / "frontend/dist").mkdir(parents=True)
     data_root = tmp_path / "data"
     data_root.mkdir()
-    revision_calls: list[Path] = []
     commands: list[list[str]] = []
 
-    def fake_revision(path: Path) -> str:
-        revision_calls.append(path)
-        return "revision-used-by-bridge"
+    revision = "d" * 40
 
     def fake_run(argv: list[str], **_kwargs) -> SimpleNamespace:
         commands.append(argv)
@@ -93,11 +156,9 @@ def test_review_bridge_returns_the_revision_it_checked_out(
             Path(argv[-1]).mkdir(parents=True)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(mutation_uat, "_git_revision", fake_revision)
     monkeypatch.setattr(mutation_uat.subprocess, "run", fake_run)
 
-    revision = mutation_uat._run_karte_review_bridge(repository, data_root)
+    checked_out_revision = mutation_uat._run_karte_review_bridge(repository, data_root, revision)
 
-    assert revision == "revision-used-by-bridge"
-    assert revision_calls == [repository.resolve()]
+    assert checked_out_revision == revision
     assert any(command[:3] == ["git", "checkout", "--quiet"] and command[-1] == revision for command in commands)

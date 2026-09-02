@@ -38,6 +38,11 @@ if [[ ! -x "${SOURCE_EXECUTABLE}" ]]; then
   echo "Karte executable is missing from ${SOURCE_APP}．" >&2
   exit 1
 fi
+SOURCE_PROVENANCE="${SOURCE_APP}/Contents/Resources/karte-build-provenance.json"
+if [[ ! -f "${SOURCE_PROVENANCE}" ]]; then
+  echo "Karte artifact is missing embedded build provenance．" >&2
+  exit 1
+fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
   codesign --verify --deep --strict --verbose=2 "${SOURCE_APP}"
   if ! file "${SOURCE_EXECUTABLE}" | grep -q "arm64"; then
