@@ -21,6 +21,7 @@ import {
 import {mountModelManager} from './modelManager';
 import {applyDeveloperModeVisibility, resolveDeveloperTab} from './developerMode';
 import {renderChatSourceListHtml, renderChatSourcePreviewHtml} from './chatSources';
+import {announceChatStream} from './chatAccessibility';
 import {createWorkspaceChromeController} from './workspaceChrome';
 import {
   assertBlindPreferencePair,
@@ -956,7 +957,8 @@ app.innerHTML = `
                 <div id="chat-route-output" class="runtime-result"></div>
               </details>
             </div>
-            <div id="chat-output" class="conversation-thread" role="log" aria-live="polite" aria-relevant="additions text"></div>
+            <div id="chat-output" class="conversation-thread" role="region" aria-label="Conversation"></div>
+            <div id="chat-stream-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
             <div class="chat-composer">
               <div id="chat-drop-status" class="chat-drop-status helper-text"></div>
               <label class="field composer-field">
@@ -2039,6 +2041,7 @@ function startNewChat() {
   syncChatContextBarFromRagState();
   updateChatScopeSummary();
   setChatSendState(false);
+  announceChatStream(document, 'idle');
   setChatDropStatus('');
   setChatWebStatus(webSearchAvailable ? 'Local only' : 'Web unavailable', webSearchAvailable ? '' : 'warning');
   document.getElementById('chat-prompt')?.focus();
@@ -2144,6 +2147,7 @@ function syncLatestChatExportFromEntry(entry) {
 
 function beginStreamingChat({requestId, prompt, modeLabel}) {
   activeChatStreamRequestId = requestId;
+  announceChatStream(document, 'streaming');
   appendChatThreadEntry({
     role: 'user',
     label: 'You',
@@ -2168,6 +2172,7 @@ function beginStreamingChat({requestId, prompt, modeLabel}) {
 
 function beginStreamingContinuation({targetRequestId, requestId, mode, modeLabel}) {
   activeChatStreamRequestId = requestId;
+  announceChatStream(document, 'streaming');
   updateChatThreadEntry(targetRequestId, (entry) => {
     entry.requestId = requestId;
     entry.streaming = true;
@@ -2205,6 +2210,7 @@ function finalizeStreamingChat({requestId, meta, answer, thinking, finishReason}
     syncLatestChatExportFromEntry(entry);
     return entry;
   });
+  announceChatStream(document, 'complete');
 }
 
 function failStreamingChat({requestId, message}) {
@@ -2218,6 +2224,7 @@ function failStreamingChat({requestId, message}) {
     }
     return entry;
   });
+  announceChatStream(document, 'error', message);
 }
 
 function chatEntriesThrough(requestId) {

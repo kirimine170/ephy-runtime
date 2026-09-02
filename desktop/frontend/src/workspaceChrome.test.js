@@ -211,6 +211,24 @@ test('sidebar Hide restores focus to the visible toolbar toggle', () => {
   assert.equal(workspace.ids['chat-sidebar-toggle'].focused, true);
 });
 
+test('compact navigation moves focus outside the sidebar before making it inert', () => {
+  const workspace = fakeWorkspace(800);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+
+  controller.initialize();
+  controller.setSidebarCollapsed(false);
+  workspace.ids['workspace-sidebar'].dispatch('click', {
+    target: {closest: (selector) => selector === '.nav-btn' ? workspace.nav : null},
+  });
+
+  assert.equal(controller.snapshot().sidebarCollapsed, true);
+  assert.equal(workspace.ids['workspace-sidebar'].inert, true);
+  assert.equal(workspace.ids['chat-sidebar-toggle'].focused, true);
+});
+
 test('workspace restores an automatically collapsed sidebar after leaving compact mode', () => {
   const workspace = fakeWorkspace(1440);
   const controller = createWorkspaceChromeController({

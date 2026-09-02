@@ -204,7 +204,10 @@ export function createWorkspaceChromeController({
     element('workspace-sidebar')?.addEventListener('click', (event) => {
       if (!event.target?.closest?.('.nav-btn')) return;
       if (viewport !== WORKSPACE_VIEWPORT.threePane && contextPaneOpen) contextPaneOpen = false;
-      if (viewport === WORKSPACE_VIEWPORT.compact) sidebarCollapsed = true;
+      if (viewport === WORKSPACE_VIEWPORT.compact) {
+        element('chat-sidebar-toggle')?.focus();
+        sidebarCollapsed = true;
+      }
       apply();
     });
     root?.addEventListener?.('keydown', handleShortcut);
