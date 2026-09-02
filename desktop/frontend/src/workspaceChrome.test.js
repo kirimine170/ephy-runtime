@@ -113,3 +113,40 @@ test('workspace controller binds compact drawers，focus，and aria state', () =
   assert.equal(showedChat, true);
   assert.equal(workspace.ids['chat-prompt'].focused, true);
 });
+
+test('workspace restores an automatically collapsed sidebar after leaving compact mode', () => {
+  const workspace = fakeWorkspace(1440);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+
+  controller.initialize();
+  assert.equal(controller.snapshot().sidebarCollapsed, false);
+
+  workspace.windowObject.innerWidth = 800;
+  workspace.windowListeners.get('resize')();
+  assert.equal(controller.snapshot().sidebarCollapsed, true);
+
+  workspace.windowObject.innerWidth = 1024;
+  workspace.windowListeners.get('resize')();
+  assert.equal(controller.snapshot().sidebarCollapsed, false);
+  assert.equal(workspace.ids['workspace-sidebar'].inert, false);
+});
+
+test('workspace preserves a deliberate sidebar choice across compact mode', () => {
+  const workspace = fakeWorkspace(1440);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+
+  controller.initialize();
+  controller.setSidebarCollapsed(true);
+  workspace.windowObject.innerWidth = 800;
+  workspace.windowListeners.get('resize')();
+  workspace.windowObject.innerWidth = 1200;
+  workspace.windowListeners.get('resize')();
+
+  assert.equal(controller.snapshot().sidebarCollapsed, true);
+});

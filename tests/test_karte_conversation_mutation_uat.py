@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts import karte_conversation_mutation_uat as mutation_uat
+
 from scripts.karte_conversation_mutation_uat import (
     APPEND_DOC_ID,
     APPEND_RELATIVE_PATH,
@@ -66,3 +68,36 @@ def test_collision_fixture_occupies_only_the_preferred_path(tmp_path: Path) -> N
 
     assert occupant.relative_to(tmp_path).as_posix() == "content/projects/ephy/decision/2026-09/same-name.md"
     assert OCCUPANT_DOC_ID in occupant.read_text(encoding="utf-8")
+
+
+def test_review_bridge_returns_the_revision_it_checked_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "karte"
+    repository.mkdir()
+    (repository / "go.mod").write_text("module test\n", encoding="utf-8")
+    (repository / "frontend/dist").mkdir(parents=True)
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    revision_calls: list[Path] = []
+    commands: list[list[str]] = []
+
+    def fake_revision(path: Path) -> str:
+        revision_calls.append(path)
+        return "revision-used-by-bridge"
+
+    def fake_run(argv: list[str], **_kwargs) -> SimpleNamespace:
+        commands.append(argv)
+        if argv[:2] == ["git", "clone"]:
+            Path(argv[-1]).mkdir(parents=True)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(mutation_uat, "_git_revision", fake_revision)
+    monkeypatch.setattr(mutation_uat.subprocess, "run", fake_run)
+
+    revision = mutation_uat._run_karte_review_bridge(repository, data_root)
+
+    assert revision == "revision-used-by-bridge"
+    assert revision_calls == [repository.resolve()]
+    assert any(command[:3] == ["git", "checkout", "--quiet"] and command[-1] == revision for command in commands)

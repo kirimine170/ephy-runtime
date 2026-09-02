@@ -47,6 +47,7 @@ export function createWorkspaceChromeController({
   onDismissMenus = () => {},
 } = {}) {
   let sidebarCollapsed = false;
+  let sidebarCollapsedBeforeCompact = null;
   let contextPaneOpen = false;
   let viewport = resolveWorkspaceViewport(windowObject?.innerWidth);
   let bound = false;
@@ -123,7 +124,13 @@ export function createWorkspaceChromeController({
     const previousViewport = viewport;
     const nextViewport = resolveWorkspaceViewport(windowObject?.innerWidth);
     if (nextViewport === WORKSPACE_VIEWPORT.compact && previousViewport !== WORKSPACE_VIEWPORT.compact) {
+      sidebarCollapsedBeforeCompact = sidebarCollapsed;
       sidebarCollapsed = true;
+    } else if (previousViewport === WORKSPACE_VIEWPORT.compact && nextViewport !== WORKSPACE_VIEWPORT.compact) {
+      if (sidebarCollapsedBeforeCompact !== null) {
+        sidebarCollapsed = sidebarCollapsedBeforeCompact;
+      }
+      sidebarCollapsedBeforeCompact = null;
     }
     if (nextViewport === WORKSPACE_VIEWPORT.threePane) contextPaneOpen = false;
     apply();
@@ -182,6 +189,7 @@ export function createWorkspaceChromeController({
   function initialize() {
     viewport = resolveWorkspaceViewport(windowObject?.innerWidth);
     sidebarCollapsed = viewport === WORKSPACE_VIEWPORT.compact;
+    sidebarCollapsedBeforeCompact = viewport === WORKSPACE_VIEWPORT.compact ? false : null;
     contextPaneOpen = false;
     bind();
     apply();

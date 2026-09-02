@@ -147,7 +147,7 @@ def _write_collision_occupant(data_root: Path, plan) -> Path:
     return primary
 
 
-def _run_karte_review_bridge(karte_repository: Path, data_root: Path) -> None:
+def _run_karte_review_bridge(karte_repository: Path, data_root: Path) -> str:
     repository = karte_repository.expanduser().resolve(strict=True)
     if not (repository / "go.mod").is_file():
         raise ValueError("Karte repository does not contain go.mod")
@@ -195,6 +195,7 @@ def _run_karte_review_bridge(karte_repository: Path, data_root: Path) -> None:
         if completed.returncode != 0:
             detail = (completed.stdout + "\n" + completed.stderr).strip()
             raise RuntimeError(f"Karte review bridge failed: {detail[-4000:]}")
+        return revision
 
 
 def _verify_receipts(
@@ -334,7 +335,7 @@ def run_uat(args: argparse.Namespace) -> dict:
             ],
         }
         _atomic_write_json(data_root / ".mdsys/ephy/mutation-uat-manifest.json", manifest)
-        _run_karte_review_bridge(args.karte_repository, data_root)
+        karte_repository_revision = _run_karte_review_bridge(args.karte_repository, data_root)
         receipts = _verify_receipts(service=service, data_root=data_root, plans=plans, client=client)
         report = {
             "trace_version": "1.0",
@@ -342,7 +343,7 @@ def run_uat(args: argparse.Namespace) -> dict:
             "completed_at": datetime.now(tz=UTC).isoformat(),
             "workspace_sha256": hashlib.sha256(str(data_root.resolve()).encode()).hexdigest(),
             "karte_executable": str(executable),
-            "karte_repository_revision": _git_revision(args.karte_repository),
+            "karte_repository_revision": karte_repository_revision,
             "review_surface": "Karte App ListEphyProposals／AcceptEphyProposal／RejectEphyProposal",
             "steps": [
                 "Ephy planned and published reviewed append／create／reject candidates",
