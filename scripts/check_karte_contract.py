@@ -22,6 +22,8 @@ REQUIRED_FILES = {
     Path("fixtures/consultation-proposal.json"),
 }
 CONTEXT_REQUIRED_FILES = {
+    Path("audit.schema.json"),
+    Path("policy.schema.json"),
     Path("request.schema.json"),
     Path("response.schema.json"),
     Path("fixtures/search-request.json"),
