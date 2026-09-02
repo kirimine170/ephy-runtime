@@ -20,6 +20,16 @@ import {
 } from './karteConversation';
 import {mountModelManager} from './modelManager';
 import {applyDeveloperModeVisibility, resolveDeveloperTab} from './developerMode';
+import {renderChatSourceListHtml, renderChatSourcePreviewHtml} from './chatSources';
+import {
+  announceChatStream,
+  chatMessageAccessibilityAttributes,
+  mergeChatCompletionMetadata,
+  transitionChatEntryToComplete,
+  transitionChatEntryToFailure,
+  validateChatPrompt,
+} from './chatAccessibility';
+import {createWorkspaceChromeController} from './workspaceChrome';
 import {
   assertBlindPreferencePair,
   PREFERENCE_GENERATION_BATCH_SIZE,
@@ -158,7 +168,6 @@ let chatSendInFlight = false;
 let webSearchAvailable = false;
 let karteAvailable = false;
 let developerModeEnabled = false;
-let sidebarCollapsed = false;
 let activePanelTab = 'chat';
 const tabScrollPositions = new Map();
 let chatSourceScope = 'all';
@@ -389,7 +398,7 @@ app.innerHTML = `
     data-drop-ingest-zone="workspace"
     data-drop-overlay="Drop files or folders anywhere to ingest into RAG"
   >
-    <aside class="sidebar">
+    <aside id="workspace-sidebar" class="sidebar">
       <div class="brand">
         <div class="brand-mark">ER</div>
         <div>
@@ -419,7 +428,7 @@ app.innerHTML = `
     <header class="app-header">
       <div class="app-header-inner">
         <div class="chat-toolbar">
-                <button id="chat-sidebar-toggle" class="gmail-icon-btn chat-toolbar-menu" type="button" aria-label="Toggle sidebar">
+                <button id="chat-sidebar-toggle" class="gmail-icon-btn chat-toolbar-menu" type="button" aria-label="Toggle sidebar" aria-controls="workspace-sidebar">
                   <span class="gmail-hamburger"></span>
                 </button>
                 <div class="chat-toolbar-brand">
@@ -438,27 +447,7 @@ app.innerHTML = `
                   <option value="rag">With Sources</option>
                   <option value="code">Code</option>
                 </select>
-                <select id="chat-source-scope-select" class="text-input chat-toolbar-select" aria-label="Source Scope">
-                  <option value="all">All</option>
-                  <option value="project">Current Project</option>
-                  <option value="personal_context">Karte Personal Context</option>
-                  <option value="selected_docs">Selected Docs</option>
-                </select>
-                <select id="chat-top-k-select" class="text-input chat-toolbar-select chat-toolbar-topk" aria-label="Top K" data-developer-only hidden>
-                  <option value="3">Top K 3</option>
-                  <option value="5" selected>Top K 5</option>
-                  <option value="8">Top K 8</option>
-                  <option value="10">Top K 10</option>
-                  <option value="20">Top K 20</option>
-                </select>
-                <label class="chat-web-toggle" title="Search the web through the local privacy gateway">
-                  <input id="chat-web-search" type="checkbox" />
-                  <span>Web</span>
-                </label>
-                <span id="chat-web-status" class="chat-web-status">Local only</span>
-                <button id="start-conversation" class="ghost-btn" type="button">Ephyを起動</button>
-                <span id="conversation-start-status" role="status" class="helper-text"></span>
-                <div id="chat-source-scope" class="chat-toolbar-meta" data-developer-only hidden>scope=all | project=(default) | top_k=5</div>
+                <button id="chat-context-toggle" class="ghost-btn chat-context-toggle" type="button" aria-controls="chat-sources-pane" aria-expanded="true">Context</button>
                 <div class="chat-header-actions">
                   <details id="chat-more-menu" class="chat-more-menu">
                     <summary class="ghost-btn">More</summary>
@@ -975,7 +964,8 @@ app.innerHTML = `
                 <div id="chat-route-output" class="runtime-result"></div>
               </details>
             </div>
-            <div id="chat-output" class="conversation-thread"></div>
+            <div id="chat-output" class="conversation-thread" role="region" aria-label="Conversation"></div>
+            <div id="chat-stream-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
             <div class="chat-composer">
               <div id="chat-drop-status" class="chat-drop-status helper-text"></div>
               <label class="field composer-field">
@@ -988,7 +978,46 @@ app.innerHTML = `
               </div>
             </div>
           </article>
-          <aside class="chat-sources-pane">
+          <aside id="chat-sources-pane" class="chat-sources-pane" aria-label="Context，sources，and document preview">
+            <article class="panel source-side-panel context-side-panel">
+              <div class="panel-head context-panel-head">
+                <div>
+                  <span class="eyebrow dark">Workspace</span>
+                  <h2>Context</h2>
+                </div>
+                <button id="chat-context-close" class="context-pane-close" type="button" aria-label="Close context pane">Close</button>
+              </div>
+              <label class="field compact-field">
+                <span>Source Scope</span>
+                <select id="chat-source-scope-select" class="text-input" aria-label="Source Scope">
+                  <option value="all">All sources</option>
+                  <option value="project">Current Project</option>
+                  <option value="personal_context">Karte Personal Context</option>
+                  <option value="selected_docs">Selected Docs</option>
+                </select>
+              </label>
+              <label class="field compact-field" data-developer-only hidden>
+                <span>Top K</span>
+                <select id="chat-top-k-select" class="text-input" aria-label="Top K">
+                  <option value="3">3</option>
+                  <option value="5" selected>5</option>
+                  <option value="8">8</option>
+                  <option value="10">10</option>
+                  <option value="20">20</option>
+                </select>
+              </label>
+              <div class="context-control-row">
+                <label class="chat-web-toggle" title="Search the web through the local privacy gateway">
+                  <input id="chat-web-search" type="checkbox" />
+                  <span>Web</span>
+                </label>
+                <span id="chat-web-status" class="chat-web-status">Local only</span>
+              </div>
+              <button id="start-conversation" class="ghost-btn context-start-button" type="button">Ephyを起動</button>
+              <span id="conversation-start-status" role="status" class="helper-text"></span>
+              <div id="chat-source-scope" class="chat-toolbar-meta" data-developer-only hidden>scope=all | project=(default) | top_k=5</div>
+              <p class="context-shortcuts">⌘K message · ⌘B sidebar · ⌘. context</p>
+            </article>
             <article class="panel source-side-panel">
               <div class="panel-head">
                 <h2>Sources</h2>
@@ -1557,6 +1586,7 @@ function activateTab(tab) {
     panel.classList.toggle('active', panel.dataset.tabPanel === panelTab);
   });
   activePanelTab = panelTab;
+  workspaceChrome.setActivePanel(panelTab);
   restorePanelScroll(panelTab);
 }
 
@@ -1675,20 +1705,6 @@ async function refreshKarteCapability() {
   }
 }
 
-function setSidebarCollapsed(collapsed) {
-  sidebarCollapsed = collapsed;
-  const shell = document.querySelector('.shell');
-  const toggle = document.getElementById('sidebar-toggle');
-  const reveal = document.getElementById('sidebar-reveal');
-  if (!shell || !toggle || !reveal) {
-    return;
-  }
-  shell.classList.toggle('sidebar-collapsed', collapsed);
-  toggle.textContent = collapsed ? 'Show' : 'Hide';
-  toggle.setAttribute('aria-label', collapsed ? 'Show sidebar' : 'Hide sidebar');
-  reveal.classList.toggle('hidden', !collapsed);
-}
-
 function ensureSelectHasOption(select, value, label) {
   if (!select || !value) {
     return;
@@ -1709,6 +1725,13 @@ function closeChatToolbarMenus(exceptId = '') {
     }
   });
 }
+
+const workspaceChrome = createWorkspaceChromeController({
+  root: document,
+  windowObject: window,
+  onShowChat: () => activateTab('chat'),
+  onDismissMenus: () => closeChatToolbarMenus(),
+});
 
 function setActiveIngestDropZone(zoneId = '') {
   activeIngestDropZone = zoneId;
@@ -1987,6 +2010,8 @@ function setChatSendState(inFlight) {
   chatSendInFlight = inFlight;
   const sendButton = document.getElementById('send-chat');
   const promptInput = document.getElementById('chat-prompt');
+  const thread = document.getElementById('chat-output');
+  const panel = document.getElementById('chat-drop-zone');
   if (sendButton) {
     sendButton.disabled = inFlight;
     sendButton.textContent = inFlight ? '応答中…' : '送信';
@@ -1994,6 +2019,8 @@ function setChatSendState(inFlight) {
   if (promptInput) {
     promptInput.dataset.streaming = inFlight ? 'true' : 'false';
   }
+  thread?.setAttribute('aria-busy', String(inFlight));
+  panel?.setAttribute('aria-busy', String(inFlight));
 }
 
 function startNewChat() {
@@ -2021,6 +2048,7 @@ function startNewChat() {
   syncChatContextBarFromRagState();
   updateChatScopeSummary();
   setChatSendState(false);
+  announceChatStream(document, 'idle');
   setChatDropStatus('');
   setChatWebStatus(webSearchAvailable ? 'Local only' : 'Web unavailable', webSearchAvailable ? '' : 'warning');
   document.getElementById('chat-prompt')?.focus();
@@ -2048,7 +2076,7 @@ function renderChatThread() {
   }
 
   container.innerHTML = chatThreadEntries.map((entry) => `
-    <article class="message-card message-${escapeHtml(entry.role)} ${entry.streaming ? 'message-streaming' : ''}">
+    <article class="message-card message-${escapeHtml(entry.role)} ${entry.streaming ? 'message-streaming' : ''}" ${chatMessageAccessibilityAttributes(entry)}>
       <div class="message-head">
         <span class="message-role">${escapeHtml(entry.label)}</span>
         ${entry.meta ? `<span class="message-meta">${escapeHtml(entry.meta)}</span>` : ''}
@@ -2126,6 +2154,7 @@ function syncLatestChatExportFromEntry(entry) {
 
 function beginStreamingChat({requestId, prompt, modeLabel}) {
   activeChatStreamRequestId = requestId;
+  announceChatStream(document, 'streaming');
   appendChatThreadEntry({
     role: 'user',
     label: 'You',
@@ -2150,6 +2179,7 @@ function beginStreamingChat({requestId, prompt, modeLabel}) {
 
 function beginStreamingContinuation({targetRequestId, requestId, mode, modeLabel}) {
   activeChatStreamRequestId = requestId;
+  announceChatStream(document, 'streaming');
   updateChatThreadEntry(targetRequestId, (entry) => {
     entry.requestId = requestId;
     entry.streaming = true;
@@ -2173,33 +2203,33 @@ function applyChatStreamDelta({requestId, channel, delta}) {
 }
 
 function finalizeStreamingChat({requestId, meta, answer, thinking, finishReason}) {
-  updateChatThreadEntry(requestId, (entry) => {
-    entry.streaming = false;
-    entry.meta = meta || entry.meta;
-    if (thinking && !(entry.thinking || '').trim()) {
-      entry.thinking = thinking;
-    }
-    if (answer && !(entry.text || '').trim()) {
-      entry.text = answer;
-    }
-    entry.finishReason = finishReason || entry.finishReason || '';
-    entry.canContinue = isLengthLimitedFinishReason(entry.finishReason) && Boolean((entry.text || '').trim());
-    syncLatestChatExportFromEntry(entry);
-    return entry;
-  });
+  const entry = chatThreadEntries.find((candidate) => candidate.requestId === requestId);
+  if (!entry) return false;
+  const metadata = {
+    meta,
+    answer,
+    thinking,
+    finishReason,
+  };
+  const firstCompletion = transitionChatEntryToComplete(entry, metadata);
+  const completed = firstCompletion || mergeChatCompletionMetadata(entry, metadata);
+  completed.canContinue = isLengthLimitedFinishReason(completed.finishReason)
+    && Boolean((completed.text || '').trim());
+  syncLatestChatExportFromEntry(completed);
+  updateChatThreadEntry(requestId, () => completed);
+  if (firstCompletion) {
+    announceChatStream(document, 'complete');
+  }
+  return Boolean(firstCompletion);
 }
 
 function failStreamingChat({requestId, message}) {
-  updateChatThreadEntry(requestId, (entry) => {
-    entry.streaming = false;
-    entry.meta = 'error';
-    entry.canContinue = false;
-    entry.finishReason = '';
-    if (!(entry.text || '').trim()) {
-      entry.text = message || 'Streaming request failed.';
-    }
-    return entry;
-  });
+  const entry = chatThreadEntries.find((candidate) => candidate.requestId === requestId);
+  const failed = transitionChatEntryToFailure(entry, message);
+  if (!failed) return false;
+  updateChatThreadEntry(requestId, () => failed);
+  announceChatStream(document, 'error', message);
+  return true;
 }
 
 function chatEntriesThrough(requestId) {
@@ -2410,33 +2440,12 @@ function renderChatSourcePreview(index = 0) {
     return;
   }
   if (!latestChatSources.length) {
-    container.innerHTML = '<div class="runtime-result-card"><div class="runtime-result-text">Select a source-backed answer to preview chunks and metadata.</div></div>';
+    container.innerHTML = renderChatSourcePreviewHtml();
     return;
   }
 
   activeChatSourceIndex = Math.max(0, Math.min(index, latestChatSources.length - 1));
-  const source = latestChatSources[activeChatSourceIndex];
-  const isWeb = source.source_type === 'web';
-  const isKarte = source.source_type === 'karte_context';
-  container.innerHTML = `
-    <div class="runtime-result-card">
-      <div class="runtime-result-head">
-        <span class="runtime-result-title">${escapeHtml(isWeb || isKarte ? (source.title || source.source_id || (isWeb ? 'Web Source' : 'Karte Context')) : (source.heading_path?.slice(-1)?.[0] || source.source_path || 'Source Preview'))}</span>
-        <span class="runtime-pill ${isWeb ? 'optional' : 'neutral'}">${escapeHtml(isWeb ? 'external untrusted' : (isKarte ? 'Karte · local untrusted' : (source.score != null ? source.score.toFixed(3) : (source.project || '-'))))}</span>
-      </div>
-      ${isWeb ? `
-        <div class="runtime-result-meta">${escapeHtml(source.source_id || '-')} · ${escapeHtml(source.url || '-')}</div>
-        <div class="runtime-result-text">${escapeHtml(source.snippet || '')}</div>
-        ${source.injection_suspected ? '<div class="web-source-warning">Potential instruction-like content was isolated from the answer model.</div>' : ''}
-        <button class="ghost-btn compact-btn open-web-source" type="button" data-web-source-url="${escapeHtml(source.url || '')}">Open in Browser</button>
-      ` : `
-        <div class="runtime-result-meta">${escapeHtml(source.source_path || '-')}</div>
-        <div class="runtime-result-meta">${escapeHtml((source.heading_path || []).join(' > ') || '(root)')}</div>
-        <div class="runtime-result-meta">${escapeHtml(source.project || '(default)')} | ${escapeHtml((source.tags || []).join(', ') || '(no tags)')}</div>
-        <div class="runtime-result-text">${escapeHtml(source.chunk_text || '')}</div>
-      `}
-    </div>
-  `;
+  container.innerHTML = renderChatSourcePreviewHtml(latestChatSources[activeChatSourceIndex]);
 }
 
 function renderChatSourcesPane({sources = [], title = 'Sources'} = {}) {
@@ -2456,17 +2465,7 @@ function renderChatSourcesPane({sources = [], title = 'Sources'} = {}) {
   }
 
   meta.textContent = `${title} · ${latestChatSources.length} source${latestChatSources.length === 1 ? '' : 's'}`;
-  list.innerHTML = latestChatSources.map((source, index) => `
-    <button class="source-card ${index === activeChatSourceIndex ? 'active' : ''}" data-source-index="${index}">
-      <div class="source-card-top">
-        <strong>${escapeHtml(source.source_type === 'web' || source.source_type === 'karte_context' ? (source.title || source.source_id || `${source.source_type === 'web' ? 'Web' : 'Karte'} ${index + 1}`) : (source.heading_path?.slice(-1)?.[0] || `Source ${index + 1}`))}</strong>
-        <span>${escapeHtml(source.source_type === 'web' ? 'WEB' : (source.source_type === 'karte_context' ? 'KARTE' : (source.score != null ? source.score.toFixed(3) : '-')))}</span>
-      </div>
-      <div class="source-card-path">${escapeHtml(source.source_type === 'web' ? (source.url || '-') : (source.source_path || '-'))}</div>
-      <div class="source-card-meta">${escapeHtml(source.source_type === 'web' ? 'external_untrusted' : (source.project || '(default)'))}</div>
-      <div class="source-card-heading">${escapeHtml(source.source_type === 'web' ? (source.snippet || '').slice(0, 120) : ((source.heading_path || []).join(' > ') || '(root)'))}</div>
-    </button>
-  `).join('');
+  list.innerHTML = renderChatSourceListHtml(latestChatSources, activeChatSourceIndex);
   renderChatSourcePreview(activeChatSourceIndex);
 }
 
@@ -7558,8 +7557,7 @@ async function runChatFromForm() {
   const sourceScope = document.getElementById('chat-source-scope-select').value;
   const promptInput = document.getElementById('chat-prompt');
   const prompt = promptInput.value;
-  if (!prompt.trim()) {
-    failStreamingChat({requestId: activeChatStreamRequestId, message: 'Prompt is empty.'});
+  if (!validateChatPrompt(promptInput)) {
     return {ok: false, detail: 'Prompt is empty.'};
   }
   if (chatSendInFlight) {
@@ -8457,18 +8455,6 @@ document.getElementById('chat-output').addEventListener('click', async (event) =
   await continueChatGeneration(requestId);
 });
 
-document.getElementById('chat-sidebar-toggle').addEventListener('click', () => {
-  setSidebarCollapsed(!sidebarCollapsed);
-});
-
-document.getElementById('sidebar-toggle').addEventListener('click', () => {
-  setSidebarCollapsed(!sidebarCollapsed);
-});
-
-document.getElementById('sidebar-reveal').addEventListener('click', () => {
-  setSidebarCollapsed(false);
-});
-
 document.getElementById('chat-prompt').addEventListener('keydown', async (event) => {
   if (!isChatSubmitShortcut(event)) {
     return;
@@ -8858,7 +8844,7 @@ bindValidationAction('overview-preset-validation');
 bindValidationAction('runtime-preset-validation');
 
 async function initializeWorkbench() {
-  setSidebarCollapsed(false);
+  workspaceChrome.initialize();
   activateTab('chat');
   renderChatThread();
   renderChatSourcesPane({sources: [], title: 'Sources'});

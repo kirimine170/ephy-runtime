@@ -433,10 +433,11 @@ embedding を `openai_compatible` backend に切り替える場合は、embeddin
 Wails UI では以下を操作できる。
 
 - Chat-first の 3 ペイン UI
-  - 左: Workspace Sidebar
-  - 中央: Chat
-  - 右: Sources / Document Preview
-- Chat 上部の `Chat Context Bar` から Current Chat / Project / Mode / Source Scope / Top K / Export / Library / More を操作
+  - 左: task / conversation / project navigation
+  - 中央: Chat / execution / Karte proposal review
+  - 右: Personal Context / Sources / Document Preview
+- Chat上部はCurrent Chat / Project / Mode / Moreへ絞り，Source Scope / Web / Ephy起動は右のContext paneへ集約
+- 1200px以下はContext，900px以下はnavigationをdrawer化し，`Escape`のfocus復帰と`⌘K` / `⌘B` / `⌘.`を提供
 - `With Sources` mode で `/v1/rag/query` を使い、回答に使った source card を右ペインに表示
 - `Route Inspector` は Chat Context Bar 下の折りたたみ表示で、selected mode / backend model / source count / latency を必要時だけ確認
 - fast / work / code / gateway / embedding / qdrant / watch の起動・停止・runtime log 確認
@@ -453,7 +454,7 @@ Wails UI では以下を操作できる。
 - Recent Activity から過去 request / workflow の reuse / rerun
 - chat / route / ingest / rag / embedding / index / eval / workflow 結果の markdown export
 
-日常利用では `Chat` がデフォルト画面で、中央ペインは会話ログと入力欄を主役にし、会話コンテキストの切り替えや export は上部の `Chat Context Bar` から行う。`Library` に source search / ingest、`Settings` に Runtime / Routing / Evaluation / Logs を寄せており、従来の開発向けパネルも詳細操作時だけ開けばよい構成にしてある。Chat / Library の両方でファイルやディレクトリの Drag & Drop ingest を受け付ける。
+日常利用では `Chat` がデフォルト画面で，中央ペインは会話ログと入力欄を主役にし，右ペインはKarte Personal Contextと根拠previewを常設する．`Library` にsource search／ingest，`Settings` のDeveloper ModeにRuntime／Routing／Evaluation／Model／LoRA／Logsを寄せ，実験機能は削除せず通常modeから隠す．Chat／Libraryの両方でファイルやディレクトリのDrag & Drop ingestを受け付ける．詳細は`docs/AGENT_WORKSPACE_UI.md`を参照する．
 
 ## Prompt Template
 
