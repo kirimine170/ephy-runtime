@@ -2057,10 +2057,44 @@
         border-radius: 18px;
     }
 
-    .chat-toolbar-brand,
+    .chat-toolbar-brand {
+        display: none;
+    }
+
+    #chat-sidebar-toggle {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .chat-toolbar-current {
+        grid-column: 2;
+        grid-row: 1;
+    }
+
+    .chat-context-toggle {
+        grid-column: 3;
+        grid-row: 1;
+    }
+
+    .chat-header-actions {
+        grid-column: 4;
+        grid-row: 1;
+    }
+
     #chat-project-select,
     #chat-mode {
-        display: none;
+        display: block;
+        width: 100%;
+    }
+
+    #chat-project-select {
+        grid-column: 1 / span 2;
+        grid-row: 2;
+    }
+
+    #chat-mode {
+        grid-column: 3 / span 2;
+        grid-row: 2;
     }
 
     .chat-toolbar-current {

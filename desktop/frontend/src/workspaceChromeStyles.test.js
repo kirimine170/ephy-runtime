@@ -12,3 +12,15 @@ test('compact sidebar is bounded and independently scrollable', () => {
   assert.match(sidebarRule, /max-height:\s*100vh/);
   assert.match(sidebarRule, /overflow-y:\s*auto/);
 });
+
+test('compact toolbar keeps project and mode selectors operable', () => {
+  const selectorRule = compactWorkspaceCss.match(/#chat-project-select,\s*#chat-mode\s*\{([^}]+)\}/)?.[1] || '';
+  const projectRule = compactWorkspaceCss.match(/#chat-project-select\s*\{([^}]+)\}/)?.[1] || '';
+  const modeRule = [...compactWorkspaceCss.matchAll(/#chat-mode\s*\{([^}]+)\}/g)].at(-1)?.[1] || '';
+
+  assert.match(selectorRule, /display:\s*block/);
+  assert.match(selectorRule, /width:\s*100%/);
+  assert.match(projectRule, /grid-row:\s*2/);
+  assert.match(modeRule, /grid-row:\s*2/);
+  assert.doesNotMatch(compactWorkspaceCss, /#chat-project-select,\s*#chat-mode\s*\{[^}]*display:\s*none/);
+});
