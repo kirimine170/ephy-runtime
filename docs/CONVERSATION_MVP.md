@@ -43,7 +43,7 @@ fast modelを使う最小smokeとWails Chat導線を自動化する．起動，h
 これらは最初の安定したローカル会話を確認した後に進める．
 # 会話用の最小起動
 
-`./scripts/start_conversation.sh`はDesktopを開き，Desktop自身がFastとGatewayだけを起動します．Chatの`Ephyを起動`ボタンからも同じ操作ができます．既定の会話modeはQuickです．Work／Code／embeddingは必要になったときに起動してください．この起動方法なら開発者画面からモデルを切り替えられます．
+`./scripts/start_conversation.sh`はDesktopを開き，Desktop自身がFastとGatewayだけを起動します．Chatの`Ephyを起動`ボタンからも同じ操作ができます．既定の会話modeはQuickです．Work／Code／embeddingは必要になったときに起動してください．この起動方法なら開発者画面からモデルを切り替えられます．Fastが既に同じaliasを公開する外部processとして起動済みの場合，Desktopはそのprocessを停止対象にせず再利用します．
 
 初回の開発用Profileは`.venv/bin/python scripts/init_local_ephy.py --private-root /absolute/path/to/private-data`で用意できます．既存の`ephy.local.yaml`は上書きしません．生成する個体は署名やclone leaseを持たない開発用であり，正式なlifecycle実装の代わりではありません．
 
@@ -56,5 +56,7 @@ Desktopを終了すると，そのDesktop自身が起動したFast／Work／Code
 ローカル開発では，ビルド後に`bash scripts/start_conversation_app.sh`で起動できます．Terminalの実行環境と明示的なRuntime rootを保持してappを直接実行します．`.command`ショートカットからもこのscriptを呼び出せます．終了はappのQuitを使い，起動元のTerminalを先に閉じないでください．
 
 Karteとの会話連携を使う場合は，EphyとKarteの起動前に両方へ同じ`KARTE_DATA_DIR`を設定します．完了したChat応答にはKarte候補が自動表示され，分類相談，Karte Contextによる類似文書確認，create／append選択，Karteへの送信，receipt確認を会話画面内で行えます．Karte確認がpartial／unavailableの場合は自動createせず，カード上で再試行または明示選択を求めます．詳細な受入手順は[KARTE_FILESYSTEM_INTEGRATION.md](KARTE_FILESYSTEM_INTEGRATION.md)を参照してください．
+
+Developer Modeの「publish可能な候補をKarteへ自動送信する」を有効にすると，安全条件を満たす新しい会話カードはpending outboxまで自動送信されます．分類相談やstale planは自動送信せず，Karteでの最終採用は引き続きreviewします．
 
 `data/runtime/karte/Karte.app`にKarte bundleがインストールされている場合，`scripts/start_conversation_app.sh`はKarteも自動起動します．同梱方法と無効化設定は[KARTE_FILESYSTEM_INTEGRATION.md](KARTE_FILESYSTEM_INTEGRATION.md)を参照してください．

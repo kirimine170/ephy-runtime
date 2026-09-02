@@ -23,15 +23,25 @@ func TestDeveloperModeDefaultsOffAndPersists(t *testing.T) {
 	if enabled, err := a.SetDeveloperMode(true); err != nil || !enabled {
 		t.Fatal(enabled, err)
 	}
+	if enabled, err := a.SetKarteAutoSubmit(true); err != nil || !enabled {
+		t.Fatal(enabled, err)
+	}
 	b := newTestAppAtWorkspace(a.workspaceRoot)
 	if !b.developerModeEnabled() {
 		t.Fatal("developer mode was not persisted")
 	}
+	if !b.readDeveloperSettings().KarteAutoSubmit {
+		t.Fatal("Karte auto-submit was not persisted")
+	}
 	if _, err := b.SetDeveloperMode(false); err != nil {
 		t.Fatal(err)
 	}
-	if a.developerModeEnabled() {
-		t.Fatal("developer mode did not turn off")
+	settings := a.readDeveloperSettings()
+	if settings.Enabled || settings.KarteAutoSubmit {
+		t.Fatal("developer mode did not turn off automation")
+	}
+	if _, err := a.SetKarteAutoSubmit(true); err == nil {
+		t.Fatal("Karte auto-submit must require developer mode")
 	}
 }
 
@@ -172,5 +182,17 @@ func TestConversationReadinessUsesSelectedFastProfile(t *testing.T) {
 	alias, timeout = conversationReadiness(nil)
 	if alias != "" || timeout != 180*time.Second {
 		t.Fatalf("fallback alias=%q timeout=%s", alias, timeout)
+	}
+}
+
+func TestConversationFastOwnershipAdoptsHealthyExternalProcess(t *testing.T) {
+	if got := conversationFastOwnership(false, true); got != "external" {
+		t.Fatalf("ownership=%q，want external", got)
+	}
+	if got := conversationFastOwnership(true, true); got != "desktop" {
+		t.Fatalf("ownership=%q，want desktop", got)
+	}
+	if got := conversationFastOwnership(false, false); got != "start" {
+		t.Fatalf("ownership=%q，want start", got)
 	}
 }

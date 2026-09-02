@@ -1198,6 +1198,13 @@
     margin-top: 0;
 }
 
+.karte-memory-action-hint {
+    margin: -4px 0 0;
+    color: rgba(23, 20, 36, 0.7);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
 .chat-composer {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

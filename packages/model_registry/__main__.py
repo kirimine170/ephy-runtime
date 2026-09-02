@@ -10,11 +10,13 @@ from .service import ModelRegistry, PORTS, Selection
 def launch_command(registry, role, server, fallback_path, fallback_alias):
     selection = registry.selections().roles.get(role)
     adapter = None
+    preserve_reasoning = False
     if selection:
         model, adapter = registry.resolve(selection)
         path, alias, context = model.path, model.backend_model, model.context_size
         profile_match = registry.profile_for_model(model)
         gpu_layers = profile_match[1].gpu_layers if profile_match else 99
+        preserve_reasoning = bool(profile_match and profile_match[1].preserve_thinking)
     else:
         if not Path(fallback_path).is_file():
             raise ValueError("Default model file is missing")
@@ -24,6 +26,8 @@ def launch_command(registry, role, server, fallback_path, fallback_alias):
                "--ctx-size", str(context), "--alias", alias, "--n-gpu-layers", str(gpu_layers)]
     if adapter:
         command.extend(["--lora", adapter.path])
+    if preserve_reasoning:
+        command.append("--reasoning-preserve")
     return command
 
 

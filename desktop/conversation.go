@@ -14,6 +14,16 @@ func conversationReadiness(catalog *LocalModelCatalog) (string, time.Duration) {
 	return modelReadiness(catalog, catalog.Selections["fast"])
 }
 
+func conversationFastOwnership(managed, listening bool) string {
+	if managed {
+		return "desktop"
+	}
+	if listening {
+		return "external"
+	}
+	return "start"
+}
+
 // The conversation MVP owns only Fast and Gateway, keeping the other models unloaded．
 func (a *App) startConversation() (*StackActionResponse, error) {
 	if a.baseURL != "http://127.0.0.1:8000" && a.baseURL != "http://localhost:8000" {
@@ -22,23 +32,27 @@ func (a *App) startConversation() (*StackActionResponse, error) {
 	a.mu.Lock()
 	managed := a.fastRunning && a.fastCmd != nil
 	a.mu.Unlock()
-	if !managed && portListening("8081") {
-		return nil, fmt.Errorf("Fast is running outside Desktop; stop its launcher before starting the managed conversation stack")
-	}
+	fastOwnership := conversationFastOwnership(managed, portListening("8081"))
 	var catalog *LocalModelCatalog
 	if current, err := a.GetLocalModelCatalog(); err == nil {
 		catalog = current
 	}
 	alias, timeout := conversationReadiness(catalog)
-	if _, err := a.StartFast(); err != nil {
-		return nil, err
-	}
-	if err := waitLocalModelReady("8081", alias, timeout, func() bool {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		return a.fastRunning
-	}); err != nil {
-		return nil, err
+	if fastOwnership == "external" {
+		if err := waitLocalModelReady("8081", alias, min(timeout, 30*time.Second)); err != nil {
+			return nil, fmt.Errorf("external Fast endpoint is not ready: %w", err)
+		}
+	} else {
+		if _, err := a.StartFast(); err != nil {
+			return nil, err
+		}
+		if err := waitLocalModelReady("8081", alias, timeout, func() bool {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return a.fastRunning
+		}); err != nil {
+			return nil, err
+		}
 	}
 	if !portListening("8000") {
 		if _, err := a.StartGateway(); err != nil {
@@ -55,7 +69,11 @@ func (a *App) startConversation() (*StackActionResponse, error) {
 			response.Body.Close()
 			if response.StatusCode == http.StatusOK && decodeErr == nil && health.Status == "ok" &&
 				(health.Service == "ephy-runtime-gateway" || health.Service == "local-llm-workbench-gateway") {
-				return &StackActionResponse{Status: "ready", Steps: map[string]any{"fast": "ready", "gateway": "ready"}}, nil
+				fastStatus := "ready"
+				if fastOwnership == "external" {
+					fastStatus = "external_ready"
+				}
+				return &StackActionResponse{Status: "ready", Steps: map[string]any{"fast": fastStatus, "gateway": "ready"}}, nil
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
