@@ -42,13 +42,13 @@ export function transitionChatEntryToFailure(entry, message = '') {
   return failed;
 }
 
-export function transitionChatEntryToComplete(entry, {
+export function mergeChatCompletionMetadata(entry, {
   meta = '',
   answer = '',
   thinking = '',
   finishReason = '',
 } = {}) {
-  if (!entry?.streaming) return null;
+  if (!entry) return null;
   const completed = {
     ...entry,
     streaming: false,
@@ -62,4 +62,9 @@ export function transitionChatEntryToComplete(entry, {
     completed.text = answer;
   }
   return completed;
+}
+
+export function transitionChatEntryToComplete(entry, metadata = {}) {
+  if (!entry?.streaming) return null;
+  return mergeChatCompletionMetadata(entry, metadata);
 }

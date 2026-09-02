@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   announceChatStream,
   chatMessageAccessibilityAttributes,
+  mergeChatCompletionMetadata,
   transitionChatEntryToComplete,
   transitionChatEntryToFailure,
   validateChatPrompt,
@@ -99,6 +100,30 @@ test('only an actively streaming entry transitions to an announced completion', 
       thinking: 'trace',
       meta: 'local',
       finishReason: 'stop',
+    },
+  );
+});
+
+test('late completion metadata merges without reopening the completed entry', () => {
+  assert.deepEqual(
+    mergeChatCompletionMetadata(
+      {
+        requestId: 'done',
+        streaming: false,
+        text: 'answer',
+        thinking: '',
+        meta: 'Quick · streaming',
+        finishReason: '',
+      },
+      {meta: 'Quick · done', thinking: 'trace', finishReason: 'length'},
+    ),
+    {
+      requestId: 'done',
+      streaming: false,
+      text: 'answer',
+      thinking: 'trace',
+      meta: 'Quick · done',
+      finishReason: 'length',
     },
   );
 });
