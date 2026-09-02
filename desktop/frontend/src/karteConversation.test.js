@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildKarteConversationRequest,
+  formatKarteConversationContextStatus,
   formatLocalISOString,
   renderKarteConversationCard,
 } from './karteConversation.js';
@@ -21,11 +22,13 @@ test('conversation request keeps only completed user and assistant messages', ()
     kind: 'decision',
     resolution: 'create',
     intendedDocId: 'ignored-for-create',
+    reviewedPlanSha256: 'a'.repeat(64),
   });
 
   assert.equal(payload.project, 'ephy');
   assert.equal(payload.kind, 'decision');
   assert.equal(payload.intended_doc_id, null);
+  assert.equal(payload.reviewed_plan_sha256, 'a'.repeat(64));
   assert.deepEqual(payload.messages, [
     {role: 'user', content: '方針を決めたい'},
     {role: 'assistant', content: 'project優先で決定します．'},
@@ -45,6 +48,23 @@ test('local ISO timestamp preserves the local offset', () => {
 });
 
 
+test('conversation context status distinguishes partial reads from complete checks', () => {
+  assert.equal(
+    formatKarteConversationContextStatus({
+      status: 'partial', searched_count: 3, read_count: 2, read_failed_count: 1,
+    }),
+    'Karte一部確認 · 2件読取／3件検索 · 1件未読',
+  );
+  assert.equal(formatKarteConversationContextStatus({status: 'not_required'}), 'Karte確認不要');
+  assert.equal(
+    formatKarteConversationContextStatus({
+      status: 'ok', searched_count: 0, read_count: 1, read_failed_count: 0,
+    }),
+    'Karte確認済み · 1件読取',
+  );
+});
+
+
 test('Karte card renders consultation controls and escapes summary content', () => {
   const html = renderKarteConversationCard({
     state: 'consultation',
@@ -55,6 +75,7 @@ test('Karte card renders consultation controls and escapes summary content', () 
       reasons: ['project is required'],
       summary_title: '<script>alert(1)</script>',
       summary_markdown: '# <unsafe>',
+      context_status: {status: 'unavailable', searched_count: 0, read_count: 0, read_failed_count: 0},
       proposal: {placement: {project: 'master', kind: 'note', confidence: 0.5}},
       similar_documents: [{
         doc_id: 'doc:existing',
@@ -67,6 +88,7 @@ test('Karte card renders consultation controls and escapes summary content', () 
 
   assert.match(html, /Karte候補/);
   assert.match(html, /data-karte-field="project"/);
+  assert.match(html, /Karte確認不可/);
   assert.match(html, /doc:existing/);
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;/);

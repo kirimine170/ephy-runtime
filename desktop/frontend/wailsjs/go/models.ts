@@ -582,6 +582,24 @@ export namespace main {
 	        this.similarity = source["similarity"];
 	    }
 	}
+	export class KarteConversationContextStatus {
+	    status: string;
+	    searched_count: number;
+	    read_count: number;
+	    read_failed_count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new KarteConversationContextStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.searched_count = source["searched_count"];
+	        this.read_count = source["read_count"];
+	        this.read_failed_count = source["read_failed_count"];
+	    }
+	}
 	export class KarteConversationPlanResponse {
 	    candidate_id: string;
 	    recommendation: string;
@@ -591,6 +609,8 @@ export namespace main {
 	    summary_title: string;
 	    summary_markdown: string;
 	    similar_documents: KarteSimilarDocument[];
+	    context_status?: KarteConversationContextStatus;
+	    plan_sha256: string;
 	    proposal: Record<string, any>;
 
 	    static createFrom(source: any = {}) {
@@ -607,6 +627,8 @@ export namespace main {
 	        this.summary_title = source["summary_title"];
 	        this.summary_markdown = source["summary_markdown"];
 	        this.similar_documents = this.convertValues(source["similar_documents"], KarteSimilarDocument);
+	        this.context_status = this.convertValues(source["context_status"], KarteConversationContextStatus);
+	        this.plan_sha256 = source["plan_sha256"];
 	        this.proposal = source["proposal"];
 	    }
 
@@ -674,6 +696,7 @@ export namespace main {
 	    tags: string[];
 	    resolution: string;
 	    intended_doc_id?: string;
+	    reviewed_plan_sha256?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new KarteConversationRequest(source);
@@ -690,6 +713,7 @@ export namespace main {
 	        this.tags = source["tags"];
 	        this.resolution = source["resolution"];
 	        this.intended_doc_id = source["intended_doc_id"];
+	        this.reviewed_plan_sha256 = source["reviewed_plan_sha256"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
