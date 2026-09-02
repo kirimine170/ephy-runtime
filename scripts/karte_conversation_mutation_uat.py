@@ -27,6 +27,7 @@ from packages.karte_core.conversation import (  # noqa: E402
     KarteConversationRequest,
     KarteConversationService,
 )
+from packages.karte_core.source import KarteSourceAdapter  # noqa: E402
 
 
 APPEND_DOC_ID = "doc:uat-conversation-append"
@@ -267,6 +268,23 @@ def _verify_reject_canonical_check(data_root: Path, candidate_id: str) -> dict:
     }
 
 
+def _verify_collision_document(data_root: Path, collision_path: Path, expected_doc_id: str, plan) -> None:
+    try:
+        relative_path = collision_path.relative_to(data_root).as_posix()
+        document = KarteSourceAdapter(data_root).read_document(relative_path)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("collision acceptance did not produce valid canonical Markdown") from exc
+    placement = plan.proposal.placement
+    if (
+        document.doc_id != expected_doc_id
+        or document.frontmatter.get("project") != placement.project
+        or document.frontmatter.get("kind") != placement.kind
+    ):
+        raise RuntimeError("collision acceptance changed canonical identity")
+    if plan.summary_markdown.strip() not in document.body:
+        raise RuntimeError("collision acceptance lost proposed content")
+
+
 def _verify_receipts(
     *, service: KarteConversationService, data_root: Path, plans: dict[str, object], client: KarteContextClient
 ) -> dict:
@@ -295,6 +313,7 @@ def _verify_receipts(
     expected_suffix = f"--{collision_receipt.doc_id[:8]}.md"
     if not collision_receipt.relative_path.endswith(expected_suffix) or not collision_path.is_file():
         raise RuntimeError("same-name collision did not receive the doc_id prefix suffix")
+    _verify_collision_document(data_root, collision_path, collision_receipt.doc_id, plans["collision"])
     occupant_path = (
         data_root
         / "content"

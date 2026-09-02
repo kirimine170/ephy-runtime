@@ -70,6 +70,41 @@ def test_collision_fixture_occupies_only_the_preferred_path(tmp_path: Path) -> N
     assert OCCUPANT_DOC_ID in occupant.read_text(encoding="utf-8")
 
 
+def test_collision_document_requires_summary_and_canonical_identity(tmp_path: Path) -> None:
+    collision_path = tmp_path / "content/projects/ephy/decision/2026-09/collision--12345678.md"
+    collision_path.parent.mkdir(parents=True)
+    summary = "# Collision\n\nExpected proposal body．\n"
+    plan = SimpleNamespace(
+        summary_markdown=summary,
+        proposal=SimpleNamespace(
+            placement=SimpleNamespace(project="ephy", kind="decision"),
+        ),
+    )
+
+    def write_document(*, doc_id: str, body: str) -> None:
+        collision_path.write_text(
+            "---\n"
+            f'doc_id: "{doc_id}"\n'
+            'title: "Collision"\n'
+            'project: "ephy"\n'
+            'kind: "decision"\n'
+            "---\n"
+            f"{body}",
+            encoding="utf-8",
+        )
+
+    write_document(doc_id="doc:collision", body=summary)
+    mutation_uat._verify_collision_document(tmp_path, collision_path, "doc:collision", plan)
+
+    write_document(doc_id="doc:collision", body="# Wrong body\n")
+    with pytest.raises(RuntimeError, match="lost proposed content"):
+        mutation_uat._verify_collision_document(tmp_path, collision_path, "doc:collision", plan)
+
+    write_document(doc_id="doc:other", body=summary)
+    with pytest.raises(RuntimeError, match="changed canonical identity"):
+        mutation_uat._verify_collision_document(tmp_path, collision_path, "doc:collision", plan)
+
+
 def test_artifact_revision_requires_signed_embedded_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

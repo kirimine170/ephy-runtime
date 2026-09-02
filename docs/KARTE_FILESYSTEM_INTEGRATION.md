@@ -95,7 +95,7 @@ Append，同名別`doc_id` collision，rejectを一括で再現する場合は�
   --report /tmp/ephy-karte-conversation-mutation-uat.json
 ```
 
-UATは既存append先のidentityと本文を維持し，同名createでは新しい`doc_id`先頭8文字をfilenameへ付け，rejectではcanonical Markdownを作らないことを検証します．Karte repositoryは`HEAD`のclean cloneを一時利用するため，利用者のuntracked fileや作業中のcheckoutを変更しません．
+UATは既存append先のidentityと本文を維持し，同名createでは新しい`doc_id`先頭8文字をfilenameへ付け，rejectではcanonical Markdownを作らないことを検証します．Karte repositoryから署名済みartifactに埋め込まれたrevisionのclean cloneを一時利用するため，利用者のuntracked fileや作業中のcheckoutを変更しません．
 
 Build Ephy with `bash scripts/build_conversation_app.sh` and Karte with its `bash scripts/build_local_app.sh`．A compatible Wails CLI may instead package either app with `wails build`．Start Karte and Ephy with the same absolute data directory:
 
