@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
 const appCss = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
-const compactWorkspaceCss = appCss.slice(appCss.lastIndexOf('@media (max-width: 900px)'));
+const compactWorkspaceStart = appCss.lastIndexOf('@media (max-width: 900px)');
+const splitWorkspaceStart = appCss.lastIndexOf('@media (max-width: 1200px)', compactWorkspaceStart);
+const compactWorkspaceCss = appCss.slice(compactWorkspaceStart);
+const splitWorkspaceCss = appCss.slice(splitWorkspaceStart, compactWorkspaceStart);
 
 test('compact sidebar is bounded and independently scrollable', () => {
   const sidebarRule = compactWorkspaceCss.match(/\.sidebar\s*\{([^}]+)\}/)?.[1] || '';
@@ -29,6 +32,18 @@ test('compact More panel overlays the full toolbar width', () => {
   const toolbarRule = compactWorkspaceCss.match(/\.chat-toolbar\s*\{([^}]+)\}/)?.[1] || '';
   const menuRule = compactWorkspaceCss.match(/\.chat-more-menu\s*\{([^}]+)\}/)?.[1] || '';
   const panelRule = compactWorkspaceCss.match(/\.chat-more-panel\s*\{([^}]+)\}/)?.[1] || '';
+
+  assert.match(toolbarRule, /position:\s*relative/);
+  assert.match(menuRule, /position:\s*static/);
+  assert.match(panelRule, /position:\s*absolute/);
+  assert.match(panelRule, /inset:\s*calc\(100% \+ 8px\) 0 auto/);
+  assert.match(panelRule, /width:\s*auto/);
+});
+
+test('split More panel overlays without expanding the toolbar', () => {
+  const toolbarRule = splitWorkspaceCss.match(/\.chat-toolbar\s*\{([^}]+)\}/)?.[1] || '';
+  const menuRule = splitWorkspaceCss.match(/\.chat-more-menu\s*\{([^}]+)\}/)?.[1] || '';
+  const panelRule = splitWorkspaceCss.match(/\.chat-more-panel\s*\{([^}]+)\}/)?.[1] || '';
 
   assert.match(toolbarRule, /position:\s*relative/);
   assert.match(menuRule, /position:\s*static/);

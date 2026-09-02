@@ -1998,10 +1998,23 @@
 
     .chat-toolbar {
         flex-wrap: wrap;
+        position: relative;
     }
 
     .chat-header-actions {
         margin-left: 0;
+    }
+
+    .chat-more-menu {
+        position: static;
+    }
+
+    .chat-more-panel {
+        position: absolute;
+        inset: calc(100% + 8px) 0 auto;
+        box-sizing: border-box;
+        width: auto;
+        margin-top: 0;
     }
 }
 
