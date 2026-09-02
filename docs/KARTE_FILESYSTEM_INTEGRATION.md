@@ -88,6 +88,15 @@ Conversation timestamps must include a timezone．Create proposals contain the c
 
 ## Native acceptance test
 
+Append，同名別`doc_id` collision，rejectを一括で再現する場合は，Ephy repositoryとKarte repositoryを同じ親directoryに置き，次を実行します．実Karte bundleがContext Protocolを処理し，Ephyが3件のreview済みproposalを作成します．Karteの`ListEphyProposals`／`AcceptEphyProposal`／`RejectEphyProposal`でreviewを処理した後，Ephyがreceiptを再読し，採用した2文書をPersonal Contextから`doc_id`でread-backします．作業用data rootとreportにはsynthetic dataだけを使います．
+
+```bash
+.venv/bin/python scripts/karte_conversation_mutation_uat.py \
+  --report /tmp/ephy-karte-conversation-mutation-uat.json
+```
+
+UATは既存append先のidentityと本文を維持し，同名createでは新しい`doc_id`先頭8文字をfilenameへ付け，rejectではcanonical Markdownを作らないことを検証します．Karte repositoryは`HEAD`のclean cloneを一時利用するため，利用者のuntracked fileや作業中のcheckoutを変更しません．
+
 Build Ephy with `bash scripts/build_conversation_app.sh` and Karte with its `bash scripts/build_local_app.sh`．A compatible Wails CLI may instead package either app with `wails build`．Start Karte and Ephy with the same absolute data directory:
 
 ```bash
