@@ -458,3 +458,17 @@ def test_publish_rejects_plan_that_was_not_explicitly_reviewed(tmp_path: Path) -
         service.publish(_request())
 
     assert list((root / ".mdsys/ephy/outbox/pending").glob("*.json")) == []
+
+
+def test_publish_reports_stale_review_before_new_context_consultation(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    context_client = _StaticContextClient(selection=_empty_selection())
+    service = KarteConversationService(root, context_client=context_client)
+    request = _request()
+    reviewed_plan = service.plan(request)
+    context_client.error = KarteContextTimeout("synthetic timeout after review")
+
+    with pytest.raises(ValueError, match="changed after review"):
+        service.publish(request.model_copy(update={"reviewed_plan_sha256": reviewed_plan.plan_sha256}))
+
+    assert list((root / ".mdsys/ephy/outbox/pending").glob("*.json")) == []

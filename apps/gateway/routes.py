@@ -359,7 +359,8 @@ def build_router() -> APIRouter:
     @router.post("/v1/karte/conversations/plan")
     async def karte_conversation_plan(payload: KarteConversationRequest, request: Request) -> dict:
         try:
-            return _karte_conversation_service(request).plan(payload).model_dump(mode="json")
+            response = await asyncio.to_thread(_karte_conversation_service(request).plan, payload)
+            return response.model_dump(mode="json")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except OSError as exc:
@@ -368,7 +369,8 @@ def build_router() -> APIRouter:
     @router.post("/v1/karte/conversations/publish")
     async def karte_conversation_publish(payload: KarteConversationRequest, request: Request) -> dict:
         try:
-            return _karte_conversation_service(request).publish(payload).model_dump(mode="json")
+            response = await asyncio.to_thread(_karte_conversation_service(request).publish, payload)
+            return response.model_dump(mode="json")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except OSError as exc:

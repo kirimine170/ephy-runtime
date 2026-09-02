@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +95,18 @@ func TestGetKarteProposalStatusRejectsBlankCandidateID(t *testing.T) {
 	app := NewApp()
 	if _, err := app.GetKarteProposalStatus("  "); err == nil {
 		t.Fatal("expected blank candidate_id to be rejected")
+	}
+}
+
+func TestPublishKarteConversationPreservesGatewayErrorDetail(t *testing.T) {
+	app, _ := newKarteConversationTestApp(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"Karte proposal changed after review; re-plan and review it again"}`))
+	}))
+
+	_, err := app.PublishKarteConversation(karteConversationRequestFixture())
+	if err == nil || !strings.Contains(err.Error(), "Karte proposal changed after review") {
+		t.Fatalf("gateway detail was not preserved: %v", err)
 	}
 }

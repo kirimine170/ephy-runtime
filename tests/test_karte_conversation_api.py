@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from apps.gateway.main import app
@@ -109,3 +111,41 @@ def test_karte_conversation_api_rejects_unreviewed_publishable_plan(tmp_path) ->
     assert response.status_code == 400
     assert "changed after review" in response.json()["detail"]
     assert list((root / ".mdsys/ephy/outbox/pending").glob("*.json")) == []
+
+
+def test_karte_conversation_api_runs_context_polling_outside_event_loop(tmp_path) -> None:
+    root = tmp_path / "karte_data"
+    (root / "content").mkdir(parents=True)
+    delegate = KarteConversationService(root)
+
+    class WorkerThreadService:
+        @staticmethod
+        def _assert_no_event_loop() -> None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            raise AssertionError("conversation context polling ran on the gateway event loop")
+
+        def plan(self, payload):
+            self._assert_no_event_loop()
+            return delegate.plan(payload)
+
+        def publish(self, payload):
+            self._assert_no_event_loop()
+            return delegate.publish(payload)
+
+    with TestClient(app) as client:
+        original = app.state.karte_conversation_service
+        app.state.karte_conversation_service = WorkerThreadService()
+        try:
+            plan_response = client.post("/v1/karte/conversations/plan", json=_payload())
+            publish_response = client.post(
+                "/v1/karte/conversations/publish",
+                json={**_payload(), "reviewed_plan_sha256": plan_response.json()["plan_sha256"]},
+            )
+        finally:
+            app.state.karte_conversation_service = original
+
+    assert plan_response.status_code == 200
+    assert publish_response.status_code == 200

@@ -5419,7 +5419,12 @@ func (a *App) postJSONWithClient(client *http.Client, path string, payload any, 
 	defer response.Body.Close()
 
 	if response.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("gateway returned %s", response.Status)
+		data, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+		trimmed := strings.TrimSpace(string(data))
+		if trimmed == "" {
+			return fmt.Errorf("gateway returned %s", response.Status)
+		}
+		return fmt.Errorf("gateway returned %s: %s", response.Status, trimmed)
 	}
 
 	return json.NewDecoder(response.Body).Decode(out)

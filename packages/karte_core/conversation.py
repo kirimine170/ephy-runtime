@@ -393,11 +393,14 @@ class KarteConversationService:
 
     def publish(self, request: KarteConversationRequest) -> KarteConversationPublishResponse:
         plan = self.plan(request)
+        if request.reviewed_plan_sha256 is not None and not hmac.compare_digest(
+            request.reviewed_plan_sha256,
+            plan.plan_sha256,
+        ):
+            raise ValueError("Karte proposal changed after review; re-plan and review it again")
         plan.proposal.require_publishable()
         if request.reviewed_plan_sha256 is None:
             raise ValueError("publish requires reviewed_plan_sha256 from the displayed plan")
-        if not hmac.compare_digest(request.reviewed_plan_sha256, plan.plan_sha256):
-            raise ValueError("Karte proposal changed after review; re-plan and review it again")
         result = self.outbox.publish(plan.proposal)
         return KarteConversationPublishResponse(
             candidate_id=result.candidate_id,
