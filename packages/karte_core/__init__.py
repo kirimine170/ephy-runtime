@@ -16,6 +16,7 @@ from .context import (
 )
 from .conversation import (
     ConversationMessage,
+    KarteConversationContextStatus,
     KarteConversationPlanResponse,
     KarteConversationPublishResponse,
     KarteConversationRequest,
@@ -38,6 +39,7 @@ __all__ = [
     "KarteContextSelection",
     "KarteContextTimeout",
     "KarteConversationPlanResponse",
+    "KarteConversationContextStatus",
     "KarteConversationPublishResponse",
     "KarteConversationRequest",
     "KarteConversationService",

@@ -134,15 +134,16 @@ type KarteConversationMessage struct {
 }
 
 type KarteConversationRequest struct {
-	ConversationID string                     `json:"conversation_id"`
-	Messages       []KarteConversationMessage `json:"messages"`
-	OccurredAt     string                     `json:"occurred_at"`
-	Project        string                     `json:"project,omitempty"`
-	Kind           string                     `json:"kind,omitempty"`
-	Sensitivity    string                     `json:"sensitivity"`
-	Tags           []string                   `json:"tags"`
-	Resolution     string                     `json:"resolution"`
-	IntendedDocID  string                     `json:"intended_doc_id,omitempty"`
+	ConversationID     string                     `json:"conversation_id"`
+	Messages           []KarteConversationMessage `json:"messages"`
+	OccurredAt         string                     `json:"occurred_at"`
+	Project            string                     `json:"project,omitempty"`
+	Kind               string                     `json:"kind,omitempty"`
+	Sensitivity        string                     `json:"sensitivity"`
+	Tags               []string                   `json:"tags"`
+	Resolution         string                     `json:"resolution"`
+	IntendedDocID      string                     `json:"intended_doc_id,omitempty"`
+	ReviewedPlanSHA256 string                     `json:"reviewed_plan_sha256,omitempty"`
 }
 
 type KarteSimilarDocument struct {
@@ -154,16 +155,25 @@ type KarteSimilarDocument struct {
 	Similarity   float64 `json:"similarity"`
 }
 
+type KarteConversationContextStatus struct {
+	Status          string `json:"status"`
+	SearchedCount   int    `json:"searched_count"`
+	ReadCount       int    `json:"read_count"`
+	ReadFailedCount int    `json:"read_failed_count"`
+}
+
 type KarteConversationPlanResponse struct {
-	CandidateID      string                 `json:"candidate_id"`
-	Recommendation   string                 `json:"recommendation"`
-	Publishable      bool                   `json:"publishable"`
-	NeedsProject     bool                   `json:"needs_project"`
-	Reasons          []string               `json:"reasons"`
-	SummaryTitle     string                 `json:"summary_title"`
-	SummaryMarkdown  string                 `json:"summary_markdown"`
-	SimilarDocuments []KarteSimilarDocument `json:"similar_documents"`
-	Proposal         map[string]any         `json:"proposal"`
+	CandidateID      string                          `json:"candidate_id"`
+	Recommendation   string                          `json:"recommendation"`
+	Publishable      bool                            `json:"publishable"`
+	NeedsProject     bool                            `json:"needs_project"`
+	Reasons          []string                        `json:"reasons"`
+	SummaryTitle     string                          `json:"summary_title"`
+	SummaryMarkdown  string                          `json:"summary_markdown"`
+	SimilarDocuments []KarteSimilarDocument          `json:"similar_documents"`
+	ContextStatus    *KarteConversationContextStatus `json:"context_status,omitempty"`
+	PlanSHA256       string                          `json:"plan_sha256"`
+	Proposal         map[string]any                  `json:"proposal"`
 }
 
 type KarteConversationPublishResponse struct {

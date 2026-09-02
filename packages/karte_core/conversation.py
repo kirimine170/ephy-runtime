@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -12,9 +13,14 @@ from typing import Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .contracts import KarteChangeProposal, KarteDocumentKind, KarteReceipt, PlacementCandidate, SourceRef
+from .context import (
+    ContextDocument,
+    ContextSearchResult,
+    KarteContextClient,
+    KarteContextError,
+)
 from .outbox import KarteOutbox
 from .planning import ExistingDocumentMatch, KarteProposalPlanner
-from .source import KarteDocument, KarteSourceAdapter
 
 
 SUPPORTED_KINDS = tuple(get_args(KarteDocumentKind))
@@ -23,6 +29,7 @@ _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SPACE_RE = re.compile(r"\s+")
 _WORD_RE = re.compile(r"[a-z0-9_]{2,}|[ぁ-んァ-ヶ一-龠々]{1,}", re.IGNORECASE)
 _TITLE_TRIM_RE = re.compile(r"^[#>*\-\s]+|[。．.!！?？、，,:：;；\s]+$")
+_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
 class ConversationMessage(BaseModel):
@@ -52,6 +59,7 @@ class KarteConversationRequest(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=16)
     resolution: Literal["auto", "create", "append"] = "auto"
     intended_doc_id: str | None = None
+    reviewed_plan_sha256: str | None = None
 
     @field_validator("conversation_id")
     @classmethod
@@ -77,6 +85,13 @@ class KarteConversationRequest(BaseModel):
         if any(len(tag) > 64 for tag in normalized):
             raise ValueError("tags cannot exceed 64 characters")
         return normalized
+
+    @field_validator("reviewed_plan_sha256")
+    @classmethod
+    def validate_reviewed_plan_sha256(cls, value: str | None) -> str | None:
+        if value is not None and not _SHA256_RE.fullmatch(value):
+            raise ValueError("reviewed_plan_sha256 must be a lowercase SHA-256 digest")
+        return value
 
     @model_validator(mode="after")
     def validate_resolution(self) -> "KarteConversationRequest":
@@ -104,6 +119,15 @@ class SimilarDocument(BaseModel):
     similarity: float = Field(ge=0, le=1)
 
 
+class KarteConversationContextStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok", "partial", "unavailable", "not_required"]
+    searched_count: int = Field(ge=0, le=20)
+    read_count: int = Field(ge=0, le=3)
+    read_failed_count: int = Field(ge=0, le=3)
+
+
 class KarteConversationPlanResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +139,8 @@ class KarteConversationPlanResponse(BaseModel):
     summary_title: str
     summary_markdown: str
     similar_documents: list[SimilarDocument]
+    context_status: KarteConversationContextStatus
+    plan_sha256: str
     proposal: KarteChangeProposal
 
 
@@ -142,43 +168,72 @@ class _ClassifiedKind:
     candidates: list[tuple[str, float, str]]
 
 
+@dataclass(frozen=True)
+class _ContextCandidates:
+    status: Literal["ok", "partial", "unavailable", "not_required"]
+    searched_count: int
+    documents: list[ContextDocument]
+    fallback_results: list[ContextSearchResult]
+    read_failed_count: int
+    consultation_reasons: list[str]
+
+    @property
+    def read_count(self) -> int:
+        return len(self.documents)
+
+
 class KarteConversationService:
     """Turn a reviewed Ephy conversation into a Karte outbox proposal."""
 
-    def __init__(self, karte_data_dir: str | Path) -> None:
-        self.adapter = KarteSourceAdapter(karte_data_dir)
+    def __init__(self, karte_data_dir: str | Path, *, context_client: KarteContextClient | None = None) -> None:
+        self.context_client = context_client or KarteContextClient(karte_data_dir)
         self.outbox = KarteOutbox(karte_data_dir)
         self.planner = KarteProposalPlanner()
 
     @classmethod
-    def from_environment(cls) -> "KarteConversationService | None":
+    def from_environment(
+        cls,
+        *,
+        context_client: KarteContextClient | None = None,
+    ) -> "KarteConversationService | None":
         configured = os.environ.get("KARTE_DATA_DIR", "").strip()
         if not configured:
             return None
         try:
-            return cls(configured)
+            return cls(configured, context_client=context_client)
         except (OSError, ValueError):
             return None
 
     def plan(self, request: KarteConversationRequest) -> KarteConversationPlanResponse:
-        scan = self.adapter.scan()
         summary_title, create_body, append_body = _summarize_conversation(request.messages, request.occurred_at)
-        similar_pairs = _similar_documents(scan.documents, summary_title, create_body)
-        similar_documents = [_public_similar_document(document, similarity) for document, similarity in similar_pairs]
+        context = self._context_candidates(request, summary_title, create_body)
+        similar_pairs = _similar_documents(context.documents, summary_title, create_body)
+        fallback_pairs = _similar_search_results(context.fallback_results, summary_title, create_body)
+        similar_documents = [
+            *[_public_similar_document(document, similarity) for document, similarity in similar_pairs],
+            *[_public_similar_result(result, similarity) for result, similarity in fallback_pairs],
+        ]
+        similar_documents.sort(key=lambda item: (-item.similarity, item.relative_path))
         matches = [_existing_match(document, similarity) for document, similarity in similar_pairs]
 
         selected_document = next(
-            (document for document in scan.documents if request.intended_doc_id and document.doc_id == request.intended_doc_id),
+            (
+                document
+                for document in context.documents
+                if request.intended_doc_id and document.doc_id == request.intended_doc_id
+            ),
             None,
         )
         if selected_document is not None and not any(match.doc_id == selected_document.doc_id for match in matches):
             similarity = _document_similarity(selected_document, summary_title, create_body)
             matches.append(_existing_match(selected_document, similarity))
+            similar_documents.append(_public_similar_document(selected_document, similarity))
+            similar_documents.sort(key=lambda item: (-item.similarity, item.relative_path))
         classified = _classify_kind(request.messages, request.kind)
         project = request.project or "master"
         kind = classified.kind
         confidence = classified.confidence
-        additional_consultation_reasons: list[str] = []
+        additional_consultation_reasons = list(context.consultation_reasons)
         if request.project is None:
             confidence = min(confidence, 0.5)
             additional_consultation_reasons.append("project is required before publication")
@@ -212,6 +267,13 @@ class KarteConversationService:
             proposed_body = create_body
 
         effective_matches = [] if request.resolution == "create" else matches
+        source_refs = [
+            SourceRef(type="ephy-conversation", reference=f"conversation:{request.conversation_id}#{candidate_id}"),
+            *[
+                SourceRef(type="karte-context", reference=f"doc_id:{document.doc_id}", sha256=document.sha256)
+                for document in context.documents
+            ],
+        ]
         plan = self.planner.plan(
             candidate_id=candidate_id,
             project=project,
@@ -222,7 +284,7 @@ class KarteConversationService:
             placement_candidates=placement_candidates,
             proposed_frontmatter=proposed_frontmatter,
             proposed_body=proposed_body,
-            source_refs=[SourceRef(type="ephy-conversation", reference=f"conversation:{request.conversation_id}#{candidate_id}")],
+            source_refs=source_refs,
             sensitivity=request.sensitivity,
             created_at=request.occurred_at,
             intended_doc_id=request.intended_doc_id if request.resolution != "create" else None,
@@ -230,6 +292,7 @@ class KarteConversationService:
             additional_consultation_reasons=additional_consultation_reasons,
             content_match_confirmed=request.resolution == "append",
         )
+        plan_sha256 = _proposal_sha256(plan.proposal)
         return KarteConversationPlanResponse(
             candidate_id=candidate_id,
             recommendation=plan.recommendation,
@@ -239,12 +302,102 @@ class KarteConversationService:
             summary_title=summary_title,
             summary_markdown=proposed_body,
             similar_documents=similar_documents[:5],
+            context_status=KarteConversationContextStatus(
+                status=context.status,
+                searched_count=context.searched_count,
+                read_count=context.read_count,
+                read_failed_count=context.read_failed_count,
+            ),
+            plan_sha256=plan_sha256,
             proposal=plan.proposal,
+        )
+
+    def _context_candidates(
+        self,
+        request: KarteConversationRequest,
+        summary_title: str,
+        create_body: str,
+    ) -> _ContextCandidates:
+        if request.resolution == "create" or request.project is None:
+            return _ContextCandidates("not_required", 0, [], [], 0, [])
+        if request.resolution == "append":
+            try:
+                response = self.context_client.read(
+                    request.intended_doc_id or "",
+                    projects=[request.project],
+                    tags=[],
+                    sensitivity_ceiling=request.sensitivity,
+                )
+            except (KarteContextError, ValueError):
+                return _ContextCandidates(
+                    "unavailable",
+                    0,
+                    [],
+                    [],
+                    1,
+                    ["Karte Personal Context could not verify the selected append target"],
+                )
+            if response.status != "ok" or response.document is None:
+                return _ContextCandidates(
+                    "unavailable",
+                    0,
+                    [],
+                    [],
+                    1,
+                    ["the selected Karte document is denied，missing，or unavailable"],
+                )
+            return _ContextCandidates("ok", 0, [response.document], [], 0, [])
+
+        query = _truncate(f"{summary_title}\n{create_body}", 2_048)
+        try:
+            selection = self.context_client.search_and_read(
+                query,
+                projects=[request.project],
+                tags=[],
+                sensitivity_ceiling=request.sensitivity,
+                top_k=5,
+                max_documents=3,
+            )
+        except (KarteContextError, ValueError):
+            return _ContextCandidates(
+                "unavailable",
+                0,
+                [],
+                [],
+                0,
+                ["Karte Personal Context could not be checked before creating a new document"],
+            )
+        search_response = selection.search_response
+        if search_response.status != "ok":
+            return _ContextCandidates(
+                "unavailable",
+                len(search_response.results),
+                [],
+                [],
+                0,
+                ["Karte Personal Context denied or could not complete the similarity search"],
+            )
+        documents = [source.document for source in selection.sources if source.document is not None]
+        fallback_results = [source.result for source in selection.sources if source.document is None]
+        partial = selection.read_failed_count > 0
+        return _ContextCandidates(
+            "partial" if partial else "ok",
+            len(search_response.results),
+            documents,
+            fallback_results,
+            selection.read_failed_count,
+            ["one or more similar Karte documents could not be read; choose create or append explicitly"]
+            if partial
+            else [],
         )
 
     def publish(self, request: KarteConversationRequest) -> KarteConversationPublishResponse:
         plan = self.plan(request)
         plan.proposal.require_publishable()
+        if request.reviewed_plan_sha256 is None:
+            raise ValueError("publish requires reviewed_plan_sha256 from the displayed plan")
+        if not hmac.compare_digest(request.reviewed_plan_sha256, plan.plan_sha256):
+            raise ValueError("Karte proposal changed after review; re-plan and review it again")
         result = self.outbox.publish(plan.proposal)
         return KarteConversationPublishResponse(
             candidate_id=result.candidate_id,
@@ -283,6 +436,16 @@ def _candidate_id(request: KarteConversationRequest) -> str:
     }
     digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     return f"ephy-chat-{digest[:20]}"
+
+
+def _proposal_sha256(proposal: KarteChangeProposal) -> str:
+    payload = json.dumps(
+        proposal.model_dump(mode="json"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _summarize_conversation(messages: list[ConversationMessage], occurred_at: datetime) -> tuple[str, str, str]:
@@ -372,23 +535,13 @@ def _preferred_filename(kind: str, candidate_id: str, occurred_at: datetime) -> 
     return f"ephy-{kind}-{occurred_at.strftime('%Y%m')}-{candidate_id[-8:]}.md"
 
 
-def _document_project_kind(document: KarteDocument) -> tuple[str | None, str | None]:
-    project_value = document.frontmatter.get("project")
-    kind_value = document.frontmatter.get("kind")
-    project = project_value.strip().lower() if isinstance(project_value, str) and _PROJECT_RE.fullmatch(project_value.strip().lower()) else None
-    kind = kind_value.strip().lower() if isinstance(kind_value, str) and kind_value.strip().lower() in SUPPORTED_KINDS else None
-    if project is not None and kind is not None:
-        return project, kind
-    parts = document.relative_path.split("/")
-    if len(parts) >= 6 and parts[:2] == ["content", "projects"]:
-        if project is None and _PROJECT_RE.fullmatch(parts[2]):
-            project = parts[2]
-        if kind is None and parts[3] in SUPPORTED_KINDS:
-            kind = parts[3]
+def _document_project_kind(document: ContextDocument) -> tuple[str | None, str | None]:
+    project = document.project if _PROJECT_RE.fullmatch(document.project) else None
+    kind = document.kind if document.kind in SUPPORTED_KINDS else None
     return project, kind
 
 
-def _existing_match(document: KarteDocument, similarity: float) -> ExistingDocumentMatch:
+def _existing_match(document: ContextDocument, similarity: float) -> ExistingDocumentMatch:
     project, kind = _document_project_kind(document)
     return ExistingDocumentMatch(
         doc_id=document.doc_id,
@@ -400,7 +553,7 @@ def _existing_match(document: KarteDocument, similarity: float) -> ExistingDocum
     )
 
 
-def _public_similar_document(document: KarteDocument, similarity: float) -> SimilarDocument:
+def _public_similar_document(document: ContextDocument, similarity: float) -> SimilarDocument:
     project, kind = _document_project_kind(document)
     return SimilarDocument(
         doc_id=document.doc_id,
@@ -412,8 +565,23 @@ def _public_similar_document(document: KarteDocument, similarity: float) -> Simi
     )
 
 
-def _similar_documents(documents: list[KarteDocument], title: str, body: str) -> list[tuple[KarteDocument, float]]:
-    scored: list[tuple[KarteDocument, float]] = []
+def _public_similar_result(result: ContextSearchResult, similarity: float) -> SimilarDocument:
+    return SimilarDocument(
+        doc_id=result.doc_id,
+        title=result.title,
+        relative_path=result.relative_path,
+        project=result.project,
+        kind=result.kind if result.kind in SUPPORTED_KINDS else None,
+        similarity=round(similarity, 4),
+    )
+
+
+def _similar_documents(
+    documents: list[ContextDocument],
+    title: str,
+    body: str,
+) -> list[tuple[ContextDocument, float]]:
+    scored: list[tuple[ContextDocument, float]] = []
     for document in documents:
         similarity = _document_similarity(document, title, body)
         if similarity >= 0.05:
@@ -422,9 +590,27 @@ def _similar_documents(documents: list[KarteDocument], title: str, body: str) ->
     return scored[:20]
 
 
-def _document_similarity(document: KarteDocument, title: str, body: str) -> float:
-    source_tokens = _similarity_tokens(f"{title}\n{body}")
-    target_tokens = _similarity_tokens(f"{document.title}\n{document.body}")
+def _similar_search_results(
+    results: list[ContextSearchResult],
+    title: str,
+    body: str,
+) -> list[tuple[ContextSearchResult, float]]:
+    scored: list[tuple[ContextSearchResult, float]] = []
+    for result in results:
+        similarity = _text_similarity(title, body, result.title, result.snippet)
+        if similarity >= 0.05:
+            scored.append((result, similarity))
+    scored.sort(key=lambda item: (-item[1], item[0].relative_path))
+    return scored[:20]
+
+
+def _document_similarity(document: ContextDocument, title: str, body: str) -> float:
+    return _text_similarity(title, body, document.title, document.body)
+
+
+def _text_similarity(source_title: str, source_body: str, target_title: str, target_body: str) -> float:
+    source_tokens = _similarity_tokens(f"{source_title}\n{source_body}")
+    target_tokens = _similarity_tokens(f"{target_title}\n{target_body}")
     if not source_tokens or not target_tokens:
         return 0.0
     overlap = len(source_tokens & target_tokens)

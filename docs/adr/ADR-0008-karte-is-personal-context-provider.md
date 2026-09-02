@@ -21,12 +21,15 @@ V1 transportはatomic filesystem request／response spoolである．既存direc
 - promptへ渡すKarte contextはuntrusted dataとして隔離する．
 - search結果の上位3件までを同一scopeの`doc_id`でreadし，pathを恒久identityにしない．
 - canonical本文は回答根拠にだけ境界付きで利用し，source cardへ露出しない．個別read失敗時はsearchで開示済みのsnippetだけへ縮退する．
+- 会話のcreate／append推薦もdirect scanではなくKarte Context search／readを使う．project未選択時は横断検索せず，明示createだけをhuman overrideとして扱う．
+- append proposalは選択`doc_id`を再readし，現在hashをtarget identityと`karte-context` provenanceへ記録する．partial／unavailable時は自動createせず相談する．
+- 表示proposalの`plan_sha256`をpublish時に再照合し，review後のKarte更新や分類変更でproposalが変われば再reviewを要求する．
 - Restricted dataはKarte policy Gateが完了するまで利用しない．
 - Context contractはKarteを先に更新してからephy-runtimeへ同期する．
 
 ## Critical path
 
-`Karte T-021 → Karte T-106 → Ephy T-116 → Ephy T-117 → Ephy T-110 → Ephy T-118 → Ephy T-120 → append先推薦のContext Protocol化`．
+`Karte T-021 → Karte T-106 → Ephy T-116 → Ephy T-117 → Ephy T-110 → Ephy T-118 → Ephy T-120 → Ephy T-121 → native review denied／retry → full UAT`．
 
 ## Traceability
 
@@ -36,6 +39,7 @@ V1 transportはatomic filesystem request／response spoolである．既存direc
 - UI：https://github.com/kirimine170/ephy-runtime/issues/41
 - E2E：https://github.com/kirimine170/ephy-runtime/issues/42
 - Selective read：https://github.com/kirimine170/ephy-runtime/issues/47
+- Context-based create／append recommendation：https://github.com/kirimine170/ephy-runtime/issues/49
 - Karte parent：https://github.com/kirimine170/Karte/issues/288
 
 ## Date

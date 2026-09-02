@@ -25,6 +25,7 @@ def initialize_app_state(app: FastAPI, config) -> None:
         if IdentityService().compare_immutable(previous.identity, context.identity):
             raise ValueError("Ephy immutable identity cannot change during reload")
     prompt_manager = PromptManager(ephy_context=context)
+    karte_context_client = KarteContextClient.from_environment()
     # Build the entire replacement before publishing any state．
     replacement = {
         "app_config": config,
@@ -39,8 +40,10 @@ def initialize_app_state(app: FastAPI, config) -> None:
             adapter=app.state.chat_adapter,
         ),
         "web_search_service": WebSearchService(config=config, adapter=app.state.chat_adapter),
-        "karte_conversation_service": KarteConversationService.from_environment(),
-        "karte_context_client": KarteContextClient.from_environment(),
+        "karte_conversation_service": KarteConversationService.from_environment(
+            context_client=karte_context_client,
+        ),
+        "karte_context_client": karte_context_client,
     }
     for name, value in replacement.items():
         setattr(app.state, name, value)

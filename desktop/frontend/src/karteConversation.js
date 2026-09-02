@@ -34,6 +34,7 @@ export function buildKarteConversationRequest({
   tags = [],
   resolution = 'auto',
   intendedDocId = '',
+  reviewedPlanSha256 = '',
 }) {
   const messages = (entries || [])
     .filter((entry) => ['user', 'assistant'].includes(entry.role) && String(entry.text || '').trim())
@@ -42,7 +43,7 @@ export function buildKarteConversationRequest({
   if (messages.length < 2 || messages.at(-1)?.role !== 'assistant') {
     throw new Error('Karte候補には利用者とEphyの完了済み会話が必要です．');
   }
-  return {
+  const request = {
     conversation_id: conversationId,
     occurred_at: occurredAt,
     messages,
@@ -53,6 +54,25 @@ export function buildKarteConversationRequest({
     resolution,
     intended_doc_id: resolution === 'append' ? (String(intendedDocId || '').trim() || null) : null,
   };
+  const reviewed = String(reviewedPlanSha256 || '').trim();
+  if (reviewed) request.reviewed_plan_sha256 = reviewed;
+  return request;
+}
+
+export function formatKarteConversationContextStatus(status = {}) {
+  const labels = {
+    ok: 'Karte確認済み',
+    partial: 'Karte一部確認',
+    unavailable: 'Karte確認不可',
+    not_required: 'Karte確認不要',
+  };
+  const label = labels[status.status] || 'Karte確認状態不明';
+  if (status.status === 'not_required') return label;
+  const searched = Number(status.searched_count) || 0;
+  const read = Number(status.read_count) || 0;
+  const failed = Number(status.read_failed_count) || 0;
+  const counts = searched > 0 ? `${read}件読取／${searched}件検索` : `${read}件読取`;
+  return `${label} · ${counts}${failed ? ` · ${failed}件未読` : ''}`;
 }
 
 function escapeHtml(value) {
@@ -101,6 +121,7 @@ export function renderKarteConversationCard(memory, requestId) {
   if (!plan) return '';
   const proposal = plan.proposal || {};
   const placement = proposal.placement || {};
+  const contextStatus = formatKarteConversationContextStatus(plan.context_status || {});
   const project = memory.project ?? (plan.needs_project ? '' : placement.project || '');
   const kind = memory.kind ?? placement.kind ?? '';
   const resolution = memory.resolution || (plan.recommendation === 'append' ? 'append' : plan.recommendation === 'create' ? 'create' : 'auto');
@@ -137,6 +158,7 @@ export function renderKarteConversationCard(memory, requestId) {
         <span>kind=${escapeHtml(placement.kind || '-')}</span>
         <span>confidence=${Number(placement.confidence || 0).toFixed(2)}</span>
         <span>${escapeHtml(plan.recommendation)}</span>
+        <span>${escapeHtml(contextStatus)}</span>
       </div>
       ${reasons ? `<ul class="karte-memory-reasons">${reasons}</ul>` : ''}
       <details class="karte-memory-summary">

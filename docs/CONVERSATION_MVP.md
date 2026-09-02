@@ -55,6 +55,6 @@ Desktopを終了すると，そのDesktop自身が起動したFast／Work／Code
 
 ローカル開発では，ビルド後に`bash scripts/start_conversation_app.sh`で起動できます．Terminalの実行環境と明示的なRuntime rootを保持してappを直接実行します．`.command`ショートカットからもこのscriptを呼び出せます．終了はappのQuitを使い，起動元のTerminalを先に閉じないでください．
 
-Karteとの会話連携を使う場合は，EphyとKarteの起動前に両方へ同じ`KARTE_DATA_DIR`を設定します．完了したChat応答にはKarte候補が自動表示され，分類相談，create／append選択，Karteへの送信，receipt確認を会話画面内で行えます．詳細な受入手順は[KARTE_FILESYSTEM_INTEGRATION.md](KARTE_FILESYSTEM_INTEGRATION.md)を参照してください．
+Karteとの会話連携を使う場合は，EphyとKarteの起動前に両方へ同じ`KARTE_DATA_DIR`を設定します．完了したChat応答にはKarte候補が自動表示され，分類相談，Karte Contextによる類似文書確認，create／append選択，Karteへの送信，receipt確認を会話画面内で行えます．Karte確認がpartial／unavailableの場合は自動createせず，カード上で再試行または明示選択を求めます．詳細な受入手順は[KARTE_FILESYSTEM_INTEGRATION.md](KARTE_FILESYSTEM_INTEGRATION.md)を参照してください．
 
 `data/runtime/karte/Karte.app`にKarte bundleがインストールされている場合，`scripts/start_conversation_app.sh`はKarteも自動起動します．同梱方法と無効化設定は[KARTE_FILESYSTEM_INTEGRATION.md](KARTE_FILESYSTEM_INTEGRATION.md)を参照してください．

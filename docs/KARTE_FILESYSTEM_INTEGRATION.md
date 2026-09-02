@@ -10,7 +10,7 @@ Every proposal includes a path-safe project slug，kind，`YYYY-MM`，confidence
 
 When classification is unresolved or a similar document may be the correct append target，Ephy sets `consultation_required` and asks the user before publication．`KarteOutbox.publish` rejects unresolved proposals．After consultation，Karte applies its project-first `content/projects/<project>/<kind>/<YYYY-MM>` policy and remains the final owner of placement．
 
-Ephy recommends append only when a stable `doc_id` matches，the current document's project and kind agree with the placement hint，and the proposal was based on the current canonical byte hash．A project／kind mismatch or a semantic similarity match without exact `doc_id` requires consultation．With no exact or similar document，Ephy recommends create．Karte repeats the identity，content-classification，and byte-hash checks before saving．
+Ephy recommends append only when a stable `doc_id` matches，the current document's project and kind agree with the placement hint，and the proposal was based on the current canonical byte hash returned by Karte Context Protocol．A project／kind mismatch or a semantic similarity match without exact `doc_id` requires consultation．With no exact or similar document after a successful scoped search，Ephy recommends create．Karte repeats the identity，content-classification，and byte-hash checks before saving．
 
 The `karte-contract` job in `.github/workflows/runtime-tests.yml` checks out public Karte `main` and compares every contract JSON byte-for-byte with `scripts/check_karte_contract.py`．A coordinated contract change must therefore land in Karte before the Ephy Runtime check can pass against the new version．The checker logs only relative filenames and hashes when drift occurs．
 
@@ -69,6 +69,12 @@ Publication writes a same-directory temporary file，flushes it，and renames it
 ## Conversation-to-Karte flow
 
 Set `KARTE_DATA_DIR` before starting Ephy．After each completed Chat response，Ephy prepares a Karte card from the completed user／assistant conversation．The card shows the proposed title，complete create document or append-only fragment，project，kind，confidence，and similar canonical documents．A proposal with a missing project or ambiguous similar document remains local to the UI until the user resolves it．Nothing is written to canonical Karte content from Ephy．
+
+The conversation planner does not scan canonical Markdown directly．For `resolution=auto`，it searches the selected project through Karte Context Protocol and reads at most the top three `doc_id` candidates before recommending create or consultation．For explicit `resolution=append`，it reads the selected `doc_id` again and uses the current Karte-owned path，project，kind，and SHA-256 in the append proposal．The proposal records that `doc_id` and hash as `karte-context` provenance．An explicit `resolution=create` is a human override and does not require another similarity search．A missing project never triggers a cross-project search．
+
+The Karte card exposes `context_status` as `ok`，`partial`，`unavailable`，or `not_required` with searched，read，and failed-read counts．A partial or unavailable check cannot silently become a publishable create; Ephy asks the user to retry or explicitly choose create／append．Protocol，scope，or `doc_id` validation failures never fall back to direct filesystem access．
+
+Every displayed plan also carries `plan_sha256` over the exact proposal．Publish requires that value as `reviewed_plan_sha256` and recomputes the plan against the current Karte context．If a selected document，base hash，placement，summary，or other proposal field changed after review，Ephy rejects publication，shows the new plan，and requires another review．This prevents a publish-time re-plan from silently substituting content the user did not approve．
 
 The Gateway exposes the same reviewed flow through:
 

@@ -2225,6 +2225,7 @@ function buildKarteRequest(requestId, overrides = {}) {
     tags: parseTagList(document.getElementById('rag-tags')?.value || ''),
     resolution: overrides.resolution ?? current.resolution ?? 'auto',
     intendedDocId: overrides.intendedDocId ?? current.intendedDocId ?? '',
+    reviewedPlanSha256: overrides.reviewedPlanSha256 ?? '',
   });
 }
 
@@ -2282,20 +2283,22 @@ function readKarteResolution(requestId) {
 
 async function publishKarteConversation(requestId) {
   const overrides = readKarteResolution(requestId);
+  const current = chatThreadEntries.find((entry) => entry.requestId === requestId)?.karteMemory || {};
+  const reviewedPlanSha256 = current.plan?.plan_sha256 || '';
+  if (!reviewedPlanSha256) {
+    await planKarteConversation(requestId, overrides);
+    setChatDropStatus('Karte候補を更新しました．内容を確認してから送信してください．');
+    return;
+  }
   let request;
   try {
-    request = buildKarteRequest(requestId, overrides);
+    request = buildKarteRequest(requestId, {...overrides, reviewedPlanSha256});
   } catch (error) {
     setKarteMemory(requestId, (current) => ({...current, state: 'error', error: String(error)}));
     return;
   }
   setKarteMemory(requestId, (current) => ({...current, ...overrides, state: 'planning'}));
   try {
-    const latestPlan = await PlanKarteConversation(request);
-    if (!latestPlan.publishable) {
-      setKarteMemory(requestId, (current) => ({...current, ...overrides, state: 'consultation', plan: latestPlan}));
-      return;
-    }
     const published = await PublishKarteConversation(request);
     setKarteMemory(requestId, (current) => ({
       ...current,
@@ -2306,6 +2309,11 @@ async function publishKarteConversation(requestId) {
       error: '',
     }));
   } catch (error) {
+    if (String(error).includes('changed after review')) {
+      await planKarteConversation(requestId, overrides);
+      setChatDropStatus('Karte文書がレビュー後に更新されました．新しい候補を確認してください．');
+      return;
+    }
     setKarteMemory(requestId, (current) => ({...current, ...overrides, state: 'error', error: String(error)}));
   }
 }
