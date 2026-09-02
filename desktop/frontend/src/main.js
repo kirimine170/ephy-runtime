@@ -1577,6 +1577,7 @@ function activateTab(tab) {
     panel.classList.toggle('active', panel.dataset.tabPanel === panelTab);
   });
   activePanelTab = panelTab;
+  workspaceChrome.setActivePanel(panelTab);
   restorePanelScroll(panelTab);
 }
 

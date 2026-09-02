@@ -182,6 +182,35 @@ test('composer shortcut closes a compact drawer before focusing the prompt', () 
   assert.equal(workspace.ids['chat-prompt'].focused, true);
 });
 
+test('common panel transitions clear a hidden narrow Context drawer', () => {
+  const workspace = fakeWorkspace(1024);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+
+  controller.initialize();
+  controller.setContextPaneOpen(true);
+  controller.setActivePanel('rag');
+
+  assert.equal(controller.snapshot().contextPaneOpen, false);
+  assert.equal(workspace.ids['chat-context-toggle'].getAttribute('aria-expanded'), 'false');
+});
+
+test('sidebar Hide restores focus to the visible toolbar toggle', () => {
+  const workspace = fakeWorkspace(1024);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+
+  controller.initialize();
+  workspace.ids['sidebar-toggle'].dispatch('click');
+
+  assert.equal(controller.snapshot().sidebarCollapsed, true);
+  assert.equal(workspace.ids['chat-sidebar-toggle'].focused, true);
+});
+
 test('workspace restores an automatically collapsed sidebar after leaving compact mode', () => {
   const workspace = fakeWorkspace(1440);
   const controller = createWorkspaceChromeController({

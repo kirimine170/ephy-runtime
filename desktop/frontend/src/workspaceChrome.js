@@ -122,6 +122,14 @@ export function createWorkspaceChromeController({
     setContextPaneOpen(opening, {focus: opening});
   }
 
+  function setActivePanel(panel) {
+    if (String(panel || '') === 'chat' || viewport === WORKSPACE_VIEWPORT.threePane || !contextPaneOpen) {
+      return;
+    }
+    contextPaneOpen = false;
+    apply();
+  }
+
   function dismiss() {
     onDismissMenus();
     if (viewport !== WORKSPACE_VIEWPORT.threePane && contextPaneOpen) {
@@ -182,7 +190,11 @@ export function createWorkspaceChromeController({
     element('chat-sidebar-toggle')?.addEventListener('click', () => {
       setSidebarCollapsed(!sidebarCollapsed, {focus: sidebarCollapsed});
     });
-    element('sidebar-toggle')?.addEventListener('click', () => setSidebarCollapsed(!sidebarCollapsed));
+    element('sidebar-toggle')?.addEventListener('click', () => {
+      const collapsing = !sidebarCollapsed;
+      setSidebarCollapsed(collapsing);
+      if (collapsing) focusAfterInteraction(element('chat-sidebar-toggle'));
+    });
     element('sidebar-reveal')?.addEventListener('click', () => setSidebarCollapsed(false, {focus: true}));
     element('chat-context-toggle')?.addEventListener('click', toggleContextPane);
     element('chat-context-close')?.addEventListener('click', () => {
@@ -212,6 +224,7 @@ export function createWorkspaceChromeController({
     initialize,
     setSidebarCollapsed,
     setContextPaneOpen,
+    setActivePanel,
     snapshot: () => ({sidebarCollapsed, contextPaneOpen, viewport}),
   };
 }
