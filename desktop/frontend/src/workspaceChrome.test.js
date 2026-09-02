@@ -114,6 +114,44 @@ test('workspace controller binds compact drawers，focus，and aria state', () =
   assert.equal(workspace.ids['chat-prompt'].focused, true);
 });
 
+test('context control exposes the chat surface before opening a narrow drawer', () => {
+  const workspace = fakeWorkspace(1024);
+  let showChatCalls = 0;
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+    onShowChat: () => { showChatCalls += 1; },
+  });
+
+  controller.initialize();
+  workspace.ids['chat-context-toggle'].dispatch('click');
+
+  assert.equal(showChatCalls, 1);
+  assert.equal(controller.snapshot().contextPaneOpen, true);
+  assert.equal(workspace.ids['chat-source-scope-select'].focused, true);
+});
+
+test('compact drawers are mutually exclusive and Escape dismisses the visible sidebar', () => {
+  const workspace = fakeWorkspace(800);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+
+  controller.initialize();
+  controller.setSidebarCollapsed(false);
+  controller.setContextPaneOpen(true);
+  assert.equal(controller.snapshot().sidebarCollapsed, true);
+  assert.equal(controller.snapshot().contextPaneOpen, true);
+
+  controller.setSidebarCollapsed(false);
+  assert.equal(controller.snapshot().contextPaneOpen, false);
+  workspace.rootListeners.get('keydown')({key: 'Escape'});
+
+  assert.equal(controller.snapshot().sidebarCollapsed, true);
+  assert.equal(workspace.ids['chat-sidebar-toggle'].focused, true);
+});
+
 test('workspace restores an automatically collapsed sidebar after leaving compact mode', () => {
   const workspace = fakeWorkspace(1440);
   const controller = createWorkspaceChromeController({

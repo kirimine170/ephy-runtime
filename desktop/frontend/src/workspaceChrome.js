@@ -95,14 +95,31 @@ export function createWorkspaceChromeController({
 
   function setSidebarCollapsed(collapsed, {focus = false} = {}) {
     sidebarCollapsed = Boolean(collapsed);
+    if (viewport === WORKSPACE_VIEWPORT.compact && !sidebarCollapsed) {
+      contextPaneOpen = false;
+    }
     apply();
     if (focus && !sidebarCollapsed) focusAfterInteraction(root?.querySelector?.('.sidebar .nav-btn'));
   }
 
   function setContextPaneOpen(open, {focus = false} = {}) {
     contextPaneOpen = Boolean(open);
+    if (viewport === WORKSPACE_VIEWPORT.compact && contextPaneOpen) {
+      sidebarCollapsed = true;
+    }
     apply();
     if (focus && contextPaneOpen) focusAfterInteraction(element('chat-source-scope-select'));
+  }
+
+  function toggleContextPane() {
+    if (viewport === WORKSPACE_VIEWPORT.threePane) {
+      onShowChat();
+      focusAfterInteraction(element('chat-source-scope-select'));
+      return;
+    }
+    const opening = !contextPaneOpen;
+    if (opening) onShowChat();
+    setContextPaneOpen(opening, {focus: opening});
   }
 
   function dismiss() {
@@ -150,11 +167,7 @@ export function createWorkspaceChromeController({
       onShowChat();
       element('chat-prompt')?.focus();
     } else if (action === 'context') {
-      if (viewport === WORKSPACE_VIEWPORT.threePane) {
-        element('chat-source-scope-select')?.focus();
-      } else {
-        setContextPaneOpen(!contextPaneOpen, {focus: !contextPaneOpen});
-      }
+      toggleContextPane();
     }
   }
 
@@ -166,21 +179,16 @@ export function createWorkspaceChromeController({
     });
     element('sidebar-toggle')?.addEventListener('click', () => setSidebarCollapsed(!sidebarCollapsed));
     element('sidebar-reveal')?.addEventListener('click', () => setSidebarCollapsed(false, {focus: true}));
-    element('chat-context-toggle')?.addEventListener('click', () => {
-      if (viewport === WORKSPACE_VIEWPORT.threePane) {
-        element('chat-source-scope-select')?.focus();
-      } else {
-        setContextPaneOpen(!contextPaneOpen, {focus: !contextPaneOpen});
-      }
-    });
+    element('chat-context-toggle')?.addEventListener('click', toggleContextPane);
     element('chat-context-close')?.addEventListener('click', () => {
       setContextPaneOpen(false);
       element('chat-context-toggle')?.focus();
     });
     element('workspace-sidebar')?.addEventListener('click', (event) => {
-      if (viewport === WORKSPACE_VIEWPORT.compact && event.target?.closest?.('.nav-btn')) {
-        setSidebarCollapsed(true);
-      }
+      if (!event.target?.closest?.('.nav-btn')) return;
+      if (viewport !== WORKSPACE_VIEWPORT.threePane && contextPaneOpen) contextPaneOpen = false;
+      if (viewport === WORKSPACE_VIEWPORT.compact) sidebarCollapsed = true;
+      apply();
     });
     root?.addEventListener?.('keydown', handleShortcut);
     windowObject?.addEventListener?.('resize', handleResize);
