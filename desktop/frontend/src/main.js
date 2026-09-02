@@ -21,7 +21,10 @@ import {
 import {mountModelManager} from './modelManager';
 import {applyDeveloperModeVisibility, resolveDeveloperTab} from './developerMode';
 import {renderChatSourceListHtml, renderChatSourcePreviewHtml} from './chatSources';
-import {announceChatStream} from './chatAccessibility';
+import {
+  announceChatStream,
+  chatMessageAccessibilityAttributes,
+} from './chatAccessibility';
 import {createWorkspaceChromeController} from './workspaceChrome';
 import {
   assertBlindPreferencePair,
@@ -2069,7 +2072,7 @@ function renderChatThread() {
   }
 
   container.innerHTML = chatThreadEntries.map((entry) => `
-    <article class="message-card message-${escapeHtml(entry.role)} ${entry.streaming ? 'message-streaming' : ''}" ${entry.meta === 'error' ? 'role="alert"' : ''} aria-busy="${entry.streaming ? 'true' : 'false'}">
+    <article class="message-card message-${escapeHtml(entry.role)} ${entry.streaming ? 'message-streaming' : ''}" ${chatMessageAccessibilityAttributes(entry)}>
       <div class="message-head">
         <span class="message-role">${escapeHtml(entry.label)}</span>
         ${entry.meta ? `<span class="message-meta">${escapeHtml(entry.meta)}</span>` : ''}

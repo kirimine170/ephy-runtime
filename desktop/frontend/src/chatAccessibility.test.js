@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import {announceChatStream} from './chatAccessibility.js';
+import {
+  announceChatStream,
+  chatMessageAccessibilityAttributes,
+} from './chatAccessibility.js';
 
 test('chat stream announcements use a dedicated status without replacing the transcript', () => {
   const transcript = {innerHTML: '<article>Earlier message</article>'};
@@ -22,4 +25,15 @@ test('chat stream announcements use a dedicated status without replacing the tra
 
   announceChatStream(root, 'error', 'offline');
   assert.equal(announcer.textContent, 'Assistant response failed: offline');
+});
+
+test('historical error cards remain non-live after transcript rerenders', () => {
+  assert.equal(
+    chatMessageAccessibilityAttributes({meta: 'error', streaming: false}),
+    'aria-busy="false"',
+  );
+  assert.doesNotMatch(
+    chatMessageAccessibilityAttributes({meta: 'error', streaming: false}),
+    /role="alert"|aria-live=/,
+  );
 });

@@ -12,3 +12,7 @@ export function announceChatStream(root, state, message = '') {
     announcer.textContent = '';
   }
 }
+
+export function chatMessageAccessibilityAttributes(entry = {}) {
+  return `aria-busy="${entry.streaming ? 'true' : 'false'}"`;
+}
