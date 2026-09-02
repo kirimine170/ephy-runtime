@@ -76,6 +76,8 @@ The Karte card exposes `context_status` as `ok`，`partial`，`unavailable`，or
 
 Every displayed plan also carries `plan_sha256` over the exact proposal．Publish requires that value as `reviewed_plan_sha256` and recomputes the plan against the current Karte context．If a selected document，base hash，placement，summary，or other proposal field changed after review，Ephy rejects publication，shows the new plan，and requires another review．This prevents a publish-time re-plan from silently substituting content the user did not approve．
 
+For the native permission boundary，run `.venv/bin/python scripts/karte_context_permission_retry_uat.py --report /private/tmp/karte-permission-retry.json` with the bundled `Karte.app` installed．The runner creates an isolated temporary Karte workspace，verifies that default Ephy policy returns a non-disclosing `denied` response for a synthetic Restricted document，atomically grants the test actor Restricted access，and retries through a fresh Context request until the same `doc_id` is read successfully．It never changes the user's normal Karte workspace，and its optional report contains metadata and hashes only．
+
 The Gateway exposes the same reviewed flow through:
 
 - `POST /v1/karte/conversations/plan` — build a deterministic，non-writing plan．
