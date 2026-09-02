@@ -94,6 +94,26 @@ function planTone(plan) {
   return 'consultation';
 }
 
+export function shouldAutoSubmitKartePlan({developerMode, autoSubmit, plan}) {
+  return Boolean(developerMode && autoSubmit && plan?.publishable && plan?.plan_sha256);
+}
+
+export function kartePublishHint(plan) {
+  if (!plan) return '候補を再計画してください．';
+  if (plan.publishable) return '内容を確認してKarteへ送信できます．';
+  const reasons = plan.reasons || [];
+  if (reasons.some((reason) => String(reason).includes('Personal Context'))) {
+    return 'KarteのPersonal Contextを確認できません．Karteの接続状態を直して再計画してください．';
+  }
+  if (reasons.some((reason) => String(reason).includes('project is required'))) {
+    return 'Projectを入力すると自動的に再計画します．';
+  }
+  if (reasons.some((reason) => String(reason).includes('confidence'))) {
+    return '保存先の確信度が低いため，分類または保存方法を選んで再計画してください．';
+  }
+  return '確認事項を解決して候補を再計画してください．';
+}
+
 export function renderKarteConversationCard(memory, requestId) {
   if (!memory || memory.dismissed) return '';
   const safeRequestId = escapeHtml(requestId);
@@ -143,6 +163,7 @@ export function renderKarteConversationCard(memory, requestId) {
   }[state] || state;
   const finalState = ['accepted', 'rejected', 'processed'].includes(state);
   const pending = state === 'pending';
+  const publishHint = kartePublishHint(plan);
 
   return `
     <section class="karte-memory-card tone-${planTone(plan)}" data-karte-card="${safeRequestId}">
@@ -204,6 +225,7 @@ export function renderKarteConversationCard(memory, requestId) {
         ${!pending && !finalState ? `<button class="primary-btn compact-btn" type="button" data-karte-action="publish" data-request-id="${safeRequestId}" ${plan.publishable ? '' : 'disabled'}>Karteへ送る</button>` : ''}
         <button class="ghost-btn compact-btn" type="button" data-karte-action="dismiss" data-request-id="${safeRequestId}">閉じる</button>
       </div>
+      ${!pending && !finalState ? `<p class="karte-memory-action-hint" role="status">${escapeHtml(publishHint)}</p>` : ''}
     </section>
   `;
 }

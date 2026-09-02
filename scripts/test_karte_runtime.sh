@@ -49,6 +49,8 @@ fi
 
 export KARTE_DATA_DIR="${FAKE_DATA}"
 export EPHY_KARTE_LAUNCH_MODE=direct
+mkdir -p "${TEST_ROOT}/data/runtime/karte"
+printf 'content\ndata\nlog\npublic\nthemes\n%s\n' "${FAKE_DATA}" > "${TEST_ROOT}/data/runtime/karte/.karte-data-dir"
 start_bundled_karte_runtime "${TEST_ROOT}"
 FAKE_DATA="${KARTE_DATA_DIR}"
 pid_file="${TEST_ROOT}/data/runtime/pids/karte.pid"

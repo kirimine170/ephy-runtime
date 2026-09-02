@@ -154,6 +154,8 @@ export function SetBatchWorkflowState(arg1:main.BatchWorkflowState):Promise<main
 
 export function SetDeveloperMode(arg1:boolean):Promise<boolean>;
 
+export function SetKarteAutoSubmit(arg1:boolean):Promise<boolean>;
+
 export function SetGatewayURL(arg1:string):Promise<string>;
 
 export function SetRegressionWatchProfiles(arg1:Record<string, main.RegressionWatchProfile>):Promise<Record<string, main.RegressionWatchProfile>>;

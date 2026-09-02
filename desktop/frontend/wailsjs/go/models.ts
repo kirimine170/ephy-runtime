@@ -906,6 +906,7 @@ export namespace main {
 	    selections: Record<string, LocalModelSelection>;
 	    revision: string;
 	    developer_mode: boolean;
+	    karte_auto_submit: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new LocalModelCatalog(source);
@@ -919,6 +920,7 @@ export namespace main {
 	        this.selections = this.convertValues(source["selections"], LocalModelSelection, true);
 	        this.revision = source["revision"];
 	        this.developer_mode = source["developer_mode"];
+	        this.karte_auto_submit = source["karte_auto_submit"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

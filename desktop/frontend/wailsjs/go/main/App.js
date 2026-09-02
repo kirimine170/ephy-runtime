@@ -306,6 +306,10 @@ export function SetDeveloperMode(arg1) {
   return window['go']['main']['App']['SetDeveloperMode'](arg1);
 }
 
+export function SetKarteAutoSubmit(arg1) {
+  return window['go']['main']['App']['SetKarteAutoSubmit'](arg1);
+}
+
 export function SetGatewayURL(arg1) {
   return window['go']['main']['App']['SetGatewayURL'](arg1);
 }

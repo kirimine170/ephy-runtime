@@ -5,7 +5,9 @@ import {
   buildKarteConversationRequest,
   formatKarteConversationContextStatus,
   formatLocalISOString,
+  kartePublishHint,
   renderKarteConversationCard,
+  shouldAutoSubmitKartePlan,
 } from './karteConversation.js';
 
 
@@ -93,6 +95,16 @@ test('Karte card renders consultation controls and escapes summary content', () 
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /data-karte-action="publish"[^>]*disabled/);
+  assert.match(html, /Projectを入力すると自動的に再計画します/);
+});
+
+test('developer auto-submit keeps publishability and reviewed digest gates', () => {
+  const plan = {publishable: true, plan_sha256: 'a'.repeat(64)};
+  assert.equal(shouldAutoSubmitKartePlan({developerMode: true, autoSubmit: true, plan}), true);
+  assert.equal(shouldAutoSubmitKartePlan({developerMode: false, autoSubmit: true, plan}), false);
+  assert.equal(shouldAutoSubmitKartePlan({developerMode: true, autoSubmit: true, plan: {...plan, publishable: false}}), false);
+  assert.equal(shouldAutoSubmitKartePlan({developerMode: true, autoSubmit: true, plan: {publishable: true}}), false);
+  assert.match(kartePublishHint({publishable: false, reasons: ['Karte Personal Context could not be checked']}), /接続状態/);
 });
 
 

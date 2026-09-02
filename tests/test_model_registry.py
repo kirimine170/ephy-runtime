@@ -85,6 +85,8 @@ def test_model_override_carries_thinking_policy(tmp_path):
     assert override["thinking_mode"] == "optional"
     assert override["default_reasoning_effort"] == "medium"
     assert override["preserve_thinking"] is True
+    argv = launch_command(service, "work", Path("/server"), "unused", "unused")
+    assert "--reasoning-preserve" in argv
 
 
 @pytest.mark.parametrize("payload", [b"not a model", b"GGUF\x03\0\0\0", b"GGUF\x01\0\0\0" + bytes(32)])

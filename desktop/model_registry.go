@@ -68,12 +68,18 @@ type LocalModelSelection struct {
 }
 
 type LocalModelCatalog struct {
-	Models        []LocalModelArtifact           `json:"models"`
-	Adapters      []LocalAdapterArtifact         `json:"adapters"`
-	Profiles      map[string]RuntimeModelProfile `json:"profiles"`
-	Selections    map[string]LocalModelSelection `json:"selections"`
-	Revision      string                         `json:"revision"`
-	DeveloperMode bool                           `json:"developer_mode"`
+	Models          []LocalModelArtifact           `json:"models"`
+	Adapters        []LocalAdapterArtifact         `json:"adapters"`
+	Profiles        map[string]RuntimeModelProfile `json:"profiles"`
+	Selections      map[string]LocalModelSelection `json:"selections"`
+	Revision        string                         `json:"revision"`
+	DeveloperMode   bool                           `json:"developer_mode"`
+	KarteAutoSubmit bool                           `json:"karte_auto_submit"`
+}
+
+type developerSettings struct {
+	Enabled         bool `json:"enabled"`
+	KarteAutoSubmit bool `json:"karte_auto_submit"`
 }
 
 type ImportLocalModelRequest struct {
@@ -107,41 +113,69 @@ func (a *App) modelRegistryCommand(args ...string) ([]byte, error) {
 	return output, nil
 }
 
-func (a *App) developerModeEnabled() bool {
+func (a *App) readDeveloperSettings() developerSettings {
 	data, err := os.ReadFile(filepath.Join(a.workspaceRoot, "configs", "developer.local.json"))
 	if err != nil {
-		return false
+		return developerSettings{}
 	}
-	var value struct {
-		Enabled bool `json:"enabled"`
+	var value developerSettings
+	if json.Unmarshal(data, &value) != nil {
+		return developerSettings{}
 	}
-	return json.Unmarshal(data, &value) == nil && value.Enabled
+	if !value.Enabled {
+		value.KarteAutoSubmit = false
+	}
+	return value
 }
 
-func (a *App) SetDeveloperMode(enabled bool) (bool, error) {
-	a.modelLifecycleMu.Lock()
-	defer a.modelLifecycleMu.Unlock()
+func (a *App) developerModeEnabled() bool {
+	return a.readDeveloperSettings().Enabled
+}
+
+func (a *App) writeDeveloperSettings(value developerSettings) error {
 	file := filepath.Join(a.workspaceRoot, "configs", "developer.local.json")
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		return false, err
+		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(file), ".developer-*")
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer os.Remove(tmp.Name())
-	err = json.NewEncoder(tmp).Encode(map[string]bool{"enabled": enabled})
+	err = json.NewEncoder(tmp).Encode(value)
 	if err == nil {
 		err = tmp.Sync()
 	}
 	closeErr := tmp.Close()
 	if err != nil {
-		return false, err
+		return err
 	}
 	if closeErr != nil {
-		return false, closeErr
+		return closeErr
 	}
-	return enabled, os.Rename(tmp.Name(), file)
+	return os.Rename(tmp.Name(), file)
+}
+
+func (a *App) SetDeveloperMode(enabled bool) (bool, error) {
+	a.modelLifecycleMu.Lock()
+	defer a.modelLifecycleMu.Unlock()
+	settings := a.readDeveloperSettings()
+	settings.Enabled = enabled
+	if !enabled {
+		settings.KarteAutoSubmit = false
+	}
+	return enabled, a.writeDeveloperSettings(settings)
+}
+
+func (a *App) SetKarteAutoSubmit(enabled bool) (bool, error) {
+	a.modelLifecycleMu.Lock()
+	defer a.modelLifecycleMu.Unlock()
+	settings := a.readDeveloperSettings()
+	if enabled && !settings.Enabled {
+		return false, fmt.Errorf("enable developer mode before enabling Karte auto-submit")
+	}
+	settings.KarteAutoSubmit = enabled
+	return enabled, a.writeDeveloperSettings(settings)
 }
 
 func (a *App) GetLocalModelCatalog() (*LocalModelCatalog, error) {
@@ -153,7 +187,9 @@ func (a *App) GetLocalModelCatalog() (*LocalModelCatalog, error) {
 	if err := json.Unmarshal(output, &catalog); err != nil {
 		return nil, err
 	}
-	catalog.DeveloperMode = a.developerModeEnabled()
+	settings := a.readDeveloperSettings()
+	catalog.DeveloperMode = settings.Enabled
+	catalog.KarteAutoSubmit = settings.KarteAutoSubmit
 	return &catalog, nil
 }
 

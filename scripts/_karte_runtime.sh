@@ -79,10 +79,24 @@ persist_karte_runtime_data_dir() {
   local data_dir=$2
   local config_path="${app_placed_dir}/.karte-data-dir"
   local temp_path="${config_path}.tmp.$$"
+  local persisted
+  local extra
+
+  if [[ "${data_dir}" != /* || "${data_dir}" == *$'\n'* || "${data_dir}" == *$'\r'* || ! -d "${data_dir}" ]]; then
+    printf 'Refusing invalid Karte data directory pointer．\n' >&2
+    return 1
+  fi
 
   mkdir -p "${app_placed_dir}"
   printf '%s\n' "${data_dir}" > "${temp_path}"
   mv -f "${temp_path}" "${config_path}"
+  IFS= read -r persisted < "${config_path}" || return 1
+  extra=""
+  IFS= read -r extra < <(sed -n '2p' "${config_path}") || true
+  if [[ "${persisted}" != "${data_dir}" || -n "${extra}" ]]; then
+    printf 'Karte data directory pointer verification failed．\n' >&2
+    return 1
+  fi
 }
 
 karte_runtime_find_process_pid() {

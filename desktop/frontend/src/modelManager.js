@@ -45,6 +45,9 @@ export function mountModelManager(container, api) {
     <label class="developer-toggle"><input type="checkbox" data-model="enabled"> Developer Modeを有効にする</label>
     <p class="helper-text">通常の会話やKarte連携には不要です．model，LoRA，runtime，routing，evaluationの実験・診断機能を使う場合だけ有効にします．</p>
     <fieldset class="developer-model-controls" data-model="controls" disabled hidden>
+      <h3>Karte automation</h3>
+      <label class="developer-toggle"><input type="checkbox" data-model="karte-auto-submit"> publish可能な候補をKarteへ自動送信する</label>
+      <p class="helper-text">project，confidence，Personal Context確認，類似文書，doc_id／digest検証は省略しません．Karteでの最終採用は引き続きまとめて確認できます．</p>
       <h3>Model &amp; LoRA</h3>
       <p class="helper-text">登録済みGGUFを選択します．稼働中の対象モデルだけを再起動し，失敗時は元の選択へ戻します．</p>
       <div class="developer-model-grid">
@@ -103,8 +106,10 @@ export function mountModelManager(container, api) {
     catalog = next;
     const enabled = Boolean(catalog.developer_mode);
     element('enabled').checked = enabled;
+    element('karte-auto-submit').checked = Boolean(catalog.karte_auto_submit);
     element('controls').hidden = !enabled;
     api.onDeveloperModeChange?.(enabled);
+    api.onKarteAutoSubmitChange?.(Boolean(catalog.karte_auto_submit));
     fill(element('import-profile'), Object.entries(catalog.profiles || {}).map(([id, profile]) => ({
       id, label: `${id} · ${profile.parameter_count_billions}B · ctx ${contextLabel(profile.default_context_size)}`,
     })), '自動判定または汎用');
@@ -134,6 +139,10 @@ export function mountModelManager(container, api) {
     await api.SetDeveloperMode(element('enabled').checked);
     return api.GetLocalModelCatalog();
   }, '開発者モードを更新中…', '設定を保存しました．'));
+  element('karte-auto-submit').addEventListener('change', () => perform(async () => {
+    await api.SetKarteAutoSubmit(element('karte-auto-submit').checked);
+    return api.GetLocalModelCatalog();
+  }, 'Karte自動送信を更新中…', 'Karte自動送信を設定しました．'));
   element('refresh').addEventListener('click', () => perform(api.GetLocalModelCatalog,
     'モデル一覧を確認中…', 'モデル一覧を更新しました．'));
   element('apply').addEventListener('click', () => perform(() => api.ApplyLocalModel({

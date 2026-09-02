@@ -17,6 +17,7 @@ import {
   buildKarteConversationRequest,
   formatLocalISOString,
   renderKarteConversationCard,
+  shouldAutoSubmitKartePlan,
 } from './karteConversation';
 import {mountModelManager} from './modelManager';
 import {applyDeveloperModeVisibility, resolveDeveloperTab} from './developerMode';
@@ -51,6 +52,7 @@ import {
 import {
   GetLocalModelCatalog,
   SetDeveloperMode,
+  SetKarteAutoSubmit,
   ImportLocalModel,
   ApplyLocalModel,
   CancelBatchWorkflow,
@@ -168,6 +170,7 @@ let chatSendInFlight = false;
 let webSearchAvailable = false;
 let karteAvailable = false;
 let developerModeEnabled = false;
+let developerKarteAutoSubmit = false;
 let activePanelTab = 'chat';
 const tabScrollPositions = new Map();
 let chatSourceScope = 'all';
@@ -1515,9 +1518,11 @@ applyWorkspaceDeveloperMode(false);
 mountModelManager(document.getElementById('developer-model-manager'), {
   GetLocalModelCatalog,
   SetDeveloperMode,
+  SetKarteAutoSubmit,
   ImportLocalModel,
   ApplyLocalModel,
   onDeveloperModeChange: applyWorkspaceDeveloperMode,
+  onKarteAutoSubmitChange: (enabled) => { developerKarteAutoSubmit = Boolean(enabled); },
 });
 
 document.getElementById('start-conversation').addEventListener('click', async () => {
@@ -2297,7 +2302,15 @@ async function planKarteConversation(requestId, overrides = {}) {
 
 async function autoPlanKarteConversation(requestId) {
   if (!karteAvailable) return null;
-  return planKarteConversation(requestId);
+  const plan = await planKarteConversation(requestId);
+  if (shouldAutoSubmitKartePlan({
+    developerMode: developerModeEnabled,
+    autoSubmit: developerKarteAutoSubmit,
+    plan,
+  })) {
+    await publishKarteConversation(requestId, {});
+  }
+  return plan;
 }
 
 function readKarteResolution(requestId) {
@@ -2311,8 +2324,8 @@ function readKarteResolution(requestId) {
   };
 }
 
-async function publishKarteConversation(requestId) {
-  const overrides = readKarteResolution(requestId);
+async function publishKarteConversation(requestId, explicitOverrides = null) {
+  const overrides = explicitOverrides ?? readKarteResolution(requestId);
   const current = chatThreadEntries.find((entry) => entry.requestId === requestId)?.karteMemory || {};
   const reviewedPlanSha256 = current.plan?.plan_sha256 || '';
   if (!reviewedPlanSha256) {
@@ -8453,6 +8466,14 @@ document.getElementById('chat-output').addEventListener('click', async (event) =
     return;
   }
   await continueChatGeneration(requestId);
+});
+
+document.getElementById('chat-output').addEventListener('change', async (event) => {
+  const field = event.target.closest('[data-karte-field]');
+  const card = field?.closest('[data-karte-card]');
+  const requestId = card?.dataset.karteCard || '';
+  if (!requestId) return;
+  await planKarteConversation(requestId, readKarteResolution(requestId));
 });
 
 document.getElementById('chat-prompt').addEventListener('keydown', async (event) => {
