@@ -152,6 +152,36 @@ test('compact drawers are mutually exclusive and Escape dismisses the visible si
   assert.equal(workspace.ids['chat-sidebar-toggle'].focused, true);
 });
 
+test('composer shortcut closes a compact drawer before focusing the prompt', () => {
+  const workspace = fakeWorkspace(800);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+
+  controller.initialize();
+  controller.setContextPaneOpen(true);
+  workspace.rootListeners.get('keydown')({
+    key: 'k',
+    metaKey: true,
+    preventDefault() {},
+  });
+  assert.equal(controller.snapshot().contextPaneOpen, false);
+  assert.equal(controller.snapshot().sidebarCollapsed, true);
+  assert.equal(workspace.ids['chat-prompt'].focused, true);
+
+  workspace.ids['chat-prompt'].focused = false;
+  controller.setSidebarCollapsed(false);
+  workspace.rootListeners.get('keydown')({
+    key: 'k',
+    ctrlKey: true,
+    preventDefault() {},
+  });
+  assert.equal(controller.snapshot().contextPaneOpen, false);
+  assert.equal(controller.snapshot().sidebarCollapsed, true);
+  assert.equal(workspace.ids['chat-prompt'].focused, true);
+});
+
 test('workspace restores an automatically collapsed sidebar after leaving compact mode', () => {
   const workspace = fakeWorkspace(1440);
   const controller = createWorkspaceChromeController({

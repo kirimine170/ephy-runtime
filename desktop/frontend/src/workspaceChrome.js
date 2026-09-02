@@ -164,6 +164,11 @@ export function createWorkspaceChromeController({
     if (action === 'sidebar') {
       setSidebarCollapsed(!sidebarCollapsed, {focus: sidebarCollapsed});
     } else if (action === 'prompt') {
+      if (viewport === WORKSPACE_VIEWPORT.compact) {
+        sidebarCollapsed = true;
+        contextPaneOpen = false;
+        apply();
+      }
       onShowChat();
       element('chat-prompt')?.focus();
     } else if (action === 'context') {
