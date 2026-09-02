@@ -207,6 +207,43 @@ test('drawer shortcuts restore focus before hiding their focused pane', () => {
   assert.equal(workspace.ids['chat-context-toggle'].focused, true);
 });
 
+test('compact drawer switches move focus out before hiding the previous pane', () => {
+  const workspace = fakeWorkspace(800);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+  const sidebar = workspace.ids['workspace-sidebar'];
+  const context = workspace.ids['chat-sources-pane'];
+  const sourceScope = workspace.ids['chat-source-scope-select'];
+  sidebar.contains = (target) => target === workspace.nav;
+  context.contains = (target) => target === sourceScope;
+  controller.initialize();
+
+  controller.setContextPaneOpen(true);
+  workspace.root.activeElement = sourceScope;
+  let contextInteractiveWhenFocusMoved = false;
+  workspace.ids['chat-sidebar-toggle'].focus = () => {
+    contextInteractiveWhenFocusMoved = !context.inert;
+    workspace.ids['chat-sidebar-toggle'].focused = true;
+  };
+  workspace.rootListeners.get('keydown')({key: 'b', metaKey: true, preventDefault() {}});
+  assert.equal(contextInteractiveWhenFocusMoved, true);
+  assert.equal(context.inert, true);
+  assert.equal(sidebar.inert, false);
+
+  workspace.root.activeElement = workspace.nav;
+  let sidebarInteractiveWhenFocusMoved = false;
+  workspace.ids['chat-context-toggle'].focus = () => {
+    sidebarInteractiveWhenFocusMoved = !sidebar.inert;
+    workspace.ids['chat-context-toggle'].focused = true;
+  };
+  workspace.rootListeners.get('keydown')({key: '.', metaKey: true, preventDefault() {}});
+  assert.equal(sidebarInteractiveWhenFocusMoved, true);
+  assert.equal(sidebar.inert, true);
+  assert.equal(context.inert, false);
+});
+
 test('common panel transitions clear a hidden narrow Context drawer', () => {
   const workspace = fakeWorkspace(1024);
   const controller = createWorkspaceChromeController({

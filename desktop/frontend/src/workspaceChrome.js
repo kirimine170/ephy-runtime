@@ -61,6 +61,11 @@ export function createWorkspaceChromeController({
       target.focus();
     }
   };
+  const moveFocusBeforeHiding = (paneId, toggleId) => {
+    if (element(paneId)?.contains?.(root?.activeElement)) {
+      element(toggleId)?.focus();
+    }
+  };
 
   function apply() {
     const shell = root?.querySelector?.('.shell');
@@ -95,12 +100,11 @@ export function createWorkspaceChromeController({
 
   function setSidebarCollapsed(collapsed, {focus = false} = {}) {
     const nextCollapsed = Boolean(collapsed);
-    if (
-      nextCollapsed
-      && !sidebarCollapsed
-      && element('workspace-sidebar')?.contains?.(root?.activeElement)
-    ) {
-      element('chat-sidebar-toggle')?.focus();
+    if (nextCollapsed && !sidebarCollapsed) {
+      moveFocusBeforeHiding('workspace-sidebar', 'chat-sidebar-toggle');
+    }
+    if (viewport === WORKSPACE_VIEWPORT.compact && !nextCollapsed && contextPaneOpen) {
+      moveFocusBeforeHiding('chat-sources-pane', 'chat-sidebar-toggle');
     }
     sidebarCollapsed = nextCollapsed;
     if (viewport === WORKSPACE_VIEWPORT.compact && !sidebarCollapsed) {
@@ -112,12 +116,11 @@ export function createWorkspaceChromeController({
 
   function setContextPaneOpen(open, {focus = false} = {}) {
     const nextOpen = Boolean(open);
-    if (
-      !nextOpen
-      && contextPaneOpen
-      && element('chat-sources-pane')?.contains?.(root?.activeElement)
-    ) {
-      element('chat-context-toggle')?.focus();
+    if (!nextOpen && contextPaneOpen) {
+      moveFocusBeforeHiding('chat-sources-pane', 'chat-context-toggle');
+    }
+    if (viewport === WORKSPACE_VIEWPORT.compact && nextOpen && !sidebarCollapsed) {
+      moveFocusBeforeHiding('workspace-sidebar', 'chat-context-toggle');
     }
     contextPaneOpen = nextOpen;
     if (viewport === WORKSPACE_VIEWPORT.compact && contextPaneOpen) {
@@ -177,19 +180,10 @@ export function createWorkspaceChromeController({
     if (nextViewport === WORKSPACE_VIEWPORT.threePane) contextPaneOpen = false;
     const nextSidebarVisible = !sidebarCollapsed;
     const nextContextVisible = nextViewport === WORKSPACE_VIEWPORT.threePane || contextPaneOpen;
-    const activeElement = root?.activeElement;
-    if (
-      previousSidebarVisible
-      && !nextSidebarVisible
-      && element('workspace-sidebar')?.contains?.(activeElement)
-    ) {
-      element('chat-sidebar-toggle')?.focus();
-    } else if (
-      previousContextVisible
-      && !nextContextVisible
-      && element('chat-sources-pane')?.contains?.(activeElement)
-    ) {
-      element('chat-context-toggle')?.focus();
+    if (previousSidebarVisible && !nextSidebarVisible) {
+      moveFocusBeforeHiding('workspace-sidebar', 'chat-sidebar-toggle');
+    } else if (previousContextVisible && !nextContextVisible) {
+      moveFocusBeforeHiding('chat-sources-pane', 'chat-context-toggle');
     }
     apply();
   }
@@ -206,6 +200,8 @@ export function createWorkspaceChromeController({
       setSidebarCollapsed(!sidebarCollapsed, {focus: sidebarCollapsed});
     } else if (action === 'prompt') {
       if (viewport === WORKSPACE_VIEWPORT.compact) {
+        moveFocusBeforeHiding('workspace-sidebar', 'chat-sidebar-toggle');
+        moveFocusBeforeHiding('chat-sources-pane', 'chat-context-toggle');
         sidebarCollapsed = true;
         contextPaneOpen = false;
         apply();
