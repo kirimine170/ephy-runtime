@@ -41,3 +41,25 @@ export function transitionChatEntryToFailure(entry, message = '') {
   }
   return failed;
 }
+
+export function transitionChatEntryToComplete(entry, {
+  meta = '',
+  answer = '',
+  thinking = '',
+  finishReason = '',
+} = {}) {
+  if (!entry?.streaming) return null;
+  const completed = {
+    ...entry,
+    streaming: false,
+    meta: meta || entry.meta,
+    finishReason: finishReason || entry.finishReason || '',
+  };
+  if (thinking && !String(completed.thinking || '').trim()) {
+    completed.thinking = thinking;
+  }
+  if (answer && !String(completed.text || '').trim()) {
+    completed.text = answer;
+  }
+  return completed;
+}

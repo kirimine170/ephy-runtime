@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   announceChatStream,
   chatMessageAccessibilityAttributes,
+  transitionChatEntryToComplete,
   transitionChatEntryToFailure,
   validateChatPrompt,
 } from './chatAccessibility.js';
@@ -76,6 +77,28 @@ test('only an actively streaming entry transitions to an announced failure', () 
       meta: 'error',
       canContinue: false,
       finishReason: '',
+    },
+  );
+});
+
+test('only an actively streaming entry transitions to an announced completion', () => {
+  assert.equal(transitionChatEntryToComplete(null, {answer: 'done'}), null);
+  assert.equal(
+    transitionChatEntryToComplete({requestId: 'done', streaming: false}, {answer: 'done'}),
+    null,
+  );
+  assert.deepEqual(
+    transitionChatEntryToComplete(
+      {requestId: 'active', streaming: true, text: '', thinking: '', meta: 'streaming'},
+      {answer: 'done', thinking: 'trace', meta: 'local', finishReason: 'stop'},
+    ),
+    {
+      requestId: 'active',
+      streaming: false,
+      text: 'done',
+      thinking: 'trace',
+      meta: 'local',
+      finishReason: 'stop',
     },
   );
 });

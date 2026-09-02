@@ -24,6 +24,7 @@ import {renderChatSourceListHtml, renderChatSourcePreviewHtml} from './chatSourc
 import {
   announceChatStream,
   chatMessageAccessibilityAttributes,
+  transitionChatEntryToComplete,
   transitionChatEntryToFailure,
   validateChatPrompt,
 } from './chatAccessibility';
@@ -2201,21 +2202,20 @@ function applyChatStreamDelta({requestId, channel, delta}) {
 }
 
 function finalizeStreamingChat({requestId, meta, answer, thinking, finishReason}) {
-  updateChatThreadEntry(requestId, (entry) => {
-    entry.streaming = false;
-    entry.meta = meta || entry.meta;
-    if (thinking && !(entry.thinking || '').trim()) {
-      entry.thinking = thinking;
-    }
-    if (answer && !(entry.text || '').trim()) {
-      entry.text = answer;
-    }
-    entry.finishReason = finishReason || entry.finishReason || '';
-    entry.canContinue = isLengthLimitedFinishReason(entry.finishReason) && Boolean((entry.text || '').trim());
-    syncLatestChatExportFromEntry(entry);
-    return entry;
+  const entry = chatThreadEntries.find((candidate) => candidate.requestId === requestId);
+  const completed = transitionChatEntryToComplete(entry, {
+    meta,
+    answer,
+    thinking,
+    finishReason,
   });
+  if (!completed) return false;
+  completed.canContinue = isLengthLimitedFinishReason(completed.finishReason)
+    && Boolean((completed.text || '').trim());
+  syncLatestChatExportFromEntry(completed);
+  updateChatThreadEntry(requestId, () => completed);
   announceChatStream(document, 'complete');
+  return true;
 }
 
 function failStreamingChat({requestId, message}) {
