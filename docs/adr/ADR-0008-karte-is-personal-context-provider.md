@@ -24,7 +24,7 @@ V1 transportはatomic filesystem request／response spoolである．既存direc
 - 会話のcreate／append推薦もdirect scanではなくKarte Context search／readを使う．project未選択時は横断検索せず，明示createだけをhuman overrideとして扱う．
 - append proposalは選択`doc_id`を再readし，現在hashをtarget identityと`karte-context` provenanceへ記録する．partial／unavailable時は自動createせず相談する．
 - 表示proposalの`plan_sha256`をpublish時に再照合し，review後のKarte更新や分類変更でproposalが変われば再reviewを要求する．
-- Restricted dataはKarte policy Gateが完了するまで利用しない．
+- Restricted dataはKarte policy Gateを必ず通し，EphyはKarte所有のpolicy／audit schemaをcontract mirrorとして検証するが，独自のprivacy判定を実装しない．
 - Context contractはKarteを先に更新してからephy-runtimeへ同期する．
 
 ## Critical path
@@ -41,6 +41,7 @@ V1 transportはatomic filesystem request／response spoolである．既存direc
 - Selective read：https://github.com/kirimine170/ephy-runtime/issues/47
 - Context-based create／append recommendation：https://github.com/kirimine170/ephy-runtime/issues/49
 - Karte parent：https://github.com/kirimine170/Karte/issues/288
+- Karte privacy／provenance Gate：https://github.com/kirimine170/Karte/issues/287
 
 ## Date
 

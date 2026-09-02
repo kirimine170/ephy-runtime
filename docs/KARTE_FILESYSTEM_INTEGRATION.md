@@ -12,7 +12,7 @@ When classification is unresolved or a similar document may be the correct appen
 
 Ephy recommends append only when a stable `doc_id` matches，the current document's project and kind agree with the placement hint，and the proposal was based on the current canonical byte hash returned by Karte Context Protocol．A project／kind mismatch or a semantic similarity match without exact `doc_id` requires consultation．With no exact or similar document after a successful scoped search，Ephy recommends create．Karte repeats the identity，content-classification，and byte-hash checks before saving．
 
-The `karte-contract` job in `.github/workflows/runtime-tests.yml` checks out public Karte `main` and compares every contract JSON byte-for-byte with `scripts/check_karte_contract.py`．A coordinated contract change must therefore land in Karte before the Ephy Runtime check can pass against the new version．The checker logs only relative filenames and hashes when drift occurs．
+The `karte-contract` job in `.github/workflows/runtime-tests.yml` checks out public Karte `main` and compares every contract JSON byte-for-byte with `scripts/check_karte_contract.py`．The mirrored Context contract includes request／response，policy，and metadata-only audit schemas．A coordinated contract change must therefore land in Karte before the Ephy Runtime check can pass against the new version．The checker logs only relative filenames and hashes when drift occurs．
 
 ## Personal Context search／read
 

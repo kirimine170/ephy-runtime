@@ -46,3 +46,17 @@ def test_cross_repository_contract_reports_missing_file(tmp_path: Path) -> None:
 
     assert "Karte contract is missing schemas/karte-ephy/v1/receipt.schema.json" in errors
     assert "Karte contract is missing required file schemas/karte-ephy/v1/receipt.schema.json" in errors
+
+
+def test_context_policy_and_audit_schemas_are_required(tmp_path: Path) -> None:
+    ephy_root = _repository_with_contract(tmp_path / "ephy")
+    karte_root = _repository_with_contract(tmp_path / "karte")
+    (karte_root / "schemas/karte-context/v1/policy.schema.json").unlink()
+    (karte_root / "schemas/karte-context/v1/audit.schema.json").unlink()
+
+    errors = compare_contracts(ephy_root, karte_root)
+
+    assert "Karte contract is missing schemas/karte-context/v1/policy.schema.json" in errors
+    assert "Karte contract is missing required file schemas/karte-context/v1/policy.schema.json" in errors
+    assert "Karte contract is missing schemas/karte-context/v1/audit.schema.json" in errors
+    assert "Karte contract is missing required file schemas/karte-context/v1/audit.schema.json" in errors
