@@ -387,7 +387,7 @@ class KarteContextClient:
                 else:
                     read_failed_count += 1
                     excerpt = result.snippet[:excerpt_limit]
-            except (KarteContextError, ValueError):
+            except KarteContextTimeout:
                 read_failed_count += 1
                 excerpt = result.snippet[:excerpt_limit]
             selected.append(

@@ -348,6 +348,46 @@ def test_search_and_read_preserves_scope_bounds_context_and_falls_back_per_docum
     )
 
 
+def test_search_and_read_propagates_protocol_validation_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "content").mkdir()
+    client = KarteContextClient(tmp_path)
+    timestamp = datetime(2026, 9, 1, tzinfo=UTC)
+    result = ContextSearchResult(
+        doc_id="doc:synthetic-001",
+        title="Synthetic",
+        project="ephy",
+        kind="decision",
+        tags=["architecture"],
+        sensitivity="internal",
+        relative_path="content/projects/ephy/decision/2026-09/synthetic.md",
+        updated_at=timestamp,
+        sha256="a" * 64,
+        snippet="scoped snippet",
+        score=10,
+        provenance=[],
+    )
+    search_response = ContextResponse(
+        request_id="test-search-request",
+        request_sha256="b" * 64,
+        operation="search",
+        status="ok",
+        results=[result],
+        processed_at=timestamp,
+    )
+    monkeypatch.setattr(client, "search", lambda *args, **kwargs: search_response)
+
+    def invalid_read(*args, **kwargs) -> ContextResponse:
+        raise KarteContextProtocolError("synthetic out-of-scope response")
+
+    monkeypatch.setattr(client, "read", invalid_read)
+
+    with pytest.raises(KarteContextProtocolError, match="out-of-scope"):
+        client.search_and_read("Personal Context boundary", projects=["ephy"])
+
+
 def _wait_for_request(directory: Path) -> Path:
     deadline = time.monotonic() + 1
     while time.monotonic() < deadline:
