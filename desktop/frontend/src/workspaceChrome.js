@@ -94,7 +94,15 @@ export function createWorkspaceChromeController({
   }
 
   function setSidebarCollapsed(collapsed, {focus = false} = {}) {
-    sidebarCollapsed = Boolean(collapsed);
+    const nextCollapsed = Boolean(collapsed);
+    if (
+      nextCollapsed
+      && !sidebarCollapsed
+      && element('workspace-sidebar')?.contains?.(root?.activeElement)
+    ) {
+      element('chat-sidebar-toggle')?.focus();
+    }
+    sidebarCollapsed = nextCollapsed;
     if (viewport === WORKSPACE_VIEWPORT.compact && !sidebarCollapsed) {
       contextPaneOpen = false;
     }
@@ -103,7 +111,15 @@ export function createWorkspaceChromeController({
   }
 
   function setContextPaneOpen(open, {focus = false} = {}) {
-    contextPaneOpen = Boolean(open);
+    const nextOpen = Boolean(open);
+    if (
+      !nextOpen
+      && contextPaneOpen
+      && element('chat-sources-pane')?.contains?.(root?.activeElement)
+    ) {
+      element('chat-context-toggle')?.focus();
+    }
+    contextPaneOpen = nextOpen;
     if (viewport === WORKSPACE_VIEWPORT.compact && contextPaneOpen) {
       sidebarCollapsed = true;
     }
@@ -126,8 +142,7 @@ export function createWorkspaceChromeController({
     if (String(panel || '') === 'chat' || viewport === WORKSPACE_VIEWPORT.threePane || !contextPaneOpen) {
       return;
     }
-    contextPaneOpen = false;
-    apply();
+    setContextPaneOpen(false);
   }
 
   function dismiss() {

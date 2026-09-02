@@ -182,6 +182,31 @@ test('composer shortcut closes a compact drawer before focusing the prompt', () 
   assert.equal(workspace.ids['chat-prompt'].focused, true);
 });
 
+test('drawer shortcuts restore focus before hiding their focused pane', () => {
+  const workspace = fakeWorkspace(800);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+  workspace.ids['workspace-sidebar'].contains = (target) => target === workspace.nav;
+  workspace.ids['chat-sources-pane'].contains = (
+    target,
+  ) => target === workspace.ids['chat-source-scope-select'];
+
+  controller.initialize();
+  workspace.rootListeners.get('keydown')({key: 'b', metaKey: true, preventDefault() {}});
+  workspace.root.activeElement = workspace.nav;
+  workspace.rootListeners.get('keydown')({key: 'b', metaKey: true, preventDefault() {}});
+  assert.equal(controller.snapshot().sidebarCollapsed, true);
+  assert.equal(workspace.ids['chat-sidebar-toggle'].focused, true);
+
+  workspace.rootListeners.get('keydown')({key: '.', metaKey: true, preventDefault() {}});
+  workspace.root.activeElement = workspace.ids['chat-source-scope-select'];
+  workspace.rootListeners.get('keydown')({key: '.', metaKey: true, preventDefault() {}});
+  assert.equal(controller.snapshot().contextPaneOpen, false);
+  assert.equal(workspace.ids['chat-context-toggle'].focused, true);
+});
+
 test('common panel transitions clear a hidden narrow Context drawer', () => {
   const workspace = fakeWorkspace(1024);
   const controller = createWorkspaceChromeController({
