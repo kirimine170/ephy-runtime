@@ -24,6 +24,8 @@ The Gateway exposes the typed client through:
 - `POST /v1/karte/context/read` — read one allowed document by stable `doc_id`．
 - `POST /v1/chat/completions` with `metadata.source_scope=personal_context` — ground a normal Ephy conversation with Karte results．
 
+For a Personal Context conversation，Ephy searches first and selects at most the top three ranked results．It then reads each selected document by stable `doc_id` with the exact same project，tag，and sensitivity scope．The prompt receives at most 6,000 characters from one document and 12,000 characters in total，centered around the search hit when possible．The UI source card retains only the bounded search snippet and metadata; canonical body text is not copied into the chat response．`karte_context_status` distinguishes `searched_count`，selected `source_count`，successful `read_count`，and per-document `read_failed_count`．A failed individual read falls back only to the snippet already disclosed by the scoped search，while an invalid or out-of-scope protocol response makes the entire Personal Context request unavailable．
+
 Karte Personal Context is always injected as `local_untrusted` reference data．Karte timeout，invalid response，or app shutdown does not stop the conversation．The response instead reports `karte_context_status=unavailable` and continues without saved context．The default Ephy actor policy is capped at `internal`; confidential and restricted data remain denied until an explicit local `.mdsys/context/v1/policy.json` grants a narrower actor scope．
 
 ## Read-only indexing

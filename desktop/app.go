@@ -194,8 +194,11 @@ type WebSearchStatus struct {
 }
 
 type KarteContextStatus struct {
-	Status      string `json:"status"`
-	SourceCount int    `json:"source_count"`
+	Status          string `json:"status"`
+	SourceCount     int    `json:"source_count"`
+	SearchedCount   int    `json:"searched_count"`
+	ReadCount       int    `json:"read_count"`
+	ReadFailedCount int    `json:"read_failed_count"`
 }
 
 type RoutePlanRequest struct {

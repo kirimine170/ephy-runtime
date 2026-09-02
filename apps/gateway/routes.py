@@ -15,8 +15,10 @@ from packages.eval_core.preference_schemas import (
 from packages.karte_core.conversation import KarteConversationRequest
 from packages.karte_core.context import (
     KarteContextError,
+    KarteContextGroundingSource,
     KarteContextReadRequest,
     KarteContextSearchRequest,
+    KarteContextSelection,
 )
 from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage, EmbeddingRequest, RequestMetadata
 from packages.rag_core.schemas import IndexBrowseRequest, IndexSourceRequest, IngestRequest, RAGQueryRequest, SearchRequest
@@ -106,6 +108,41 @@ def _mark_karte_context_sources(sources: list[dict]) -> list[dict]:
     return marked
 
 
+def _karte_context_source_payload(source: KarteContextGroundingSource) -> dict:
+    """Keep search ranking/snippet, but use read metadata as the current identity."""
+
+    payload = source.result.model_dump(mode="json")
+    if source.document is not None:
+        document = source.document.model_dump(mode="json", exclude={"body"})
+        payload.update(document)
+        payload["snippet"] = source.result.snippet
+        payload["score"] = source.result.score
+    return payload
+
+
+def _karte_context_source_sets(selection: KarteContextSelection) -> tuple[list[dict], list[dict]]:
+    """Build separate UI-safe source cards and bounded model-grounding sources."""
+
+    visible_sources = _mark_karte_context_sources(
+        [_karte_context_source_payload(source) for source in selection.sources]
+    )
+    grounding_sources = [
+        {**visible, "chunk_text": selected.excerpt}
+        for visible, selected in zip(visible_sources, selection.sources, strict=True)
+    ]
+    return visible_sources, grounding_sources
+
+
+def _karte_context_unavailable_status() -> dict:
+    return {
+        "status": "unavailable",
+        "source_count": 0,
+        "searched_count": 0,
+        "read_count": 0,
+        "read_failed_count": 0,
+    }
+
+
 def _karte_conversation_service(request: Request):
     service = getattr(request.app.state, "karte_conversation_service", None)
     if service is None:
@@ -169,31 +206,34 @@ def build_router() -> APIRouter:
             query_text = _latest_user_message_text(payload.messages)
             project, source_path, tags, top_k = _resolve_grounding_scope(payload.metadata)
             local_sources = []
+            local_grounding_sources = []
             karte_context_status: dict | None = None
             source_scope = ((payload.metadata.source_scope if payload.metadata else None) or "").strip().lower()
             if query_text and source_scope == "personal_context":
                 context_client = getattr(request.app.state, "karte_context_client", None)
                 if context_client is None:
-                    karte_context_status = {"status": "unavailable", "source_count": 0}
+                    karte_context_status = _karte_context_unavailable_status()
                 else:
                     try:
-                        context_response = await asyncio.to_thread(
-                            context_client.search,
+                        context_selection = await asyncio.to_thread(
+                            context_client.search_and_read,
                             query_text,
                             projects=[project] if project else [],
                             tags=tags,
                             top_k=top_k or 5,
                         )
-                        local_sources = _mark_karte_context_sources(
-                            [item.model_dump(mode="json") for item in context_response.results]
-                        )
+                        local_sources, local_grounding_sources = _karte_context_source_sets(context_selection)
+                        search_response = context_selection.search_response
                         karte_context_status = {
-                            "status": context_response.status,
+                            "status": search_response.status,
                             "source_count": len(local_sources),
-                            "diagnostics": [item.model_dump() for item in context_response.diagnostics],
+                            "searched_count": len(search_response.results),
+                            "read_count": context_selection.read_count,
+                            "read_failed_count": context_selection.read_failed_count,
+                            "diagnostics": [item.model_dump() for item in search_response.diagnostics],
                         }
                     except (KarteContextError, ValueError):
-                        karte_context_status = {"status": "unavailable", "source_count": 0}
+                        karte_context_status = _karte_context_unavailable_status()
             elif query_text:
                 try:
                     local_sources = _mark_local_sources(
@@ -205,6 +245,7 @@ def build_router() -> APIRouter:
                             top_k=top_k,
                         )
                     )
+                    local_grounding_sources = local_sources
                 except RuntimeError:
                     local_sources = []
 
@@ -240,7 +281,7 @@ def build_router() -> APIRouter:
             if local_sources or web_context:
                 effective_payload = prompt_manager.apply_untrusted_context(
                     effective_payload,
-                    local_context=rag_service._build_context(local_sources) if local_sources else "",
+                    local_context=rag_service._build_context(local_grounding_sources) if local_grounding_sources else "",
                     web_context=web_context,
                 )
             if web_search_status and web_search_status["status"] == "unavailable":
