@@ -24,6 +24,8 @@ import {renderChatSourceListHtml, renderChatSourcePreviewHtml} from './chatSourc
 import {
   announceChatStream,
   chatMessageAccessibilityAttributes,
+  transitionChatEntryToFailure,
+  validateChatPrompt,
 } from './chatAccessibility';
 import {createWorkspaceChromeController} from './workspaceChrome';
 import {
@@ -2217,17 +2219,12 @@ function finalizeStreamingChat({requestId, meta, answer, thinking, finishReason}
 }
 
 function failStreamingChat({requestId, message}) {
-  updateChatThreadEntry(requestId, (entry) => {
-    entry.streaming = false;
-    entry.meta = 'error';
-    entry.canContinue = false;
-    entry.finishReason = '';
-    if (!(entry.text || '').trim()) {
-      entry.text = message || 'Streaming request failed.';
-    }
-    return entry;
-  });
+  const entry = chatThreadEntries.find((candidate) => candidate.requestId === requestId);
+  const failed = transitionChatEntryToFailure(entry, message);
+  if (!failed) return false;
+  updateChatThreadEntry(requestId, () => failed);
   announceChatStream(document, 'error', message);
+  return true;
 }
 
 function chatEntriesThrough(requestId) {
@@ -7555,8 +7552,7 @@ async function runChatFromForm() {
   const sourceScope = document.getElementById('chat-source-scope-select').value;
   const promptInput = document.getElementById('chat-prompt');
   const prompt = promptInput.value;
-  if (!prompt.trim()) {
-    failStreamingChat({requestId: activeChatStreamRequestId, message: 'Prompt is empty.'});
+  if (!validateChatPrompt(promptInput)) {
     return {ok: false, detail: 'Prompt is empty.'};
   }
   if (chatSendInFlight) {

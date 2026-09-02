@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   announceChatStream,
   chatMessageAccessibilityAttributes,
+  transitionChatEntryToFailure,
+  validateChatPrompt,
 } from './chatAccessibility.js';
 
 test('chat stream announcements use a dedicated status without replacing the transcript', () => {
@@ -35,5 +37,45 @@ test('historical error cards remain non-live after transcript rerenders', () => 
   assert.doesNotMatch(
     chatMessageAccessibilityAttributes({meta: 'error', streaming: false}),
     /role="alert"|aria-live=/,
+  );
+});
+
+test('empty prompt uses input validation instead of a response failure announcement', () => {
+  const events = [];
+  const input = {
+    value: '   ',
+    setCustomValidity(message) { events.push(['validity', message]); },
+    reportValidity() { events.push(['report']); },
+    focus() { events.push(['focus']); },
+  };
+
+  assert.equal(validateChatPrompt(input), false);
+  assert.deepEqual(events, [
+    ['validity', 'Enter a message before sending.'],
+    ['report'],
+    ['focus'],
+  ]);
+
+  input.value = 'Continue';
+  assert.equal(validateChatPrompt(input), true);
+  assert.deepEqual(events.at(-1), ['validity', '']);
+});
+
+test('only an actively streaming entry transitions to an announced failure', () => {
+  assert.equal(transitionChatEntryToFailure(null, 'offline'), null);
+  assert.equal(
+    transitionChatEntryToFailure({requestId: 'done', streaming: false}, 'offline'),
+    null,
+  );
+  assert.deepEqual(
+    transitionChatEntryToFailure({requestId: 'active', streaming: true, text: ''}, 'offline'),
+    {
+      requestId: 'active',
+      streaming: false,
+      text: 'offline',
+      meta: 'error',
+      canContinue: false,
+      finishReason: '',
+    },
   );
 });

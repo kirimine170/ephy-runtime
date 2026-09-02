@@ -16,3 +16,28 @@ export function announceChatStream(root, state, message = '') {
 export function chatMessageAccessibilityAttributes(entry = {}) {
   return `aria-busy="${entry.streaming ? 'true' : 'false'}"`;
 }
+
+export function validateChatPrompt(input) {
+  const isValid = Boolean(String(input?.value || '').trim());
+  input?.setCustomValidity?.(isValid ? '' : 'Enter a message before sending.');
+  if (!isValid) {
+    input?.reportValidity?.();
+    input?.focus?.();
+  }
+  return isValid;
+}
+
+export function transitionChatEntryToFailure(entry, message = '') {
+  if (!entry?.streaming) return null;
+  const failed = {
+    ...entry,
+    streaming: false,
+    meta: 'error',
+    canContinue: false,
+    finishReason: '',
+  };
+  if (!String(failed.text || '').trim()) {
+    failed.text = message || 'Streaming request failed.';
+  }
+  return failed;
+}

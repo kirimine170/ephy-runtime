@@ -6,7 +6,7 @@ Ephy Desktopの日常画面は，local Agent Workspaceとして責務を3領域�
 - 中央：会話，実行状態，Karteへの提案review，入力composer．
 - 右：source scope，Karte Personal Context，根拠一覧，文書preview．
 
-1200px以下では右領域を`Context` drawerへ，900px以下では左navigationもdrawerへ切り替えます．drawerを開くと最初の操作対象へfocusし，`Escape`で閉じた後は起点buttonへfocusを戻します．`⌘K`／`Ctrl+K`はcomposer，`⌘B`／`Ctrl+B`はnavigation，`⌘.`／`Ctrl+.`はContextを操作します．送信中のthreadとpanelは`aria-busy`，失敗したassistant messageは`role=alert`，空の会話とsource previewには次の操作を示すempty stateを設定します．
+1200px以下では右領域を`Context` drawerへ，900px以下では左navigationもviewport内でscrollできるdrawerへ切り替えます．drawerを開くと最初の操作対象へfocusし，`Escape`で閉じた後は起点buttonへfocusを戻します．`⌘K`／`Ctrl+K`はcomposer，`⌘B`／`Ctrl+B`はnavigation，`⌘.`／`Ctrl+.`はContextを操作します．送信中のthreadとpanelは`aria-busy`とし，現在の応答開始／完了／失敗だけを専用`chat-stream-announcement` status regionで通知します．履歴のerror cardは再描画時に再通知しない非live表示です．空の入力はcomposerのvalidationとして扱い，空の会話とsource previewには次の操作を示すempty stateを設定します．
 
 通常modeでは会話，project，library，Karte Personal Contextだけを表示します．Runtime，Routing，Evaluation，Top K，Gateway URL，model，LoRA，詳細diagnosticは削除せず，SettingsのDeveloper Modeを有効にした場合だけ表示します．Developer Modeを無効にした状態でadvanced panelへ移動しようとした場合はSettingsへ戻します．
 
