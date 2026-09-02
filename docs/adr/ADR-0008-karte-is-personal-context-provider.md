@@ -19,13 +19,14 @@ V1 transportはatomic filesystem request／response spoolである．既存direc
 - GatewayはKarte Context clientを注入し，Karte unavailableを通常会話の停止理由にしない．
 - Personal Contextはgeneric local RAGやWeb sourceとsource type，trust，identityを分離する．
 - promptへ渡すKarte contextはuntrusted dataとして隔離する．
-- `doc_id`でreadし，pathを恒久identityにしない．
+- search結果の上位3件までを同一scopeの`doc_id`でreadし，pathを恒久identityにしない．
+- canonical本文は回答根拠にだけ境界付きで利用し，source cardへ露出しない．個別read失敗時はsearchで開示済みのsnippetだけへ縮退する．
 - Restricted dataはKarte policy Gateが完了するまで利用しない．
 - Context contractはKarteを先に更新してからephy-runtimeへ同期する．
 
 ## Critical path
 
-`Karte T-021 → Karte T-106 → Ephy T-116 → Ephy T-117 → Ephy T-110 → Ephy T-118`．
+`Karte T-021 → Karte T-106 → Ephy T-116 → Ephy T-117 → Ephy T-110 → Ephy T-118 → Ephy T-120 → append先推薦のContext Protocol化`．
 
 ## Traceability
 
@@ -34,6 +35,7 @@ V1 transportはatomic filesystem request／response spoolである．既存direc
 - Grounding：https://github.com/kirimine170/ephy-runtime/issues/40
 - UI：https://github.com/kirimine170/ephy-runtime/issues/41
 - E2E：https://github.com/kirimine170/ephy-runtime/issues/42
+- Selective read：https://github.com/kirimine170/ephy-runtime/issues/47
 - Karte parent：https://github.com/kirimine170/Karte/issues/288
 
 ## Date

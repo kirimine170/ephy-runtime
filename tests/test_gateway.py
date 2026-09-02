@@ -11,6 +11,8 @@ from packages.karte_core.context import (
     ContextProvenance,
     ContextResponse,
     ContextSearchResult,
+    KarteContextGroundingSource,
+    KarteContextSelection,
     KarteContextTimeout,
 )
 
@@ -63,12 +65,32 @@ def _karte_read_response() -> ContextResponse:
             relative_path="content/projects/ephy/decision/2026-09/context.md",
             updated_at=timestamp,
             sha256="b" * 64,
-            body="Karte owns durable Personal Context and Ephy reads it as a client.\n",
+            body=(
+                "Karte owns durable Personal Context and Ephy reads it as a client.\n"
+                "Only the selected canonical document says approved changes receive a durable receipt.\n"
+            ),
             provenance=[ContextProvenance(type="canonical", reference="doc:context-001", sha256="b" * 64)],
         ),
         diagnostics=[],
         error=None,
         processed_at=timestamp,
+    )
+
+
+def _karte_context_selection() -> KarteContextSelection:
+    search_response = _karte_search_response()
+    read_response = _karte_read_response()
+    return KarteContextSelection(
+        search_response=search_response,
+        sources=[
+            KarteContextGroundingSource(
+                result=search_response.results[0],
+                document=read_response.document,
+                excerpt=read_response.document.body,
+                read_status="read",
+            )
+        ],
+        read_failed_count=0,
     )
 
 
@@ -490,9 +512,9 @@ def test_chat_endpoint_grounds_with_karte_personal_context() -> None:
     captured = {}
 
     class FakeKarteContextClient:
-        def search(self, query, **kwargs):
-            captured["search"] = (query, kwargs)
-            return _karte_search_response()
+        def search_and_read(self, query, **kwargs):
+            captured["search_and_read"] = (query, kwargs)
+            return _karte_context_selection()
 
     async def fake_create_chat_completion(*, model_config, request_payload):
         captured["request_payload"] = request_payload
@@ -524,27 +546,87 @@ def test_chat_endpoint_grounds_with_karte_personal_context() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["karte_context_status"] == {"status": "ok", "source_count": 1, "diagnostics": []}
+    assert payload["karte_context_status"] == {
+        "status": "ok",
+        "source_count": 1,
+        "searched_count": 1,
+        "read_count": 1,
+        "read_failed_count": 0,
+        "diagnostics": [],
+    }
     assert payload["sources"][0]["source_type"] == "karte_context"
     assert payload["sources"][0]["doc_id"] == "doc:context-001"
-    assert captured["search"] == (
+    assert payload["sources"][0]["chunk_text"] == _karte_search_response().results[0].snippet
+    assert "Only the selected canonical document" not in str(payload["sources"])
+    assert captured["search_and_read"] == (
         "EphyとKarteの責務境界は？",
         {"projects": ["ephy"], "tags": ["architecture"], "top_k": 3},
     )
     sent_request = captured["request_payload"]
     assert any(
-        "Karte owns durable Personal Context" in str(message.content)
+        "Only the selected canonical document says approved changes receive a durable receipt" in str(message.content)
         for message in sent_request.messages
         if message.role == "user"
     )
     assert any("非信頼の参照データ" in str(message.content) for message in sent_request.messages if message.role == "system")
 
 
+def test_chat_endpoint_uses_disclosed_snippet_when_one_document_read_failed() -> None:
+    captured = {}
+    search_response = _karte_search_response()
+    selection = KarteContextSelection(
+        search_response=search_response,
+        sources=[
+            KarteContextGroundingSource(
+                result=search_response.results[0],
+                excerpt=search_response.results[0].snippet,
+                read_status="snippet_fallback",
+            )
+        ],
+        read_failed_count=1,
+    )
+
+    class PartiallyAvailableKarteContextClient:
+        def search_and_read(self, query, **kwargs):
+            return selection
+
+    async def fake_create_chat_completion(*, model_config, request_payload):
+        captured["request_payload"] = request_payload
+        return {"choices": [{"message": {"content": "snippet-grounded answer"}}]}
+
+    with TestClient(app) as client:
+        original_context = app.state.karte_context_client
+        original_chat = app.state.chat_adapter.create_chat_completion
+        app.state.karte_context_client = PartiallyAvailableKarteContextClient()
+        app.state.chat_adapter.create_chat_completion = AsyncMock(side_effect=fake_create_chat_completion)
+        try:
+            response = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "auto",
+                    "messages": [{"role": "user", "content": "責務境界は？"}],
+                    "metadata": {"mode": "fast", "source_scope": "personal_context"},
+                },
+            )
+        finally:
+            app.state.karte_context_client = original_context
+            app.state.chat_adapter.create_chat_completion = original_chat
+
+    assert response.status_code == 200
+    assert response.json()["karte_context_status"]["read_count"] == 0
+    assert response.json()["karte_context_status"]["read_failed_count"] == 1
+    assert any(
+        search_response.results[0].snippet in str(message.content)
+        for message in captured["request_payload"].messages
+        if message.role == "user"
+    )
+
+
 def test_chat_endpoint_continues_when_karte_personal_context_is_unavailable() -> None:
     captured = {}
 
     class TimeoutKarteContextClient:
-        def search(self, query, **kwargs):
+        def search_and_read(self, query, **kwargs):
             raise KarteContextTimeout("synthetic timeout")
 
     async def fake_create_chat_completion(*, model_config, request_payload):
@@ -571,7 +653,13 @@ def test_chat_endpoint_continues_when_karte_personal_context_is_unavailable() ->
 
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"] == "plain chat answer"
-    assert response.json()["karte_context_status"] == {"status": "unavailable", "source_count": 0}
+    assert response.json()["karte_context_status"] == {
+        "status": "unavailable",
+        "source_count": 0,
+        "searched_count": 0,
+        "read_count": 0,
+        "read_failed_count": 0,
+    }
     assert "sources" not in response.json()
     sent_request = captured["request_payload"]
     assert all(
@@ -583,7 +671,7 @@ def test_chat_endpoint_continues_when_karte_personal_context_is_unavailable() ->
 
 def test_chat_endpoint_continues_when_karte_personal_context_request_is_invalid() -> None:
     class ValidationFailingKarteContextClient:
-        def search(self, query, **kwargs):
+        def search_and_read(self, query, **kwargs):
             raise ValueError("synthetic request validation failure")
 
     async def fake_create_chat_completion(*, model_config, request_payload):
@@ -615,7 +703,13 @@ def test_chat_endpoint_continues_when_karte_personal_context_request_is_invalid(
     assert response.status_code == 200
     payload = response.json()
     assert payload["choices"][0]["message"]["content"] == "plain chat answer"
-    assert payload["karte_context_status"] == {"status": "unavailable", "source_count": 0}
+    assert payload["karte_context_status"] == {
+        "status": "unavailable",
+        "source_count": 0,
+        "searched_count": 0,
+        "read_count": 0,
+        "read_failed_count": 0,
+    }
     assert "sources" not in payload
 
 

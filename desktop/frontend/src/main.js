@@ -12,6 +12,7 @@ import {
 } from './presetBatchRender';
 import {prepareWebSearchRequest} from './webSearchFlow';
 import {shouldUseGenericRagEndpoint} from './chatRouting';
+import {formatKarteContextStatus} from './karteContextStatus';
 import {
   buildKarteConversationRequest,
   formatLocalISOString,
@@ -2377,11 +2378,7 @@ function bindChatStreamEvents() {
     }
     if (payload.kind === 'karte_context_status') {
       const status = payload.karte_context_status || {};
-      if (status.status === 'ok') {
-        setChatDropStatus(`Karte Personal Context · ${status.source_count || 0} sources`);
-      } else {
-        setChatDropStatus('Karte Personal Context is unavailable. Continuing without saved context.');
-      }
+      setChatDropStatus(formatKarteContextStatus(status));
       return;
     }
     if (payload.kind === 'done') {
@@ -5236,10 +5233,8 @@ function renderChatResult(response, mode, prompt = '', routeState = null, {appen
     });
   }
   renderChatSourcesPane({sources: response?.sources || [], title: response?.sources?.length ? 'Used Sources' : 'Sources'});
-  if (response?.karte_context_status?.status === 'ok') {
-    setChatDropStatus(`Karte Personal Context · ${response.karte_context_status.source_count || 0} sources`);
-  } else if (response?.karte_context_status) {
-    setChatDropStatus('Karte Personal Context is unavailable. Continuing without saved context.');
+  if (response?.karte_context_status) {
+    setChatDropStatus(formatKarteContextStatus(response.karte_context_status));
   }
   renderRouteInspectorCard(routeState);
 }

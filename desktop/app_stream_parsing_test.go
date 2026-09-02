@@ -70,7 +70,10 @@ func TestParseStreamErrorHandlesMalformedPayload(t *testing.T) {
 
 func TestExtractKarteContextStatusAndDocumentIdentity(t *testing.T) {
 	raw := map[string]any{
-		"karte_context_status": map[string]any{"status": "ok", "source_count": float64(1)},
+		"karte_context_status": map[string]any{
+			"status": "ok", "source_count": float64(1), "searched_count": float64(3),
+			"read_count": float64(1), "read_failed_count": float64(0),
+		},
 		"sources": []any{
 			map[string]any{
 				"chunk_id": "karte:doc:context-001", "doc_id": "doc:context-001",
@@ -85,7 +88,7 @@ func TestExtractKarteContextStatusAndDocumentIdentity(t *testing.T) {
 	}
 
 	status := extractKarteContextStatus(raw)
-	if status == nil || status.Status != "ok" || status.SourceCount != 1 {
+	if status == nil || status.Status != "ok" || status.SourceCount != 1 || status.SearchedCount != 3 || status.ReadCount != 1 {
 		t.Fatalf("unexpected Karte context status: %#v", status)
 	}
 	sources := extractChatSources(raw)

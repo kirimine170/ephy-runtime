@@ -137,6 +137,9 @@ export namespace main {
 	export class KarteContextStatus {
 	    status: string;
 	    source_count: number;
+	    searched_count: number;
+	    read_count: number;
+	    read_failed_count: number;
 
 	    static createFrom(source: any = {}) {
 	        return new KarteContextStatus(source);
@@ -146,6 +149,9 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];
 	        this.source_count = source["source_count"];
+	        this.searched_count = source["searched_count"];
+	        this.read_count = source["read_count"];
+	        this.read_failed_count = source["read_failed_count"];
 	    }
 	}
 	export class SearchItem {

@@ -18,6 +18,7 @@ _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 _MAX_RESPONSE_BYTES = 3 * 1024 * 1024
+_SENSITIVITY_RANK = {"public": 0, "internal": 1, "confidential": 2, "restricted": 3}
 
 
 class ContextActor(BaseModel):
@@ -89,24 +90,24 @@ class ContextRequest(BaseModel):
 class ContextProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: str
-    reference: str
-    sha256: str
+    type: str = Field(min_length=1, max_length=64)
+    reference: str = Field(min_length=1, max_length=2048)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class ContextSearchResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    doc_id: str
-    title: str
-    project: str
-    kind: str
+    doc_id: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1)
+    project: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
+    kind: str = Field(min_length=1, max_length=64)
     tags: list[str]
     sensitivity: Literal["public", "internal", "confidential", "restricted"]
-    relative_path: str
+    relative_path: str = Field(pattern=r"^content/.+\.md$")
     updated_at: datetime
-    sha256: str
-    snippet: str
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    snippet: str = Field(max_length=2048)
     score: float = Field(ge=0)
     provenance: list[ContextProvenance]
 
@@ -114,15 +115,15 @@ class ContextSearchResult(BaseModel):
 class ContextDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    doc_id: str
-    title: str
-    project: str
-    kind: str
+    doc_id: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1)
+    project: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
+    kind: str = Field(min_length=1, max_length=64)
     tags: list[str]
     sensitivity: Literal["public", "internal", "confidential", "restricted"]
-    relative_path: str
+    relative_path: str = Field(pattern=r"^content/.+\.md$")
     updated_at: datetime
-    sha256: str
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     body: str = Field(max_length=2_097_152)
     provenance: list[ContextProvenance]
 
@@ -130,15 +131,15 @@ class ContextDocument(BaseModel):
 class ContextDiagnostic(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    code: str
+    code: str = Field(min_length=1, max_length=128)
     count: int = Field(ge=1)
 
 
 class ContextProtocolErrorBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    code: str
-    message: str
+    code: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=512)
 
 
 class ContextResponse(BaseModel):
@@ -201,6 +202,31 @@ class KarteContextReadRequest(BaseModel):
     projects: list[str] = Field(default_factory=list, max_length=64)
     tags: list[str] = Field(default_factory=list, max_length=64)
     sensitivity_ceiling: Literal["public", "internal", "confidential", "restricted"] = "internal"
+
+
+class KarteContextGroundingSource(BaseModel):
+    """One search-ranked source selected for bounded answer grounding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    result: ContextSearchResult
+    document: ContextDocument | None = None
+    excerpt: str = Field(max_length=12_000)
+    read_status: Literal["read", "snippet_fallback"]
+
+
+class KarteContextSelection(BaseModel):
+    """Search outcome plus the bounded documents Ephy may use for one answer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    search_response: ContextResponse
+    sources: list[KarteContextGroundingSource] = Field(default_factory=list, max_length=3)
+    read_failed_count: int = Field(default=0, ge=0, le=3)
+
+    @property
+    def read_count(self) -> int:
+        return sum(source.read_status == "read" for source in self.sources)
 
 
 class KarteContextError(RuntimeError):
@@ -279,6 +305,83 @@ class KarteContextClient:
         )
         return self.exchange(request)
 
+    def search_and_read(
+        self,
+        query: str,
+        *,
+        projects: list[str] | None = None,
+        tags: list[str] | None = None,
+        sensitivity_ceiling: Literal["public", "internal", "confidential", "restricted"] = "internal",
+        top_k: int = 5,
+        max_documents: int = 3,
+        max_total_chars: int = 12_000,
+        max_document_chars: int = 6_000,
+    ) -> KarteContextSelection:
+        """Search Karte, then read a bounded number of ranked documents.
+
+        A failed individual read falls back to the snippet Karte already disclosed in
+        the search response. This keeps normal chat available without broadening the
+        requested project, tag, or sensitivity scope.
+        """
+
+        if not 1 <= max_documents <= 3:
+            raise ValueError("max_documents must be between 1 and 3")
+        if not 1 <= max_total_chars <= 12_000:
+            raise ValueError("max_total_chars must be between 1 and 12000")
+        if not 1 <= max_document_chars <= 6_000:
+            raise ValueError("max_document_chars must be between 1 and 6000")
+
+        normalized_projects = projects or []
+        normalized_tags = tags or []
+        search_response = self.search(
+            query,
+            projects=normalized_projects,
+            tags=normalized_tags,
+            sensitivity_ceiling=sensitivity_ceiling,
+            top_k=top_k,
+        )
+        remaining_chars = max_total_chars
+        selected: list[KarteContextGroundingSource] = []
+        read_failed_count = 0
+        for result in search_response.results[:max_documents]:
+            if remaining_chars <= 0:
+                break
+            excerpt_limit = min(max_document_chars, remaining_chars)
+            document: ContextDocument | None = None
+            read_status: Literal["read", "snippet_fallback"] = "snippet_fallback"
+            try:
+                read_response = self.read(
+                    result.doc_id,
+                    projects=normalized_projects,
+                    tags=normalized_tags,
+                    sensitivity_ceiling=sensitivity_ceiling,
+                )
+                if read_response.status == "ok" and read_response.document is not None:
+                    document = read_response.document
+                    excerpt = _bounded_document_excerpt(document.body, result.snippet, excerpt_limit)
+                    read_status = "read"
+                else:
+                    read_failed_count += 1
+                    excerpt = result.snippet[:excerpt_limit]
+            except (KarteContextError, ValueError):
+                read_failed_count += 1
+                excerpt = result.snippet[:excerpt_limit]
+            selected.append(
+                KarteContextGroundingSource(
+                    result=result,
+                    document=document,
+                    excerpt=excerpt,
+                    read_status=read_status,
+                )
+            )
+            remaining_chars -= len(excerpt)
+
+        return KarteContextSelection(
+            search_response=search_response,
+            sources=selected,
+            read_failed_count=read_failed_count,
+        )
+
     def exchange(self, request: ContextRequest) -> ContextResponse:
         payload = request.model_dump(mode="json")
         data = _serialize_json(payload)
@@ -313,6 +416,17 @@ class KarteContextClient:
             raise KarteContextProtocolError("Karte context response does not match the request")
         if response.operation not in {request.operation, "invalid"}:
             raise KarteContextProtocolError("Karte context response operation is invalid")
+        if (
+            request.operation == "read"
+            and response.document is not None
+            and response.document.doc_id != request.doc_id
+        ):
+            raise KarteContextProtocolError("Karte context response document does not match the requested doc_id")
+        disclosed_items = [*response.results]
+        if response.document is not None:
+            disclosed_items.append(response.document)
+        if any(not _item_matches_requested_scope(item, request.scope) for item in disclosed_items):
+            raise KarteContextProtocolError("Karte context response contains content outside the requested scope")
         if response.status in {"invalid", "conflict"}:
             code = response.error.code if response.error is not None else response.status
             raise KarteContextProtocolError(f"Karte context request failed: {code}")
@@ -349,6 +463,31 @@ class KarteContextClient:
 
 def _serialize_json(payload: dict) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _bounded_document_excerpt(body: str, snippet: str, max_chars: int) -> str:
+    """Return a bounded body window near the search hit when it can be located."""
+
+    if len(body) <= max_chars:
+        return body
+    needle = snippet.strip().strip("….").strip()
+    match_at = body.casefold().find(needle.casefold()) if needle else -1
+    if match_at < 0:
+        return body[:max_chars]
+    midpoint = match_at + len(needle) // 2
+    start = max(0, min(midpoint - max_chars // 2, len(body) - max_chars))
+    return body[start : start + max_chars]
+
+
+def _item_matches_requested_scope(item: ContextSearchResult | ContextDocument, scope: ContextScope) -> bool:
+    requested_projects = {project.casefold() for project in scope.projects}
+    if requested_projects and "*" not in requested_projects and item.project.casefold() not in requested_projects:
+        return False
+    requested_tags = {tag.casefold() for tag in scope.tags}
+    item_tags = {tag.casefold() for tag in item.tags}
+    if not requested_tags.issubset(item_tags):
+        return False
+    return _SENSITIVITY_RANK[item.sensitivity] <= _SENSITIVITY_RANK[scope.sensitivity_ceiling]
 
 
 def _atomic_write_bytes(destination: Path, data: bytes) -> None:
