@@ -182,7 +182,8 @@ export function createWorkspaceChromeController({
     const nextContextVisible = nextViewport === WORKSPACE_VIEWPORT.threePane || contextPaneOpen;
     if (previousSidebarVisible && !nextSidebarVisible) {
       moveFocusBeforeHiding('workspace-sidebar', 'chat-sidebar-toggle');
-    } else if (previousContextVisible && !nextContextVisible) {
+    }
+    if (previousContextVisible && !nextContextVisible) {
       moveFocusBeforeHiding('chat-sources-pane', 'chat-context-toggle');
     }
     apply();
