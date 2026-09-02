@@ -182,6 +182,32 @@ test('composer shortcut closes a compact drawer before focusing the prompt', () 
   assert.equal(workspace.ids['chat-prompt'].focused, true);
 });
 
+test('composer shortcut closes a split Context drawer before focusing the prompt', () => {
+  const workspace = fakeWorkspace(1024);
+  const controller = createWorkspaceChromeController({
+    root: workspace.root,
+    windowObject: workspace.windowObject,
+  });
+  workspace.ids['chat-sources-pane'].contains = (
+    target,
+  ) => target === workspace.ids['chat-source-scope-select'];
+
+  controller.initialize();
+  controller.setContextPaneOpen(true);
+  workspace.root.activeElement = workspace.ids['chat-source-scope-select'];
+  workspace.rootListeners.get('keydown')({
+    key: 'k',
+    metaKey: true,
+    preventDefault() {},
+  });
+
+  assert.equal(controller.snapshot().contextPaneOpen, false);
+  assert.equal(controller.snapshot().sidebarCollapsed, false);
+  assert.equal(workspace.ids['chat-sources-pane'].inert, true);
+  assert.equal(workspace.ids['chat-context-toggle'].getAttribute('aria-expanded'), 'false');
+  assert.equal(workspace.ids['chat-prompt'].focused, true);
+});
+
 test('drawer shortcuts restore focus before hiding their focused pane', () => {
   const workspace = fakeWorkspace(800);
   const controller = createWorkspaceChromeController({

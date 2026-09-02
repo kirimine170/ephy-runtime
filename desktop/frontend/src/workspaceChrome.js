@@ -200,11 +200,16 @@ export function createWorkspaceChromeController({
     if (action === 'sidebar') {
       setSidebarCollapsed(!sidebarCollapsed, {focus: sidebarCollapsed});
     } else if (action === 'prompt') {
-      if (viewport === WORKSPACE_VIEWPORT.compact) {
-        moveFocusBeforeHiding('workspace-sidebar', 'chat-sidebar-toggle');
-        moveFocusBeforeHiding('chat-sources-pane', 'chat-context-toggle');
-        sidebarCollapsed = true;
-        contextPaneOpen = false;
+      const contextIsDrawer = viewport !== WORKSPACE_VIEWPORT.threePane;
+      if (viewport === WORKSPACE_VIEWPORT.compact || (contextIsDrawer && contextPaneOpen)) {
+        if (viewport === WORKSPACE_VIEWPORT.compact) {
+          moveFocusBeforeHiding('workspace-sidebar', 'chat-sidebar-toggle');
+          sidebarCollapsed = true;
+        }
+        if (contextIsDrawer) {
+          moveFocusBeforeHiding('chat-sources-pane', 'chat-context-toggle');
+          contextPaneOpen = false;
+        }
         apply();
       }
       onShowChat();
