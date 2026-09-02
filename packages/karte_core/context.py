@@ -211,8 +211,18 @@ class KarteContextGroundingSource(BaseModel):
 
     result: ContextSearchResult
     document: ContextDocument | None = None
-    excerpt: str = Field(max_length=12_000)
+    excerpt: str = Field(max_length=6_000)
     read_status: Literal["read", "snippet_fallback"]
+
+    @model_validator(mode="after")
+    def validate_read_state(self) -> "KarteContextGroundingSource":
+        if self.read_status == "read" and self.document is None:
+            raise ValueError("read grounding source requires a document")
+        if self.read_status == "snippet_fallback" and self.document is not None:
+            raise ValueError("snippet fallback cannot include a document")
+        if self.document is not None and self.document.doc_id != self.result.doc_id:
+            raise ValueError("grounding document must match the ranked result doc_id")
+        return self
 
 
 class KarteContextSelection(BaseModel):
@@ -223,6 +233,20 @@ class KarteContextSelection(BaseModel):
     search_response: ContextResponse
     sources: list[KarteContextGroundingSource] = Field(default_factory=list, max_length=3)
     read_failed_count: int = Field(default=0, ge=0, le=3)
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> "KarteContextSelection":
+        if self.search_response.operation != "search":
+            raise ValueError("context selection requires a search response")
+        ranked_doc_ids = {result.doc_id for result in self.search_response.results}
+        if any(source.result.doc_id not in ranked_doc_ids for source in self.sources):
+            raise ValueError("grounding source must come from the ranked search response")
+        fallback_count = sum(source.read_status == "snippet_fallback" for source in self.sources)
+        if self.read_failed_count != fallback_count:
+            raise ValueError("read_failed_count must match snippet fallback sources")
+        if sum(len(source.excerpt) for source in self.sources) > 12_000:
+            raise ValueError("selected Personal Context exceeds the total context budget")
+        return self
 
     @property
     def read_count(self) -> int:
