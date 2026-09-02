@@ -147,6 +147,8 @@ export function createWorkspaceChromeController({
 
   function handleResize() {
     const previousViewport = viewport;
+    const previousSidebarVisible = !sidebarCollapsed;
+    const previousContextVisible = previousViewport === WORKSPACE_VIEWPORT.threePane || contextPaneOpen;
     const nextViewport = resolveWorkspaceViewport(windowObject?.innerWidth);
     if (nextViewport === WORKSPACE_VIEWPORT.compact && previousViewport !== WORKSPACE_VIEWPORT.compact) {
       sidebarCollapsedBeforeCompact = sidebarCollapsed;
@@ -158,6 +160,22 @@ export function createWorkspaceChromeController({
       sidebarCollapsedBeforeCompact = null;
     }
     if (nextViewport === WORKSPACE_VIEWPORT.threePane) contextPaneOpen = false;
+    const nextSidebarVisible = !sidebarCollapsed;
+    const nextContextVisible = nextViewport === WORKSPACE_VIEWPORT.threePane || contextPaneOpen;
+    const activeElement = root?.activeElement;
+    if (
+      previousSidebarVisible
+      && !nextSidebarVisible
+      && element('workspace-sidebar')?.contains?.(activeElement)
+    ) {
+      element('chat-sidebar-toggle')?.focus();
+    } else if (
+      previousContextVisible
+      && !nextContextVisible
+      && element('chat-sources-pane')?.contains?.(activeElement)
+    ) {
+      element('chat-context-toggle')?.focus();
+    }
     apply();
   }
 

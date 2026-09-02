@@ -249,6 +249,37 @@ test('workspace restores an automatically collapsed sidebar after leaving compac
   assert.equal(workspace.ids['workspace-sidebar'].inert, false);
 });
 
+test('resize moves focus before hiding sidebar or Context panes', () => {
+  const sidebarWorkspace = fakeWorkspace(1024);
+  const sidebarController = createWorkspaceChromeController({
+    root: sidebarWorkspace.root,
+    windowObject: sidebarWorkspace.windowObject,
+  });
+  sidebarWorkspace.ids['workspace-sidebar'].contains = (target) => target === sidebarWorkspace.nav;
+  sidebarController.initialize();
+  sidebarWorkspace.root.activeElement = sidebarWorkspace.nav;
+  sidebarWorkspace.windowObject.innerWidth = 800;
+  sidebarWorkspace.windowListeners.get('resize')();
+
+  assert.equal(sidebarWorkspace.ids['workspace-sidebar'].inert, true);
+  assert.equal(sidebarWorkspace.ids['chat-sidebar-toggle'].focused, true);
+
+  const contextWorkspace = fakeWorkspace(1440);
+  const contextController = createWorkspaceChromeController({
+    root: contextWorkspace.root,
+    windowObject: contextWorkspace.windowObject,
+  });
+  const sourceScope = contextWorkspace.ids['chat-source-scope-select'];
+  contextWorkspace.ids['chat-sources-pane'].contains = (target) => target === sourceScope;
+  contextController.initialize();
+  contextWorkspace.root.activeElement = sourceScope;
+  contextWorkspace.windowObject.innerWidth = 1024;
+  contextWorkspace.windowListeners.get('resize')();
+
+  assert.equal(contextWorkspace.ids['chat-sources-pane'].inert, true);
+  assert.equal(contextWorkspace.ids['chat-context-toggle'].focused, true);
+});
+
 test('workspace preserves a deliberate sidebar choice across compact mode', () => {
   const workspace = fakeWorkspace(1440);
   const controller = createWorkspaceChromeController({
