@@ -90,6 +90,8 @@ test('Karte card renders consultation controls and escapes summary content', () 
 
   assert.match(html, /Karte候補/);
   assert.match(html, /data-karte-field="project"/);
+  assert.match(html, /data-karte-field="intended-doc-id"/);
+  assert.match(html, /placeholder="doc_idを入力"/);
   assert.match(html, /Karte確認不可/);
   assert.match(html, /doc:existing/);
   assert.doesNotMatch(html, /<script>/);
