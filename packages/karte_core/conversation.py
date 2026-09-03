@@ -457,10 +457,12 @@ def _summarize_conversation(messages: list[ConversationMessage], occurred_at: da
     title = _derive_title(latest_user)
     user_excerpt = _truncate(latest_user, 4_000)
     assistant_excerpt = _truncate(latest_assistant, 16_000)
+    conversation_log = _conversation_log(messages)
     create_body = (
         f"# {title}\n\n"
         f"## 会話の要点\n\n{assistant_excerpt}\n\n"
-        f"## 背景\n\n{user_excerpt}\n"
+        f"## 背景\n\n{user_excerpt}\n\n"
+        f"## 会話ログ\n\n{conversation_log}\n"
     )
     append_body = (
         f"## {occurred_at.strftime('%Y-%m-%d')} Ephy会話からの追記\n\n"
@@ -468,6 +470,15 @@ def _summarize_conversation(messages: list[ConversationMessage], occurred_at: da
         f"背景：{user_excerpt}\n"
     )
     return title, create_body, append_body
+
+
+def _conversation_log(messages: list[ConversationMessage]) -> str:
+    """Render the bounded completed conversation so a create candidate is self-contained."""
+    sections = []
+    for index, message in enumerate(messages, start=1):
+        speaker = "利用者" if message.role == "user" else "Ephy"
+        sections.append(f"### {index}．{speaker}\n\n{_truncate(message.content, 16_000)}")
+    return "\n\n".join(sections)
 
 
 def _derive_title(latest_user: str) -> str:

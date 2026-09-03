@@ -205,6 +205,26 @@ def test_conversation_plan_builds_publishable_create_with_full_summary(tmp_path:
     assert "曖昧な場合は相談" in plan.summary_markdown
 
 
+def test_create_summary_keeps_the_complete_conversation_log(tmp_path: Path) -> None:
+    service = _service(_data_root(tmp_path))
+    request = _request(
+        messages=[
+            {"role": "user", "content": "最初の相談内容です．"},
+            {"role": "assistant", "content": "最初の回答です．"},
+            {"role": "user", "content": "追加で確認したい内容です．"},
+            {"role": "assistant", "content": "最後の回答です．"},
+        ]
+    )
+
+    plan = service.plan(request)
+
+    assert "## 会話ログ" in plan.summary_markdown
+    assert "### 1．利用者\n\n最初の相談内容です．" in plan.summary_markdown
+    assert "### 2．Ephy\n\n最初の回答です．" in plan.summary_markdown
+    assert "### 3．利用者\n\n追加で確認したい内容です．" in plan.summary_markdown
+    assert "### 4．Ephy\n\n最後の回答です．" in plan.summary_markdown
+
+
 def test_conversation_plan_requires_project_consultation(tmp_path: Path) -> None:
     service = _service(_data_root(tmp_path))
 

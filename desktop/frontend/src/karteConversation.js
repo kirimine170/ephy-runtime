@@ -152,6 +152,10 @@ export function renderKarteConversationCard(memory, requestId) {
       ${escapeHtml(document.title)} · ${Math.round(Number(document.similarity || 0) * 100)}% · ${escapeHtml(document.relative_path)}
     </option>
   `).join('');
+  const docOptionsId = `karte-doc-options-${safeRequestId}`;
+  const intendedDocHint = similarOptions
+    ? '候補から選ぶか，Karteのdoc_idを直接入力できます．保存方法で「既存文書へ追加」を選んでください．'
+    : '候補がない場合も，Karteのdoc_idを直接入力して既存文書へ追加できます．';
   const state = memory.state || (plan.publishable ? 'ready' : 'consultation');
   const statusLabel = {
     ready: '送信前レビュー',
@@ -211,10 +215,11 @@ export function renderKarteConversationCard(memory, requestId) {
             </label>
             <label>
               <span>追加先</span>
-              <select class="text-input" data-karte-field="intended-doc-id">
-                <option value="">文書を選択</option>
+              <input class="text-input" data-karte-field="intended-doc-id" list="${docOptionsId}" value="${escapeHtml(intendedDocId)}" placeholder="doc_idを入力" autocomplete="off" />
+              <datalist id="${docOptionsId}">
                 ${similarOptions}
-              </select>
+              </datalist>
+              <span class="helper-text">${escapeHtml(intendedDocHint)}</span>
             </label>
           </div>
         </details>
