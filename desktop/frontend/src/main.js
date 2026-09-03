@@ -2302,7 +2302,11 @@ async function planKarteConversation(requestId, overrides = {}) {
 
 async function autoPlanKarteConversation(requestId) {
   if (!karteAvailable) return null;
-  const plan = await planKarteConversation(requestId);
+  return planAndMaybePublishKarteConversation(requestId);
+}
+
+async function planAndMaybePublishKarteConversation(requestId, overrides = {}) {
+  const plan = await planKarteConversation(requestId, overrides);
   if (shouldAutoSubmitKartePlan({
     developerMode: developerModeEnabled,
     autoSubmit: developerKarteAutoSubmit,
@@ -2389,7 +2393,7 @@ async function handleKarteConversationAction(button) {
     await refreshKarteProposal(requestId);
     return;
   }
-  await planKarteConversation(requestId, readKarteResolution(requestId));
+  await planAndMaybePublishKarteConversation(requestId, readKarteResolution(requestId));
 }
 
 function bindChatStreamEvents() {
@@ -8473,7 +8477,7 @@ document.getElementById('chat-output').addEventListener('change', async (event) 
   const card = field?.closest('[data-karte-card]');
   const requestId = card?.dataset.karteCard || '';
   if (!requestId) return;
-  await planKarteConversation(requestId, readKarteResolution(requestId));
+  await planAndMaybePublishKarteConversation(requestId, readKarteResolution(requestId));
 });
 
 document.getElementById('chat-prompt').addEventListener('keydown', async (event) => {
