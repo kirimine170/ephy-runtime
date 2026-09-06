@@ -139,6 +139,27 @@ func (a *App) CommitInteraction(operationID string, audioBase64 string) error {
 	}
 	return a.interactionEngine().Commit(operationID, audio, "")
 }
+
+func (a *App) BeginInteractionASR(operationID string, sampleRate int) (ASRSessionRequest, error) {
+	return a.interactionEngine().BeginASR(operationID, sampleRate)
+}
+
+// The microphone sends bounded PCM frames directly to its operation session．
+// No raw audio is added to a request，trace，evaluation or persistent file．
+func (a *App) AppendInteractionAudio(operationID string, sequence int, pcmBase64 string) error {
+	if len(pcmBase64) > (maxASRPCMChunkBytes+2)/3*4 {
+		return a.interactionEngine().Fail(operationID, "invalid_audio")
+	}
+	pcm, err := base64.StdEncoding.DecodeString(pcmBase64)
+	if err != nil {
+		return a.interactionEngine().Fail(operationID, "invalid_audio")
+	}
+	return a.interactionEngine().AppendASRAudio(operationID, sequence, pcm)
+}
+
+func (a *App) EndInteractionASR(operationID string) error {
+	return a.interactionEngine().EndASR(operationID)
+}
 func (a *App) CancelInteraction(operationID string) (InteractionSnapshot, error) {
 	return a.interactionEngine().Cancel(operationID)
 }
@@ -153,7 +174,7 @@ func (a *App) InteractionPlayback(operationID string, sequence int, phase string
 }
 func (a *App) FailInteraction(operationID string, code string) error {
 	switch code {
-	case "microphone_unavailable", "microphone_permission_denied", "microphone_failed", "invalid_audio", "playback_failed", "interrupted":
+	case "microphone_unavailable", "microphone_permission_denied", "microphone_failed", "invalid_audio", "playback_failed", "interrupted", "asr_failed", "asr_backpressure", "asr_protocol_error", "asr_timeout", "asr_canceled", "asr_unavailable", "asr_on_device_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_stream_invalid", "asr_stream_eof", "asr_empty_transcript", "asr_empty_result", "invalid_voice_config":
 	default:
 		code = "microphone_failed"
 	}

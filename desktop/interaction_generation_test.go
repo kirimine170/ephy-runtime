@@ -423,7 +423,7 @@ func TestInteractionGenerationTraceStoresTerminalFactsWithoutContent(t *testing.
 	var terminal *GenerationMetadata
 	for _, event := range trace {
 		if event.Name == "turn_completed" {
-			if event.SchemaVersion != 2 || event.GenerationRevision != 1 {
+			if event.SchemaVersion != 3 || event.GenerationRevision != 1 {
 				t.Fatal("terminal trace lost schema or revision")
 			}
 			terminal = event.Generation

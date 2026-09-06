@@ -24,6 +24,9 @@ const FAILURES = {
   asr_on_device_unavailable: '端末内の音声認識を利用できません．テキスト入力を利用できます．',
   asr_empty_result: '音声を認識できませんでした．テキスト入力を利用できます．',
   asr_timeout: '音声認識が時間切れになりました．テキスト入力を利用できます．',
+  asr_failed: '音声認識を継続できませんでした．テキスト入力を利用できます．',
+  asr_backpressure: '音声の送信が追いつかないため録音を停止しました．テキスト入力を利用できます．',
+  asr_protocol_error: '音声認識の応答を確認できませんでした．テキスト入力を利用できます．',
   llm_timeout: '応答の生成が時間切れになりました．テキスト入力を利用できます．',
   generation_transport_eof: '応答の通信が途中で終了しました．テキスト入力で再試行できます．',
   incomplete_response: '応答を完了できませんでした．テキスト入力で再試行できます．',
@@ -34,11 +37,27 @@ const FAILURES = {
 const MAX_RECORDING_BYTES = 8 * 1024 * 1024;
 const MAX_RECORDING_MS = 60_000;
 const MAX_ASR_SAMPLE_RATE = 48000;
+const MAX_ASR_CHUNK_BYTES = 64 * 1024;
+const MAX_ASR_QUEUE_BYTES = 128 * 1024;
+const MAX_ASR_TEXT_LENGTH = 16000;
+const ASR_PHASES = new Set(['partial', 'stable', 'final', 'failure', 'timeout', 'canceled']);
 const MAX_PLAYBACK_BYTES = 16 * 1024 * 1024;
 const MAX_PLAYBACK_CHUNK_BYTES = 8 * 1024 * 1024;
 const MAX_PLAYBACK_CHUNKS = 64;
 const MAX_EARLY_EVENT_BYTES = Math.ceil(MAX_PLAYBACK_BYTES / 3) * 4 + 512 * 1024;
 const READINESS_ERROR_CODES = new Set(['asr_unavailable', 'asr_permission_denied', 'asr_permission_restricted', 'asr_on_device_unavailable', 'asr_timeout', 'asr_canceled', 'invalid_voice_config']);
+const ASR_BRIDGE_ERROR_CODES = new Set([
+  'asr_failed', 'asr_backpressure', 'asr_protocol_error', 'asr_timeout', 'asr_canceled', 'asr_unavailable',
+  'asr_on_device_unavailable', 'asr_permission_denied', 'asr_permission_restricted', 'asr_stream_invalid',
+  'asr_stream_eof', 'asr_empty_transcript', 'asr_empty_result', 'invalid_audio', 'invalid_voice_config',
+]);
+
+function asrBridgeErrorCode(error, fallback) {
+  // Wails can reject with either a string or an Error．Only a complete known
+  // code crosses this boundary；never extract a code from diagnostic prose．
+  const code = typeof error === 'string' ? error : error?.message;
+  return ASR_BRIDGE_ERROR_CODES.has(code) ? code : fallback;
+}
 
 export function voiceStatusText(snapshot) {
   if (snapshot?.state === 'FAILED') {
@@ -47,7 +66,8 @@ export function voiceStatusText(snapshot) {
   return STATUS[snapshot?.state] || STATUS.IDLE;
 }
 
-// Capture stays in memory．Only a bounded mono PCM16 WAV crosses the bridge．
+// Legacy WAV utility for existing recordings and playback fixtures．Live ASR
+// uses the stateful raw PCM encoder below and never accumulates a whole WAV．
 export function encodePCM16Wav(chunks, sampleRate) {
   if (!Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 192000) {
     throw new Error('invalid_sample_rate');
@@ -105,6 +125,52 @@ export function encodePCM16Wav(chunks, sampleRate) {
   return bytes;
 }
 
+/** Average input intervals across callbacks without resetting fractional carry． */
+export function createPCM16StreamEncoder(sampleRate, outputRate = Math.min(sampleRate, MAX_ASR_SAMPLE_RATE)) {
+  if (!Number.isInteger(sampleRate) || sampleRate < 8000 || sampleRate > 192000
+    || !Number.isInteger(outputRate) || outputRate < 8000 || outputRate > MAX_ASR_SAMPLE_RATE || outputRate > sampleRate) {
+    throw new Error('invalid_sample_rate');
+  }
+  let weighted = 0;
+  let filled = 0;
+  let closed = false;
+  const write = (view, index, value) => view.setInt16(index * 2, Math.round(value * (value < 0 ? 32768 : 32767)), true);
+  return {
+    outputRate,
+    push(input) {
+      if (closed) throw new Error('encoder_closed');
+      const bytes = new ArrayBuffer(Math.floor((filled + input.length * outputRate) / sampleRate) * 2);
+      const view = new DataView(bytes);
+      let index = 0;
+      for (const sample of input) {
+        const bounded = Number.isFinite(sample) ? Math.max(-1, Math.min(1, sample)) : 0;
+        let remaining = outputRate;
+        while (remaining > 0) {
+          const width = Math.min(remaining, sampleRate - filled);
+          weighted += bounded * width;
+          filled += width;
+          remaining -= width;
+          if (filled === sampleRate) {
+            write(view, index++, weighted / filled);
+            weighted = 0;
+            filled = 0;
+          }
+        }
+      }
+      return bytes;
+    },
+    finish() {
+      if (closed) return new ArrayBuffer(0);
+      closed = true;
+      const bytes = new ArrayBuffer(filled ? 2 : 0);
+      if (filled) write(new DataView(bytes), 0, weighted / filled);
+      weighted = filled = 0;
+      return bytes;
+    },
+    reset() { weighted = filled = 0; closed = true; },
+  };
+}
+
 function toBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = '';
@@ -156,6 +222,9 @@ export function mountVoiceInteraction({
   const cancelButton = root?.querySelector('#voice-cancel');
   const status = root?.querySelector('#voice-status');
   const fallback = root?.querySelector('#voice-fallback');
+  const liveTranscript = root?.querySelector('#voice-live-transcript');
+  const stableTranscript = root?.querySelector('#voice-transcript-stable');
+  const revisableTranscript = root?.querySelector('#voice-transcript-revisable');
   let current = null;
   let disposed = false;
 
@@ -165,6 +234,15 @@ export function mountVoiceInteraction({
 
   function live(run) {
     return active(run) && !run.cancelRequested;
+  }
+
+  function attached(run) {
+    if (!live(run)) return false;
+    if (getSessionID && run.snapshot.session_id && getSessionID() !== run.snapshot.session_id) {
+      void cancel();
+      return false;
+    }
+    return true;
   }
 
   function render() {
@@ -184,14 +262,20 @@ export function mountVoiceInteraction({
       status.setAttribute('aria-live', 'polite');
       status.textContent = current?.permissionPending && !current.cancelRequested
         ? 'マイクの許可を確認しています．'
-        : recording && current?.readinessState === 'permission_required'
-          ? '録音中です．送信時に音声認識の許可を確認します．'
+        : current?.asrOpenPending && !current.cancelRequested
+          ? '音声認識を開始しています．必要な場合は音声認識の許可を確認してください．'
           : voiceStatusText(current?.snapshot);
     }
     if (fallback) {
       fallback.hidden = !['FAILED', 'INCOMPLETE'].includes(current?.snapshot.state) || !current.snapshot.transcript;
       fallback.textContent = '認識した内容をテキスト入力へ戻す';
     }
+    if (liveTranscript) {
+      liveTranscript.hidden = !live(current) || !current.liveTranscript;
+      liveTranscript.setAttribute('aria-label', current?.asrPhase === 'final' ? '確定した認識結果' : '認識中の内容．下線部分は変更される可能性があります');
+    }
+    if (stableTranscript) stableTranscript.textContent = current?.stablePrefix || '';
+    if (revisableTranscript) revisableTranscript.textContent = (current?.liveTranscript || '').slice((current?.stablePrefix || '').length);
   }
 
   function stopCapture(run) {
@@ -205,8 +289,6 @@ export function mountVoiceInteraction({
     disconnect(run.mute);
     stopTracks(run.stream);
     run.processor = run.input = run.mute = run.stream = null;
-    run.chunks = [];
-    run.samples = 0;
   }
 
   function stopPlayback(run) {
@@ -228,11 +310,19 @@ export function mountVoiceInteraction({
   function release(run) {
     stopCapture(run);
     stopPlayback(run);
+    run.inputQueue = [];
+    run.inputQueuedBytes = 0;
+    run.encoder?.reset();
+    run.encoder = null;
+    run.asrEarlyEvents = [];
+    run.asrEarlyBytes = 0;
+    run.liveTranscript = run.stablePrefix = '';
     try { Promise.resolve(run.context?.close()).catch(() => {}); } catch { /* Already closed． */ }
     run.context = null;
   }
 
   function notifyTranscript(run, text) {
+    if (run.cancelRequested || (run.streaming && !run.endRequested)) return;
     if (text && text !== run.reportedTranscript) {
       run.reportedTranscript = text;
       run.snapshot = {...run.snapshot, transcript: text};
@@ -242,6 +332,10 @@ export function mountVoiceInteraction({
 
   function finish(run, snapshot) {
     if (run !== current || run.finished) return;
+    if (run.streaming && !run.endRequested) {
+      snapshot = {...snapshot};
+      delete snapshot.transcript;
+    }
     run.snapshot = {...run.snapshot, ...snapshot};
     notifyTranscript(run, run.snapshot.transcript);
     run.finished = true;
@@ -262,6 +356,10 @@ export function mountVoiceInteraction({
       || (snapshot.generation_revision || 1) !== (run.snapshot.generation_revision || 1)) return;
     // Ignore delayed bridge responses and queued states from before cancel．
     if (run.cancelRequested && !['CANCELING', 'CANCELED', 'FAILED'].includes(snapshot.state)) return;
+    if (run.streaming && !run.endRequested) {
+      snapshot = {...snapshot};
+      delete snapshot.transcript;
+    }
     if (TERMINAL.has(snapshot.state)) {
       finish(run, snapshot);
       return;
@@ -293,13 +391,18 @@ export function mountVoiceInteraction({
     const run = {
       snapshot: {state: preparing ? 'PREPARING' : 'RECORDING', operation_id: ''},
       finished: false, cancelRequested: false, cancelPromise: null,
-      recording: false, permissionPending: false, chunks: [], samples: 0,
+      recording: false, permissionPending: false, samples: 0,
+      encoder: null, inputQueue: [], inputQueuedBytes: 0, inputTotalBytes: 0, inputSequence: 0, inputPump: null,
+      asrSession: null, asrOpenPending: false, asrEarlyEvents: [], asrEarlyBytes: 0,
+      asrRevision: 0, asrMonotonicMS: -1, asrPhase: '', asrCanonical: false,
+      liveTranscript: '', stablePrefix: '', endPromise: null, endRequested: false,
       timer: null, context: null, contextReady: null,
       queue: [], queueBytes: 0, playing: null, decoding: false, ending: false, playbackEpoch: 0,
       lastSequence: 0, playbackBytesReceived: 0, earlyEvents: [], earlyBytes: 0, earlyOverflow: false,
       identityReady: new Promise((resolve) => { ready = resolve; }),
       resolveIdentity: null,
       expected,
+      streaming: preparing,
       operationRequested: !preparing,
       readinessState: '',
     };
@@ -317,13 +420,17 @@ export function mountVoiceInteraction({
 
   async function identify(run, pendingSnapshot) {
     try {
-      const snapshot = await pendingSnapshot;
+      let snapshot = await pendingSnapshot;
       if (!snapshot?.operation_id) throw new Error('missing_operation');
       if ((run.expected.operationID && run.expected.operationID !== snapshot.operation_id)
         || (run.expected.revision && run.expected.revision !== (snapshot.generation_revision || 1))) {
         throw new Error('stale_operation');
       }
       run.lastSequence = Number.isSafeInteger(snapshot.last_audio_sequence) ? snapshot.last_audio_sequence : 0;
+      if (run.streaming && !run.endRequested) {
+        snapshot = {...snapshot};
+        delete snapshot.transcript;
+      }
       run.snapshot = {...snapshot, state: run.cancelRequested ? 'CANCELING' : snapshot.state};
       run.resolveIdentity(snapshot.operation_id);
       if (run.cancelRequested || disposed || run !== current) return false;
@@ -379,13 +486,36 @@ export function mountVoiceInteraction({
       await fail(run, 'microphone_unavailable');
       return false;
     }
-    if (!live(run)) return false;
+    if (!attached(run)) return false;
+    run.asrOpenPending = true;
+    render();
+    try {
+      run.encoder = createPCM16StreamEncoder(run.context.sampleRate);
+      const session = await bridge.BeginInteractionASR(run.snapshot.operation_id, run.encoder.outputRate);
+      if (!attached(run)) return false;
+      if (!session || session.operation_id !== run.snapshot.operation_id || session.session_id !== run.snapshot.session_id
+        || session.turn_id !== run.snapshot.turn_id || typeof session.segment_id !== 'string' || !session.segment_id
+        || session.sample_rate !== run.encoder.outputRate) {
+        await fail(run, 'asr_protocol_error');
+        return false;
+      }
+      run.asrSession = session;
+      run.asrOpenPending = false;
+      const early = run.asrEarlyEvents;
+      run.asrEarlyEvents = [];
+      run.asrEarlyBytes = 0;
+      for (const update of early) receiveASR(run, update);
+      if (!attached(run) || run.endPromise) return false;
+    } catch (error) {
+      await fail(run, asrBridgeErrorCode(error, 'asr_unavailable'));
+      return false;
+    }
     run.permissionPending = true;
     render();
     try {
       const stream = await mediaDevices.getUserMedia({audio: {channelCount: 1}, video: false});
       // Permission prompts can resolve after cancellation or a later turn．
-      if (!live(run)) { stopTracks(stream); return false; }
+      if (!attached(run) || run.endPromise) { stopTracks(stream); return false; }
       run.stream = stream;
       run.input = run.context.createMediaStreamSource(stream);
       run.processor = run.context.createScriptProcessor(4096, 1, 1);
@@ -396,14 +526,14 @@ export function mountVoiceInteraction({
       run.mute.connect(run.context.destination);
       run.permissionPending = false;
       run.recording = true;
-      const maxSamples = Math.min(run.context.sampleRate * 60, Math.floor((MAX_RECORDING_BYTES - 44) / 2));
+      const maxSamples = run.context.sampleRate * 60;
       run.processor.onaudioprocess = (event) => {
-        if (!live(run) || !run.recording) return;
+        if (!attached(run) || !run.recording) return;
         const input = event.inputBuffer.getChannelData(0);
         const count = Math.min(input.length, maxSamples - run.samples);
         if (count > 0) {
-          run.chunks.push(new Float32Array(input.subarray(0, count)));
           run.samples += count;
+          if (!queueInput(run, run.encoder.push(input.subarray(0, count)))) return;
         }
         if (run.samples >= maxSamples) void stop();
       };
@@ -422,23 +552,77 @@ export function mountVoiceInteraction({
   async function stop() {
     const run = current;
     if (!live(run) || !run.recording) return false;
-    let bytes;
-    try { bytes = encodePCM16Wav(run.chunks, run.context.sampleRate); } catch {
-      await fail(run, 'invalid_audio');
+    return endCapture(run);
+  }
+
+  function pumpInput(run) {
+    if (run.inputPump || !attached(run) || !run.inputQueue.length) return run.inputPump;
+    run.inputPump = Promise.resolve().then(async () => {
+      while (attached(run) && run.inputQueue.length) {
+        const item = run.inputQueue.shift();
+        try {
+          const encoded = encodeBase64(item.bytes);
+          item.bytes = null;
+          await bridge.AppendInteractionAudio(run.snapshot.operation_id, item.sequence, encoded);
+        } catch (error) {
+          await fail(run, asrBridgeErrorCode(error, 'asr_failed'));
+          return;
+        }
+        if (!attached(run)) return;
+        run.inputQueuedBytes -= item.size;
+      }
+    }).finally(() => {
+      run.inputPump = null;
+      if (attached(run) && run.inputQueue.length) void pumpInput(run);
+    });
+    return run.inputPump;
+  }
+
+  function queueInput(run, bytes) {
+    if (!attached(run)) return false;
+    if (!bytes.byteLength) return true;
+    // Include the in-flight append in the one-second bound．At most one
+    // bridge promise owns audio while the remaining bounded chunks wait．
+    const limit = Math.min(MAX_ASR_QUEUE_BYTES, run.asrSession.sample_rate * 2);
+    if (run.inputQueuedBytes + bytes.byteLength > limit) {
+      void fail(run, 'asr_backpressure');
       return false;
     }
+    if (run.inputTotalBytes + bytes.byteLength > MAX_RECORDING_BYTES) {
+      void fail(run, 'invalid_audio');
+      return false;
+    }
+    run.inputQueuedBytes += bytes.byteLength;
+    run.inputTotalBytes += bytes.byteLength;
+    for (let offset = 0; offset < bytes.byteLength; offset += MAX_ASR_CHUNK_BYTES) {
+      const chunk = bytes.slice(offset, offset + MAX_ASR_CHUNK_BYTES);
+      run.inputQueue.push({sequence: ++run.inputSequence, bytes: chunk, size: chunk.byteLength});
+    }
+    void pumpInput(run);
+    return true;
+  }
+
+  function endCapture(run) {
+    if (run.endPromise) return run.endPromise;
+    if (!attached(run) || !run.asrSession) return Promise.resolve(false);
+    const tail = run.encoder.finish();
     stopCapture(run);
     run.snapshot = {...run.snapshot, state: 'TRANSCRIBING'};
     render();
-    try {
-      const encoded = encodeBase64(bytes);
-      bytes = null;
-      await bridge.CommitInteraction(run.snapshot.operation_id, encoded);
-      return live(run) || ['COMPLETED', 'INCOMPLETE'].includes(run.snapshot.state);
-    } catch {
-      await fail(run, 'invalid_audio');
-      return false;
-    }
+    if (!queueInput(run, tail)) return Promise.resolve(false);
+    run.endPromise = Promise.resolve().then(async () => {
+      while (attached(run) && run.inputPump) await run.inputPump;
+      if (!attached(run)) return false;
+      try {
+        run.endRequested = true;
+        await bridge.EndInteractionASR(run.snapshot.operation_id);
+        return attached(run) || ['COMPLETED', 'INCOMPLETE'].includes(run.snapshot.state);
+      } catch (error) {
+        await fail(run, asrBridgeErrorCode(error, 'asr_failed'));
+        return false;
+      }
+    });
+    return run.endPromise;
   }
 
   function cancel() {
@@ -533,11 +717,63 @@ export function mountVoiceInteraction({
     } catch { void fail(run, 'playback_failed', event.sequence); }
   }
 
+  function receiveASR(run, update) {
+    if (!attached(run) || run.asrCanonical || !update || update.operation_id !== run.snapshot.operation_id
+      || update.session_id !== run.snapshot.session_id || update.turn_id !== run.snapshot.turn_id) return;
+    if (!run.asrSession) {
+      if (!run.asrOpenPending) return;
+      const size = (typeof update.transcript === 'string' ? update.transcript.length * 2 : 0)
+        + (typeof update.stable_prefix === 'string' ? update.stable_prefix.length * 2 : 0);
+      if (run.asrEarlyEvents.length >= 64 || run.asrEarlyBytes + size > MAX_ASR_QUEUE_BYTES) {
+        void fail(run, 'asr_protocol_error');
+        return;
+      }
+      run.asrEarlyEvents.push(update);
+      run.asrEarlyBytes += size;
+      return;
+    }
+    if (update.segment_id !== run.asrSession.segment_id || !Number.isSafeInteger(update.revision)
+      || update.revision <= run.asrRevision || update.revision > 2048
+      || (run.asrPhase === 'final' && ['partial', 'stable', 'final'].includes(update.phase))
+      || !Number.isSafeInteger(update.monotonic_ms) || update.monotonic_ms < 0 || update.monotonic_ms < run.asrMonotonicMS
+      || !ASR_PHASES.has(update.phase)) return;
+    const text = update.transcript ?? '';
+    const stable = update.stable_prefix ?? '';
+    const hypothesis = ['partial', 'stable', 'final'].includes(update.phase);
+    if (typeof text !== 'string' || text.length > MAX_ASR_TEXT_LENGTH || typeof stable !== 'string'
+      || !text.startsWith(stable)
+      || (hypothesis && (update.error_code || !stable.startsWith(run.stablePrefix) || !text.startsWith(run.stablePrefix)))
+      || (update.phase === 'stable' && !stable)
+      || (update.phase === 'final' && (!text.trim() || stable !== text))
+      || (!hypothesis && (text || stable))) {
+      void fail(run, 'asr_protocol_error');
+      return;
+    }
+    run.asrRevision = update.revision;
+    run.asrMonotonicMS = update.monotonic_ms;
+    run.asrPhase = update.phase;
+    if (['failure', 'timeout'].includes(update.phase)) {
+      void fail(run, update.phase === 'timeout' ? 'asr_timeout'
+        : READINESS_ERROR_CODES.has(update.error_code) ? update.error_code : 'asr_failed');
+      return;
+    }
+    if (update.phase === 'canceled') { void cancel(); return; }
+    // This view owns hypotheses only．Neither final nor partial ASR callbacks
+    // write Conversation history；the canonical transcript follows End in Go．
+    run.liveTranscript = text;
+    run.stablePrefix = stable;
+    render();
+    if (update.phase === 'final') void endCapture(run);
+  }
+
   function receive(event) {
     const run = current;
     if (!active(run) || !event || typeof event !== 'object'
-      || !['state', 'transcript', 'token', 'output', 'audio'].includes(event.kind)) return;
+      || !['state', 'transcript', 'token', 'output', 'audio', 'asr_update'].includes(event.kind)) return;
     if (!run.snapshot.operation_id) {
+      // Open starts only after Start has supplied the current identity．An
+      // earlier ASR callback therefore belongs to another operation．
+      if (event.kind === 'asr_update') return;
       const bytes = (event.audio_base64?.length || 0) + (event.text?.length || 0);
       if (run.earlyEvents.length < 256 && run.earlyBytes + bytes <= MAX_EARLY_EVENT_BYTES) {
         run.earlyEvents.push(event);
@@ -550,9 +786,20 @@ export function mountVoiceInteraction({
       || (event.turn_id && event.turn_id !== run.snapshot.turn_id)
       || (event.trace_id && event.trace_id !== run.snapshot.trace_id)
       || (event.generation_revision || 1) !== (run.snapshot.generation_revision || 1)) return;
+    if (!attached(run) && !run.cancelRequested) return;
     if (event.kind === 'state') applySnapshot(run, event.snapshot);
     if (!live(run)) return;
-    if (event.kind === 'transcript') notifyTranscript(run, event.text);
+    if (event.kind === 'asr_update') {
+      if (event.session_id !== run.snapshot.session_id || event.turn_id !== run.snapshot.turn_id) return;
+      receiveASR(run, event.asr);
+    }
+    else if (event.kind === 'transcript') {
+      if (run.streaming && !run.endRequested) return;
+      notifyTranscript(run, event.text);
+      if (run.streaming) run.asrCanonical = true;
+      run.liveTranscript = run.stablePrefix = '';
+      render();
+    }
     else if (event.kind === 'token' && typeof event.text === 'string') onToken(run.snapshot, event.text);
     else if (event.kind === 'output') {
       const snapshot = event.snapshot;

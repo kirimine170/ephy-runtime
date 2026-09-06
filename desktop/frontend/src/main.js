@@ -984,6 +984,7 @@ app.innerHTML = `
               <span id="voice-status" role="status" aria-live="polite">待機中</span>
               <button id="voice-fallback" class="ghost-btn" type="button" hidden>文字入力で続ける</button>
               <button id="voice-feedback" class="ghost-btn" type="button" disabled>違和感を記録</button>
+              <div id="voice-live-transcript" class="voice-live-transcript" role="status" aria-live="polite" aria-atomic="true" hidden><span id="voice-transcript-stable" class="voice-transcript-stable"></span><span id="voice-transcript-revisable" class="voice-transcript-revisable"></span></div>
             </div>
             <details id="voice-developer" class="voice-developer" data-developer-only hidden>
               <summary>音声の検証</summary>
