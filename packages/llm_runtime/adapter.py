@@ -1,4 +1,6 @@
 from collections.abc import Sequence
+import json
+import re
 
 import httpx
 
@@ -6,7 +8,18 @@ from packages.config_core.loader import ModelConfig
 from .schemas import ChatCompletionRequest, EmbeddingRequest
 
 
+class BackendStreamError(RuntimeError):
+    """A fixed public failure code，without backend URLs or response bodies．"""
+
+    def __init__(self, code: str, finish_reason: str) -> None:
+        super().__init__(code)
+        self.code = code
+        self.finish_reason = finish_reason
+
+
 class LlamaCppChatAdapter:
+    _MAX_SSE_FRAME_BYTES = 256 * 1024
+    _MAX_REASONING_BYTES = 128 * 1024
     def __init__(self, timeout: float = 120.0) -> None:
         self._client = httpx.AsyncClient(timeout=timeout)
 
@@ -34,8 +47,12 @@ class LlamaCppChatAdapter:
                 json=body,
             )
             response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise BackendStreamError("llm_timeout", "timeout") from exc
+        except httpx.RemoteProtocolError as exc:
+            raise BackendStreamError("llm_transport_eof", "transport_eof") from exc
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Backend request failed for model '{model_config.model}': {exc}") from exc
+            raise BackendStreamError("backend_unavailable", "unknown") from exc
 
         return response.json()
 
@@ -75,11 +92,96 @@ class LlamaCppChatAdapter:
                 headers={"Accept": "text/event-stream"},
             ) as response:
                 response.raise_for_status()
-                async for chunk in response.aiter_bytes():
+                metadata = request_payload.metadata
+                observe_reasoning = metadata is not None and metadata.session_mode == "voice" and metadata.resolved_mode == "fast"
+                chunks = self._stream_with_reasoning_count(response, model_config) if observe_reasoning else response.aiter_bytes()
+                async for chunk in chunks:
                     if chunk:
                         yield chunk
+        except httpx.TimeoutException as exc:
+            raise BackendStreamError("llm_timeout", "timeout") from exc
+        except httpx.RemoteProtocolError as exc:
+            raise BackendStreamError("llm_transport_eof", "transport_eof") from exc
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Backend request failed for model '{model_config.model}': {exc}") from exc
+            raise BackendStreamError("backend_unavailable", "unknown") from exc
+
+    async def _stream_with_reasoning_count(self, response: httpx.Response, model_config: ModelConfig):
+        """Observe reasoning content transiently，without changing completion deltas．"""
+        pending = bytearray()
+        reasoning = bytearray()
+        available = True
+        terminal = False
+        done = False
+        try:
+            async for chunk in response.aiter_bytes():
+                pending.extend(chunk)
+                while match := re.search(rb"\r?\n\r?\n", pending):
+                    end = match.end()
+                    if end > self._MAX_SSE_FRAME_BYTES:
+                        raise BackendStreamError("llm_transport_eof", "transport_eof")
+                    frame = bytes(pending[:end])
+                    del pending[:end]
+                    data = b"\n".join(line[5:].lstrip(b" ") for line in frame.splitlines() if line.startswith(b"data:"))
+                    if data:
+                        if done:
+                            raise BackendStreamError("llm_transport_eof", "transport_eof")
+                        if data == b"[DONE]":
+                            done = True
+                            if terminal:
+                                count = await self._count_reasoning_content(model_config, reasoning) if available else None
+                                usage = {"reasoning_tokens": count, "reasoning_token_source": "retokenized" if count is not None else "unavailable"}
+                                yield f"event: generation_usage\ndata: {json.dumps(usage)}\n\n".encode()
+                        else:
+                            try:
+                                payload = json.loads(data)
+                                choices = payload.get("choices", [])
+                                if not isinstance(choices, list) or len(choices) > 1:
+                                    raise ValueError("invalid choices")
+                                for choice in choices:
+                                    if not isinstance(choice, dict):
+                                        raise ValueError("invalid choice")
+                                    if choice.get("finish_reason") is not None:
+                                        terminal = True
+                                    delta = choice.get("delta") or {}
+                                    text = delta.get("reasoning_content", "")
+                                    if not isinstance(text, str):
+                                        raise ValueError("invalid reasoning content")
+                                    encoded = text.encode("utf-8")
+                                    if available and len(reasoning) + len(encoded) <= self._MAX_REASONING_BYTES:
+                                        reasoning.extend(encoded)
+                                    else:
+                                        available = False
+                                        reasoning.clear()
+                            except (ValueError, TypeError, AttributeError, UnicodeError) as exc:
+                                raise BackendStreamError("llm_transport_eof", "transport_eof") from exc
+                    yield frame
+                if len(pending) > self._MAX_SSE_FRAME_BYTES:
+                    raise BackendStreamError("llm_transport_eof", "transport_eof")
+            if pending:
+                # Preserve a truncated frame so Runtime can classify the missing
+                # terminal boundary，without manufacturing DONE or usage．
+                yield bytes(pending)
+        finally:
+            pending.clear()
+            reasoning.clear()
+
+    async def _count_reasoning_content(self, model_config: ModelConfig, reasoning: bytearray) -> int | None:
+        if not reasoning:
+            return 0
+        root = model_config.base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[:-3]
+        try:
+            response = await self._client.post(f"{root}/tokenize", json={
+                "content": reasoning.decode("utf-8"), "add_special": False, "parse_special": False,
+            }, timeout=2.0)
+            response.raise_for_status()
+            tokens = response.json().get("tokens")
+            if not isinstance(tokens, list) or len(tokens) > 200_000 or any(type(token) is not int or token < 0 for token in tokens):
+                return None
+            return len(tokens)
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+            return None
 
     async def create_embedding(
         self,
@@ -113,9 +215,14 @@ class LlamaCppChatAdapter:
         body["model"] = model_config.model
         metadata = body.pop("metadata", {})
         template_kwargs = dict(body.get("chat_template_kwargs") or {})
-        if metadata.get("mode") == "fast":
+        voice_fast = metadata.get("session_mode") == "voice" and metadata.get("resolved_mode") == "fast"
+        if metadata.get("mode") == "fast" or voice_fast:
             template_kwargs["enable_thinking"] = False
-        elif model_config.thinking_mode in {"optional", "always"}:
+        if voice_fast:
+            # Verified against the installed Qwen3 template．Keep this provider
+            # control here，not in Conversation or the frontend．
+            body["reasoning_format"] = "deepseek"
+        elif metadata.get("mode") != "fast" and model_config.thinking_mode in {"optional", "always"}:
             template_kwargs["enable_thinking"] = True
             if model_config.preserve_thinking:
                 template_kwargs["preserve_thinking"] = True
@@ -127,4 +234,6 @@ class LlamaCppChatAdapter:
             body["temperature"] = model_config.default_temperature
         if lora_adapters is not None:
             body["lora"] = lora_adapters
+        if request_payload.stream:
+            body["stream_options"] = {**(body.get("stream_options") or {}), "include_usage": True}
         return body

@@ -46,6 +46,10 @@ export function CommitInteraction(arg1, arg2) {
   return window['go']['main']['App']['CommitInteraction'](arg1, arg2);
 }
 
+export function ContinueInteraction(arg1) {
+  return window['go']['main']['App']['ContinueInteraction'](arg1);
+}
+
 export function CreatePreferenceSession(arg1) {
   return window['go']['main']['App']['CreatePreferenceSession'](arg1);
 }

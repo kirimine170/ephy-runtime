@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var interactionFailureTags = map[string]bool{"asr_error": true, "early_endpoint": true, "late_endpoint": true, "slow_response": true, "too_long": true, "tone_mismatch": true, "tts_pronunciation": true, "cancel_failure": true, "memory_misuse": true, "other": true}
+var interactionFailureTags = map[string]bool{"asr_error": true, "early_endpoint": true, "late_endpoint": true, "slow_response": true, "too_long": true, "tone_mismatch": true, "tts_pronunciation": true, "cancel_failure": true, "memory_misuse": true, "incomplete_response": true, "other": true}
 
 type InteractionReplayRequest struct {
 	SourceOperationID string `json:"source_operation_id"`
@@ -70,11 +70,12 @@ type BlindInteractionComparison struct {
 	CandidateB        string `json:"candidate_b"`
 }
 type InteractionCandidateIdentity struct {
-	OperationID     string `json:"operation_id"`
-	ProviderID      string `json:"provider_id"`
-	ModelID         string `json:"model_id"`
-	ConfigurationID string `json:"configuration_id"`
-	LatencyMS       int64  `json:"latency_ms"`
+	OperationID     string              `json:"operation_id"`
+	ProviderID      string              `json:"provider_id"`
+	ModelID         string              `json:"model_id"`
+	ConfigurationID string              `json:"configuration_id"`
+	LatencyMS       int64               `json:"latency_ms"`
+	Generation      *GenerationMetadata `json:"generation,omitempty"`
 }
 type interactionComparison struct {
 	source     InteractionSnapshot
@@ -90,18 +91,19 @@ type InteractionEvaluationRequest struct {
 
 // Deliberately no transcript, prompt, history, candidate answer, source text or profile fields．
 type InteractionEvaluationRecord struct {
-	SchemaVersion     int                            `json:"schema_version"`
-	ID                string                         `json:"id"`
-	Timestamp         string                         `json:"timestamp"`
-	SourceOperationID string                         `json:"source_operation_id"`
-	TraceID           string                         `json:"trace_id"`
-	SessionID         string                         `json:"session_id"`
-	TurnID            string                         `json:"turn_id"`
-	ComparisonID      string                         `json:"comparison_id,omitempty"`
-	Candidates        []InteractionCandidateIdentity `json:"candidates,omitempty"`
-	Choice            string                         `json:"choice"`
-	Correction        string                         `json:"correction,omitempty"`
-	FailureTags       []string                       `json:"failure_tags"`
+	SchemaVersion      int                            `json:"schema_version"`
+	ID                 string                         `json:"id"`
+	Timestamp          string                         `json:"timestamp"`
+	SourceOperationID  string                         `json:"source_operation_id"`
+	TraceID            string                         `json:"trace_id"`
+	SessionID          string                         `json:"session_id"`
+	TurnID             string                         `json:"turn_id"`
+	GenerationRevision int                            `json:"generation_revision,omitempty"`
+	ComparisonID       string                         `json:"comparison_id,omitempty"`
+	Candidates         []InteractionCandidateIdentity `json:"candidates,omitempty"`
+	Choice             string                         `json:"choice"`
+	Correction         string                         `json:"correction,omitempty"`
+	FailureTags        []string                       `json:"failure_tags"`
 }
 
 func (a *App) initComparisonsLocked() {
@@ -237,14 +239,15 @@ func (a *App) GenerateInteractionComparison(request InteractionComparisonRequest
 			}
 		})
 		start := time.Now()
-		response, err := a.chatWithContext(candidateCtx, req, func(string) {})
+		response, err := assembleGeneration(candidateCtx, req, original.GenerationLimits, "", a.chatWithContext, func(GenerationProgress) {})
 		if err != nil || ctx.Err() != nil {
 			return empty, errors.New("comparison_failed_or_canceled")
 		}
-		if response == nil || strings.TrimSpace(response.Answer) == "" || len(response.Answer) > 64000 {
+		if response == nil || response.Generation == nil || !response.Generation.Complete || strings.TrimSpace(response.Answer) == "" || len(response.Answer) > 64000 {
 			return empty, errors.New("comparison_invalid_response")
 		}
 		identity.LatencyMS = time.Since(start).Milliseconds()
+		identity.Generation = cloneGenerationMetadata(response.Generation)
 		pair.candidates[i] = identity
 		answers[i] = response.Answer
 	}
@@ -269,7 +272,7 @@ func validateInteractionVote(request InteractionEvaluationRequest) error {
 	if request.Choice != "A" && request.Choice != "B" && request.Choice != "tie" && request.Choice != "neither" {
 		return errors.New("invalid_preference_choice")
 	}
-	if len(request.Correction) > 16000 || len(request.FailureTags) > 10 {
+	if len(request.Correction) > 16000 || len(request.FailureTags) > len(interactionFailureTags) {
 		return errors.New("evaluation_too_large")
 	}
 	seen := map[string]bool{}
@@ -293,7 +296,11 @@ func (a *App) SaveInteractionEvaluation(request InteractionEvaluationRequest) (I
 		return InteractionEvaluationRecord{}, errors.New("comparison_expired")
 	}
 	s := pair.source
-	record := InteractionEvaluationRecord{SchemaVersion: 1, ID: interactionID("evaluation_"), Timestamp: time.Now().UTC().Format(time.RFC3339Nano), SourceOperationID: s.OperationID, TraceID: s.TraceID, SessionID: s.SessionID, TurnID: s.TurnID, ComparisonID: request.ComparisonID, Candidates: append([]InteractionCandidateIdentity(nil), pair.candidates[:]...), Choice: request.Choice, Correction: request.Correction, FailureTags: append([]string(nil), request.FailureTags...)}
+	current, err := a.interactionEngine().Snapshot(s.OperationID)
+	if err != nil || current.GenerationRevision != s.GenerationRevision {
+		return InteractionEvaluationRecord{}, errors.New("comparison_source_changed")
+	}
+	record := InteractionEvaluationRecord{SchemaVersion: 2, ID: interactionID("evaluation_"), Timestamp: time.Now().UTC().Format(time.RFC3339Nano), SourceOperationID: s.OperationID, TraceID: s.TraceID, SessionID: s.SessionID, TurnID: s.TurnID, GenerationRevision: s.GenerationRevision, ComparisonID: request.ComparisonID, Candidates: append([]InteractionCandidateIdentity(nil), pair.candidates[:]...), Choice: request.Choice, Correction: request.Correction, FailureTags: append([]string(nil), request.FailureTags...)}
 	if err := a.storeInteractionEvaluationLocked(record); err != nil {
 		return InteractionEvaluationRecord{}, err
 	}
@@ -306,7 +313,11 @@ func (a *App) RecordInteractionFeedback(operationID string) (InteractionEvaluati
 	}
 	a.interactionEvalMu.Lock()
 	defer a.interactionEvalMu.Unlock()
-	record := InteractionEvaluationRecord{SchemaVersion: 1, ID: interactionID("evaluation_"), Timestamp: time.Now().UTC().Format(time.RFC3339Nano), SourceOperationID: operationID, TraceID: snapshot.TraceID, SessionID: snapshot.SessionID, TurnID: snapshot.TurnID, Choice: "flagged", FailureTags: []string{"other"}}
+	tag := "other"
+	if snapshot.State == "INCOMPLETE" {
+		tag = "incomplete_response"
+	}
+	record := InteractionEvaluationRecord{SchemaVersion: 2, ID: interactionID("evaluation_"), Timestamp: time.Now().UTC().Format(time.RFC3339Nano), SourceOperationID: operationID, TraceID: snapshot.TraceID, SessionID: snapshot.SessionID, TurnID: snapshot.TurnID, GenerationRevision: snapshot.GenerationRevision, Choice: "flagged", FailureTags: []string{tag}}
 	if err := a.storeInteractionEvaluationLocked(record); err != nil {
 		return InteractionEvaluationRecord{}, err
 	}

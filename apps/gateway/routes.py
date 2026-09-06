@@ -68,9 +68,14 @@ def _with_rag_required(payload: ChatCompletionRequest) -> ChatCompletionRequest:
 
 
 def _stream_error_event(exc: RuntimeError, model: str) -> bytes:
+    reasons = {"llm_timeout": "timeout", "llm_transport_eof": "transport_eof"}
+    code = getattr(exc, "code", "backend_unavailable")
+    if code not in reasons:
+        code = "backend_unavailable"
     payload = {
-        "error": str(exc),
-        "code": "backend_unavailable",
+        "error": code,
+        "code": code,
+        "finish_reason": reasons.get(code, "unknown"),
         "model": model,
     }
     return f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
@@ -273,12 +278,31 @@ def build_router() -> APIRouter:
             sources = [*local_sources, *web_sources]
 
             routing_payload = payload
+            if payload.metadata and payload.metadata.routing_message_count:
+                count = payload.metadata.routing_message_count
+                if count > len(payload.messages):
+                    raise ValueError("invalid routing message count")
+                # Continuation adds one assistant prefix only to inference context．
+                # Keep routing based on the original conversation and user request．
+                routing_payload = payload.model_copy(update={"messages": payload.messages[:count]})
             requested_mode = ((payload.metadata.mode if payload.metadata else None) or payload.model or "auto").strip()
             if sources and requested_mode == "auto":
-                routing_payload = _with_rag_required(payload)
+                routing_payload = _with_rag_required(routing_payload)
 
             decision: RouteDecision = router_service.route_chat(routing_payload)
             effective_payload = prompt_manager.apply_mode_prompt(payload, decision.mode)
+            # Only the server's routing decision can select provider policy．
+            metadata = effective_payload.metadata or RequestMetadata()
+            effective_payload = effective_payload.model_copy(update={
+                "metadata": metadata.model_copy(update={"resolved_mode": decision.mode}),
+            })
+            if metadata.completion_guidance:
+                # Add bounded per-segment guidance after the existing mode/persona
+                # policies，so continuation cannot suppress those policies．
+                effective_payload = effective_payload.model_copy(update={
+                    "messages": [*effective_payload.messages,
+                                 ChatMessage(role="system", content=metadata.completion_guidance)],
+                })
             if local_sources or web_context:
                 effective_payload = prompt_manager.apply_untrusted_context(
                     effective_payload,

@@ -1,7 +1,8 @@
 import './style.css';
 import './voiceInteraction.css';
 import {mountVoiceInteraction} from './voiceInteraction';
-import {conversationHistory} from './conversationHistory';
+import {conversationHistory, isConversationHistoryEntry} from './conversationHistory';
+import {confirmVoiceEntry, previewVoiceEntry, resumeVoiceEntry, settleVoiceEntry} from './voiceConversation';
 import {voiceSessionCallbacks} from './voiceSession';
 import {mountVoiceEvaluation} from './voiceEvaluation';
 import * as interactionBridge from '../wailsjs/go/main/App';
@@ -2124,7 +2125,7 @@ function renderChatThread() {
           `
           : ''
       }
-      <div class="message-body">${escapeHtml(entry.text || (entry.streaming ? '…' : ''))}</div>
+      <div class="message-body">${escapeHtml(entry.text || (entry.streaming && !entry.pendingText ? '…' : ''))}${entry.pendingText ? `<span class="message-draft" aria-label="生成中の未確定テキスト">${escapeHtml(entry.pendingText)}</span>` : ''}</div>
       ${
         entry.role === 'assistant' && !entry.streaming
           ? `
@@ -2135,9 +2136,9 @@ function renderChatThread() {
                   type="button"
                   data-chat-action="continue"
                   data-request-id="${escapeHtml(entry.requestId || '')}"
-                >Continue</button>
+                >${entry.voice ? '続きを生成' : 'Continue'}</button>
               ` : ''}
-              ${entry.karteMemory ? '' : `
+              ${entry.karteMemory || !isConversationHistoryEntry(entry) ? '' : `
                 <button
                   class="ghost-btn compact-btn"
                   type="button"
@@ -2174,7 +2175,8 @@ function updateChatThreadEntry(requestId, updater) {
 }
 
 function syncLatestChatExportFromEntry(entry) {
-  if (!entry || entry.role !== 'assistant') {
+  if (!entry || entry.role !== 'assistant' || !isConversationHistoryEntry(entry)) {
+    latestChatExport = null;
     return;
   }
   latestChatExport = {
@@ -2214,6 +2216,7 @@ function beginStreamingContinuation({targetRequestId, requestId, mode, modeLabel
   activeChatStreamRequestId = requestId;
   announceChatStream(document, 'streaming');
   updateChatThreadEntry(targetRequestId, (entry) => {
+    entry.completionPrefix = entry.text || '';
     entry.requestId = requestId;
     entry.streaming = true;
     entry.meta = `${modeLabel} · continuing`;
@@ -2263,6 +2266,20 @@ function failStreamingChat({requestId, message}) {
   updateChatThreadEntry(requestId, () => failed);
   announceChatStream(document, 'error', message);
   return true;
+}
+
+function finalizeVoiceChat(snapshot) {
+  const entry = chatThreadEntries.find(candidate => candidate.requestId === snapshot.operation_id);
+  if (!entry) return;
+  const settled = settleVoiceEntry(entry, snapshot);
+  if (settled === entry) return;
+  updateChatThreadEntry(snapshot.operation_id, () => settled);
+  syncLatestChatExportFromEntry(settled);
+  announceChatStream(document, {
+    COMPLETED: 'complete', INCOMPLETE: 'incomplete', CANCELED: 'canceled', FAILED: 'error',
+  }[settled.terminalState] || 'error');
+  document.getElementById('voice-feedback').disabled = !snapshot.operation_id;
+  voiceEvaluation?.refresh();
 }
 
 function chatEntriesThrough(requestId) {
@@ -7726,6 +7743,16 @@ async function continueChatGeneration(requestId) {
   if (chatSendInFlight) {
     return {ok: false, detail: 'Chat request already in progress.'};
   }
+  if (entry.voice) {
+    if (entry.terminalState !== 'INCOMPLETE' || voiceController?.isActive()) return {ok: false, detail: 'Continuation is unavailable.'};
+    const session = chatConversationId;
+    // Adopt before the bridge can emit events．The same operation resumes with
+    // a new revision and updates the existing assistant card and user turn．
+    const pending = Promise.resolve().then(() => interactionBridge.ContinueInteraction(requestId));
+    const adopted = await voiceController.adopt(pending, {operationID: requestId, revision: (entry.generationRevision || 1) + 1});
+    if (!adopted && session === chatConversationId) setChatDropStatus('続きを生成できませんでした．テキスト入力で再試行できます．');
+    return {ok: adopted, detail: adopted ? 'Continuation started.' : 'Continuation is unavailable.'};
+  }
 
   const mode = entry.mode || document.getElementById('chat-mode').value || 'auto';
   const continuationPrompt = buildContinuationPrompt(entry);
@@ -11140,25 +11167,22 @@ voiceController = mountVoiceInteraction({
   onDetachedFinish: () => setChatSendState(chatSendInFlight),
   onTranscript(snapshot, text) {
     voiceEvaluation?.refresh();
-    beginStreamingChat({requestId: snapshot.operation_id, prompt: text, modeLabel: '音声'});
+    if (!chatThreadEntries.some(entry => entry.requestId === snapshot.operation_id)) {
+      beginStreamingChat({requestId: snapshot.operation_id, prompt: text, modeLabel: '音声'});
+    } else {
+      activeChatStreamRequestId = snapshot.operation_id;
+      announceChatStream(document, 'streaming');
+    }
+    latestChatExport = null;
+    updateChatThreadEntry(snapshot.operation_id, entry => resumeVoiceEntry(entry, snapshot));
     document.getElementById('voice-replay-transcript').value = text;
   },
-  onToken(snapshot, text) { applyChatStreamDelta({requestId: snapshot.operation_id, channel: 'answer', delta: text}); },
-  onComplete(snapshot) {
-    finalizeStreamingChat({requestId: snapshot.operation_id, answer: snapshot.response_plan?.text || '', meta: '音声 · 完了', finishReason: 'stop'});
-    document.getElementById('voice-feedback').disabled = false;
-    voiceEvaluation?.refresh();
-  },
-  onCancel(snapshot) {
-    finalizeStreamingChat({requestId: snapshot.operation_id, answer: snapshot.response_plan?.text || '', meta: '音声 · 停止', finishReason: 'stop'});
-    document.getElementById('voice-feedback').disabled = !snapshot.operation_id;
-    voiceEvaluation?.refresh();
-  },
-  onFailure(snapshot) {
-    finalizeStreamingChat({requestId: snapshot.operation_id, answer: snapshot.response_plan?.text || '', meta: snapshot.state === 'CANCELED' ? '音声 · 停止' : '音声 · 文字入力で続行できます', finishReason: 'stop'});
-    document.getElementById('voice-feedback').disabled = !snapshot.operation_id;
-    voiceEvaluation?.refresh();
-  },
+  onToken(snapshot, text) { updateChatThreadEntry(snapshot.operation_id, entry => previewVoiceEntry(entry, snapshot, text)); },
+  onOutput(snapshot) { updateChatThreadEntry(snapshot.operation_id, entry => confirmVoiceEntry(entry, snapshot)); },
+  onComplete: finalizeVoiceChat,
+  onIncomplete: finalizeVoiceChat,
+  onCancel: finalizeVoiceChat,
+  onFailure: finalizeVoiceChat,
   onFallback(snapshot) {
     document.getElementById('chat-prompt').value = snapshot?.transcript || '';
     document.getElementById('chat-prompt').focus();

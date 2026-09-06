@@ -27,9 +27,10 @@ type voiceIdentity interface {
 	Identity() (provider, model, configuration string)
 }
 type VoiceTurnRequest struct {
-	SessionID string      `json:"session_id"`
-	InputKind string      `json:"input_kind,omitempty"`
-	Chat      ChatRequest `json:"chat"`
+	SessionID        string           `json:"session_id"`
+	InputKind        string           `json:"input_kind,omitempty"`
+	Chat             ChatRequest      `json:"chat"`
+	GenerationLimits GenerationLimits `json:"generation_limits"`
 }
 type VoiceHint struct {
 	Pace   float64 `json:"pace"`
@@ -43,26 +44,30 @@ type ResponsePlan struct {
 	Interruptible bool      `json:"interruptible"`
 }
 type InteractionSnapshot struct {
-	TraceID      string        `json:"trace_id"`
-	SessionID    string        `json:"session_id"`
-	TurnID       string        `json:"turn_id"`
-	OperationID  string        `json:"operation_id"`
-	State        string        `json:"state"`
-	Transcript   string        `json:"transcript,omitempty"`
-	ResponsePlan *ResponsePlan `json:"response_plan,omitempty"`
-	ErrorCode    string        `json:"error_code,omitempty"`
+	TraceID            string              `json:"trace_id"`
+	SessionID          string              `json:"session_id"`
+	TurnID             string              `json:"turn_id"`
+	OperationID        string              `json:"operation_id"`
+	State              string              `json:"state"`
+	Transcript         string              `json:"transcript,omitempty"`
+	ResponsePlan       *ResponsePlan       `json:"response_plan,omitempty"`
+	ErrorCode          string              `json:"error_code,omitempty"`
+	Generation         *GenerationMetadata `json:"generation,omitempty"`
+	GenerationRevision int                 `json:"generation_revision"`
+	LastAudioSequence  int                 `json:"last_audio_sequence"`
 }
 type InteractionEvent struct {
-	Kind        string                 `json:"kind"`
-	TraceID     string                 `json:"trace_id"`
-	SessionID   string                 `json:"session_id"`
-	TurnID      string                 `json:"turn_id"`
-	OperationID string                 `json:"operation_id"`
-	Snapshot    *InteractionSnapshot   `json:"snapshot,omitempty"`
-	Text        string                 `json:"text,omitempty"`
-	AudioBase64 string                 `json:"audio_base64,omitempty"`
-	Sequence    int                    `json:"sequence,omitempty"`
-	Trace       *InteractionTraceEvent `json:"trace,omitempty"`
+	Kind               string                 `json:"kind"`
+	TraceID            string                 `json:"trace_id"`
+	SessionID          string                 `json:"session_id"`
+	TurnID             string                 `json:"turn_id"`
+	OperationID        string                 `json:"operation_id"`
+	Snapshot           *InteractionSnapshot   `json:"snapshot,omitempty"`
+	Text               string                 `json:"text,omitempty"`
+	AudioBase64        string                 `json:"audio_base64,omitempty"`
+	Sequence           int                    `json:"sequence,omitempty"`
+	Trace              *InteractionTraceEvent `json:"trace,omitempty"`
+	GenerationRevision int                    `json:"generation_revision"`
 }
 type InteractionTimeouts struct{ ASR, LLM, TTS, Playback time.Duration }
 type playbackChunk struct{ started, stopped bool }
@@ -75,10 +80,12 @@ type interactionTurn struct {
 	events                 []InteractionTraceEvent
 	chunks                 map[int]*playbackChunk
 	producerDone           bool
+	generationDone         bool
 	playbackTimer          *time.Timer
 	playbackGeneration     uint64
 	tokenCount, audioBytes int
 	source                 string
+	requestConfigurationID string
 }
 type InteractionEngine struct {
 	mu     sync.Mutex
@@ -116,7 +123,7 @@ func interactionID(prefix string) string {
 	return prefix + hex.EncodeToString(b[:])
 }
 func interactionTerminal(state string) bool {
-	return state == "COMPLETED" || state == "CANCELED" || state == "FAILED"
+	return state == "COMPLETED" || state == "CANCELED" || state == "FAILED" || state == "INCOMPLETE"
 }
 func (e *InteractionEngine) dispatch() {
 	for {
@@ -126,9 +133,10 @@ func (e *InteractionEngine) dispatch() {
 		case event := <-e.events:
 			e.mu.Lock()
 			turn := e.turns[event.OperationID]
-			live := turn != nil && !interactionTerminal(turn.snapshot.State)
+			live := turn != nil && !interactionTerminal(turn.snapshot.State) && event.GenerationRevision == turn.snapshot.GenerationRevision
+			current := turn != nil && event.GenerationRevision == turn.snapshot.GenerationRevision
 			e.mu.Unlock()
-			if (event.Kind == "audio" || event.Kind == "token" || event.Kind == "transcript") && !live {
+			if !current || ((event.Kind == "audio" || event.Kind == "token" || event.Kind == "transcript" || event.Kind == "output") && !live) {
 				continue
 			}
 			if e.emit != nil {
@@ -139,14 +147,16 @@ func (e *InteractionEngine) dispatch() {
 }
 func (e *InteractionEngine) eventLocked(t *interactionTurn, kind string) InteractionEvent {
 	s := t.snapshot
-	return InteractionEvent{Kind: kind, TraceID: s.TraceID, SessionID: s.SessionID, TurnID: s.TurnID, OperationID: s.OperationID}
+	return InteractionEvent{Kind: kind, TraceID: s.TraceID, SessionID: s.SessionID, TurnID: s.TurnID, OperationID: s.OperationID, GenerationRevision: s.GenerationRevision}
 }
 
-// A turn emits at most 128 traces, 128 token previews, 64 audio chunks and 16
-// state/text events. Start reserves 512 queue slots, so producers never block
+// A generation attempt emits at most 128 traces, 64 committed output events,
+// 64 audio chunks and bounded state events. Start/Continue reserve 512 queue slots,
+// so producers never block
 // under the state mutex, including when the UI calls Playback synchronously.
 func (e *InteractionEngine) queueLocked(event InteractionEvent) { e.events <- event }
 func cloneInteractionSnapshot(s InteractionSnapshot) InteractionSnapshot {
+	s.Generation = cloneGenerationMetadata(s.Generation)
 	if s.ResponsePlan != nil {
 		p := *s.ResponsePlan
 		s.ResponsePlan = &p
@@ -156,7 +166,7 @@ func cloneInteractionSnapshot(s InteractionSnapshot) InteractionSnapshot {
 func (e *InteractionEngine) transitionLocked(t *interactionTurn, state string) error {
 	old := t.snapshot.State
 	allowed := map[string]string{"IDLE": "RECORDING", "RECORDING": "TRANSCRIBING", "TRANSCRIBING": "THINKING", "THINKING": "SYNTHESIZING", "SYNTHESIZING": "PLAYING", "PLAYING": "COMPLETED", "CANCELING": "CANCELED"}
-	if interactionTerminal(old) || (allowed[old] != state && state != "CANCELING" && state != "FAILED") {
+	if interactionTerminal(old) || (allowed[old] != state && state != "CANCELING" && state != "FAILED" && state != "INCOMPLETE" && !(state == "COMPLETED" && old == "THINKING" && t.generationDone)) {
 		return errors.New("invalid_interaction_transition")
 	}
 	t.snapshot.State = state
@@ -233,7 +243,7 @@ func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot
 	e.pruneLocked()
 	ctx, cancel := context.WithCancel(context.Background())
 	op := interactionID("operation_")
-	t := &interactionTurn{snapshot: InteractionSnapshot{TraceID: interactionID("trace_"), SessionID: request.SessionID, TurnID: interactionID("turn_"), OperationID: op, State: "IDLE"}, request: request, ctx: ctx, cancel: cancel, created: time.Now(), chunks: map[int]*playbackChunk{}, source: request.InputKind}
+	t := &interactionTurn{snapshot: InteractionSnapshot{TraceID: interactionID("trace_"), SessionID: request.SessionID, TurnID: interactionID("turn_"), OperationID: op, State: "IDLE", GenerationRevision: 1}, request: request, ctx: ctx, cancel: cancel, created: time.Now(), chunks: map[int]*playbackChunk{}, source: request.InputKind, requestConfigurationID: request.Chat.ConfigurationID}
 	e.turns[op] = t
 	e.active = op
 	e.traceLocked(t, "user_speech_start", "")
@@ -347,15 +357,73 @@ func (e *InteractionEngine) run(t *interactionTurn, audio []byte, transcript str
 	ev.Text = result
 	e.queueLocked(ev)
 	_ = e.transitionLocked(t, "THINKING")
-	e.traceLocked(t, "llm_requested", "")
-	req := t.request.Chat
-	requestConfigurationID := req.ConfigurationID
 	e.mu.Unlock()
-	response, err := runInteractionStage(t.ctx, e.Timeouts.LLM, func(ctx context.Context) (*ChatResponse, error) {
-		ctx = context.WithValue(ctx, interactionModelKey{}, func(provider, model, configuration string) {
+	e.runGeneration(t, "")
+}
+
+// A single operation context owns the assembler and speech consumer. Only
+// committed utterance units cross this queue; speculative suffixes stay private.
+func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
+	e.mu.Lock()
+	if !e.liveLocked(t) {
+		e.mu.Unlock()
+		return
+	}
+	ctx, revision := t.ctx, t.snapshot.GenerationRevision
+	firstSequence := t.snapshot.LastAudioSequence
+	req, limits := t.request.Chat, t.request.GenerationLimits
+	requestConfigurationID := t.requestConfigurationID
+	e.traceLocked(t, "llm_requested", "")
+	e.mu.Unlock()
+	speech := make(chan string, 64)
+	type speechResult struct {
+		units int
+		err   error
+	}
+	speechDone := make(chan speechResult, 1)
+	go func() {
+		units := 0
+		remaining := e.Timeouts.TTS
+		for {
+			var text string
+			select {
+			case <-ctx.Done():
+				speechDone <- speechResult{units: units, err: ctx.Err()}
+				return
+			case next, ok := <-speech:
+				if !ok {
+					speechDone <- speechResult{units: units}
+					return
+				}
+				text = next
+			}
+			started := time.Now()
+			_, err := runInteractionStage(ctx, remaining, func(ttsCtx context.Context) (bool, error) {
+				if units == 0 {
+					if err := e.tts.Ready(ttsCtx); err != nil {
+						return false, err
+					}
+				}
+				err := e.tts.Stream(ttsCtx, text, func(chunk []byte) error { return e.emitGenerationAudio(t, revision, ttsCtx, chunk) })
+				return err == nil, err
+			})
+			remaining -= time.Since(started)
+			if err != nil {
+				// Fail immediately so a stopped consumer cannot leave the LLM producer
+				// waiting on a full speech queue. Idle waits do not spend the TTS budget.
+				e.stageFailure(t, "tts", err)
+				speechDone <- speechResult{units: units, err: err}
+				return
+			}
+			units++
+		}
+	}()
+	response, err := runInteractionStage(ctx, e.Timeouts.LLM, func(llmCtx context.Context) (*ChatResponse, error) {
+		defer close(speech)
+		llmCtx = context.WithValue(llmCtx, interactionModelKey{}, func(provider, model, configuration string) {
 			e.mu.Lock()
 			defer e.mu.Unlock()
-			if !e.liveLocked(t) || ctx.Err() != nil {
+			if !e.generationLiveLocked(t, revision, llmCtx) {
 				return
 			}
 			if interactionIdentifier.MatchString(provider) {
@@ -369,97 +437,180 @@ func (e *InteractionEngine) run(t *interactionTurn, audio []byte, transcript str
 				t.request.Chat.ConfigurationID = hex.EncodeToString(combined[:16])
 			}
 		})
-		return e.chat(ctx, req, func(token string) {
-			if token == "" {
-				return
-			}
-			e.mu.Lock()
-			defer e.mu.Unlock()
-			if !e.liveLocked(t) || t.snapshot.State != "THINKING" || ctx.Err() != nil {
-				return
-			}
-			if t.tokenCount == 0 {
-				e.traceLocked(t, "llm_first_token", "")
-			}
-			t.tokenCount++
-			if t.tokenCount <= 128 {
-				ev := e.eventLocked(t, "token")
-				if len(token) > 4096 {
-					token = token[:4096]
+		chat := func(segmentCtx context.Context, segmentReq ChatRequest, onToken func(string)) (*ChatResponse, error) {
+			return e.chat(segmentCtx, segmentReq, func(token string) {
+				e.mu.Lock()
+				live := e.generationLiveLocked(t, revision, segmentCtx)
+				if live && token != "" {
+					if t.tokenCount == 0 {
+						e.traceLocked(t, "llm_first_token", "")
+					}
+					t.tokenCount++
 				}
-				ev.Text = token
-				e.queueLocked(ev)
+				e.mu.Unlock()
+				if live {
+					onToken(token)
+				}
+			})
+		}
+		return assembleGeneration(llmCtx, req, limits, prefix, chat, func(progress GenerationProgress) {
+			e.mu.Lock()
+			if !e.generationLiveLocked(t, revision, llmCtx) {
+				e.mu.Unlock()
+				return
+			}
+			t.snapshot.ResponsePlan = responsePlan(progress.CommittedText)
+			t.snapshot.Generation = cloneGenerationMetadata(&progress.Metadata)
+			event := e.eventLocked(t, "output")
+			snapshot := cloneInteractionSnapshot(t.snapshot)
+			event.Snapshot = &snapshot
+			e.queueLocked(event)
+			if len(progress.SpeechUnits) > 0 && t.snapshot.State == "THINKING" {
+				_ = e.transitionLocked(t, "SYNTHESIZING")
+				e.traceLocked(t, "tts_requested", "")
+			}
+			e.mu.Unlock()
+			for _, unit := range progress.SpeechUnits {
+				select {
+				case speech <- unit:
+				case <-llmCtx.Done():
+					return
+				}
 			}
 		})
 	})
 	if err != nil {
+		e.mu.Lock()
+		if e.generationLiveLocked(t, revision, ctx) && response != nil {
+			t.snapshot.Generation = cloneGenerationMetadata(response.Generation)
+			t.snapshot.ResponsePlan = responsePlan(response.Answer)
+		}
+		e.mu.Unlock()
 		e.stageFailure(t, "llm", err)
 		return
 	}
-	if response == nil || strings.TrimSpace(response.Answer) == "" || len(response.Answer) > 128<<10 {
+	if response == nil || response.Generation == nil || len(response.Answer) > 128<<10 {
 		e.stageFailure(t, "llm", errors.New("llm_empty_result"))
 		return
 	}
 	e.mu.Lock()
-	if !e.liveLocked(t) {
+	if !e.generationLiveLocked(t, revision, ctx) {
 		e.mu.Unlock()
 		return
 	}
-	if t.tokenCount == 0 {
-		e.traceLocked(t, "llm_first_token", "")
-	}
-	e.traceLocked(t, "llm_completed", "")
-	t.snapshot.ResponsePlan = &ResponsePlan{Text: response.Answer, DialogueAct: "answer", Affect: "neutral", VoiceHint: VoiceHint{Pace: 1, Volume: 1}, Interruptible: true}
-	_ = e.transitionLocked(t, "SYNTHESIZING")
-	e.traceLocked(t, "tts_requested", "")
-	e.mu.Unlock()
-	_, err = runInteractionStage(t.ctx, e.Timeouts.TTS, func(ctx context.Context) (bool, error) {
-		if err := e.tts.Ready(ctx); err != nil {
-			return false, err
+	t.snapshot.Generation = cloneGenerationMetadata(response.Generation)
+	t.snapshot.ResponsePlan = responsePlan(response.Answer)
+	t.generationDone = true
+	if response.Generation.Complete {
+		if t.tokenCount == 0 {
+			e.traceLocked(t, "llm_first_token", "")
 		}
-		err := e.tts.Stream(ctx, response.Answer, func(chunk []byte) error {
-			e.mu.Lock()
-			defer e.mu.Unlock()
-			if !e.liveLocked(t) || ctx.Err() != nil {
-				return context.Canceled
-			}
-			if len(chunk) < 12 || string(chunk[:4]) != "RIFF" || string(chunk[8:12]) != "WAVE" {
-				return errors.New("tts_invalid_audio")
-			}
-			if len(chunk) > 2<<20 || t.audioBytes+len(chunk) > 16<<20 || len(t.chunks) >= 64 {
-				return errors.New("tts_audio_limit")
-			}
-			if len(t.chunks) == 0 {
-				e.traceLocked(t, "tts_first_chunk", "")
-			}
-			seq := len(t.chunks) + 1
-			t.chunks[seq] = &playbackChunk{}
-			t.audioBytes += len(chunk)
-			ev := e.eventLocked(t, "audio")
-			ev.Sequence = seq
-			ev.AudioBase64 = base64.StdEncoding.EncodeToString(chunk)
-			e.queueLocked(ev)
-			e.playbackDeadlineLocked(t)
-			return nil
-		})
-		return err == nil, err
-	})
-	if err != nil {
-		e.stageFailure(t, "tts", err)
+		e.traceLocked(t, "llm_completed", "")
+	} else {
+		e.traceLocked(t, "llm_incomplete", "incomplete_response")
+	}
+	e.mu.Unlock()
+	var spoken speechResult
+	select {
+	case spoken = <-speechDone:
+	case <-ctx.Done():
+		return
+	}
+	if spoken.err != nil {
+		e.stageFailure(t, "tts", spoken.err)
 		return
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !e.liveLocked(t) {
+	if !e.generationLiveLocked(t, revision, ctx) {
 		return
 	}
 	t.producerDone = true
-	e.traceLocked(t, "tts_completed", "")
-	if len(t.chunks) == 0 {
-		e.failLocked(t, "tts_empty_audio")
-		return
+	if spoken.units == 0 {
+		e.traceLocked(t, "tts_skipped", "")
+	} else {
+		e.traceLocked(t, "tts_completed", "")
+		if t.snapshot.LastAudioSequence == firstSequence {
+			e.failLocked(t, "tts_empty_audio")
+			return
+		}
 	}
 	e.completeIfPlayedLocked(t)
+}
+func responsePlan(text string) *ResponsePlan {
+	return &ResponsePlan{Text: text, DialogueAct: "answer", Affect: "neutral", VoiceHint: VoiceHint{Pace: 1, Volume: 1}, Interruptible: true}
+}
+func (e *InteractionEngine) generationLiveLocked(t *interactionTurn, revision int, ctx context.Context) bool {
+	return e.liveLocked(t) && t.snapshot.GenerationRevision == revision && ctx.Err() == nil
+}
+func (e *InteractionEngine) emitGenerationAudio(t *interactionTurn, revision int, ctx context.Context, chunk []byte) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.generationLiveLocked(t, revision, ctx) {
+		return context.Canceled
+	}
+	if len(chunk) < 12 || string(chunk[:4]) != "RIFF" || string(chunk[8:12]) != "WAVE" {
+		return errors.New("tts_invalid_audio")
+	}
+	if len(chunk) > 2<<20 || t.audioBytes+len(chunk) > 16<<20 || len(t.chunks) >= 64 {
+		return errors.New("tts_audio_limit")
+	}
+	if len(t.chunks) == 0 {
+		e.traceLocked(t, "tts_first_chunk", "")
+	}
+	seq := len(t.chunks) + 1
+	t.chunks[seq] = &playbackChunk{}
+	t.snapshot.LastAudioSequence = seq
+	t.audioBytes += len(chunk)
+	event := e.eventLocked(t, "audio")
+	event.Sequence = seq
+	event.AudioBase64 = base64.StdEncoding.EncodeToString(chunk)
+	e.queueLocked(event)
+	e.playbackDeadlineLocked(t)
+	return nil
+}
+
+// Continue is an explicit bounded generation attempt on the same logical turn.
+// A revision fence rejects callbacks and queued events from earlier attempts.
+func (e *InteractionEngine) Continue(op string) (InteractionSnapshot, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.expireLocked(op)
+	t := e.turns[op]
+	if t == nil {
+		return InteractionSnapshot{}, errors.New("operation_not_found")
+	}
+	if e.closed {
+		return InteractionSnapshot{}, errors.New("interaction_closed")
+	}
+	if e.active != "" || t.snapshot.State != "INCOMPLETE" {
+		return InteractionSnapshot{}, errors.New("invalid_interaction_transition")
+	}
+	if len(e.events) > 512 {
+		return InteractionSnapshot{}, errors.New("interaction_consumer_slow")
+	}
+	if t.snapshot.GenerationRevision >= 8 {
+		return InteractionSnapshot{}, errors.New("generation_resume_limit")
+	}
+	prefix := ""
+	if t.snapshot.ResponsePlan != nil {
+		prefix = t.snapshot.ResponsePlan.Text
+	}
+	t.ctx, t.cancel = context.WithCancel(context.Background())
+	t.snapshot.GenerationRevision++
+	t.snapshot.State = "THINKING"
+	t.snapshot.ErrorCode = ""
+	t.snapshot.Generation = nil
+	t.producerDone = false
+	t.generationDone = false
+	t.tokenCount = 0
+	e.active = op
+	event := e.eventLocked(t, "state")
+	snapshot := cloneInteractionSnapshot(t.snapshot)
+	event.Snapshot = &snapshot
+	e.queueLocked(event)
+	go e.runGeneration(t, prefix)
+	return cloneInteractionSnapshot(t.snapshot), nil
 }
 func (e *InteractionEngine) stageFailure(t *interactionTurn, stage string, err error) {
 	e.mu.Lock()
@@ -468,12 +619,34 @@ func (e *InteractionEngine) stageFailure(t *interactionTurn, stage string, err e
 		return
 	}
 	code := stage + "_failed"
+	if stage == "llm" {
+		if t.snapshot.Generation == nil {
+			t.snapshot.Generation = &GenerationMetadata{SchemaVersion: 2, FinishReason: "unknown", ProviderFinishReason: "unknown"}
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			t.snapshot.Generation.FinishReason = "timeout"
+		}
+		if errors.Is(err, context.Canceled) {
+			t.snapshot.Generation.FinishReason = "canceled"
+		}
+		t.snapshot.Generation.Complete = false
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		code = stage + "_timeout"
 	} else {
+		if stage == "llm" {
+			switch err.Error() {
+			case "generation_transport_eof":
+				code = "llm_transport_eof"
+			case "generation_timeout":
+				code = "llm_timeout"
+			case "generation_canceled":
+				code = "llm_canceled"
+			}
+		}
 		// Never forward or persist provider error text. Only this finite set of
 		// known stable adapter codes can cross the boundary.
-		for _, allowed := range []string{"asr_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_empty_transcript", "asr_timeout", "asr_on_device_unavailable", "asr_empty_result", "tts_unavailable", "tts_invalid_audio", "tts_audio_limit", "tts_cleanup_failed", "invalid_speech_text", "llm_empty_result", "invalid_audio", "invalid_voice_config"} {
+		for _, allowed := range []string{"asr_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_empty_transcript", "asr_timeout", "asr_on_device_unavailable", "asr_empty_result", "tts_unavailable", "tts_invalid_audio", "tts_audio_limit", "tts_cleanup_failed", "invalid_speech_text", "llm_empty_result", "llm_transport_eof", "llm_timeout", "llm_canceled", "llm_unknown_finish", "llm_tool_calls", "invalid_audio", "invalid_voice_config"} {
 			if err.Error() == allowed {
 				code = allowed
 				break
@@ -558,7 +731,7 @@ func (e *InteractionEngine) Playback(op string, seq int, phase string) error {
 	return nil
 }
 func (e *InteractionEngine) completeIfPlayedLocked(t *interactionTurn) {
-	if !t.producerDone || !e.liveLocked(t) {
+	if !t.producerDone || !t.generationDone || !e.liveLocked(t) {
 		return
 	}
 	for _, c := range t.chunks {
@@ -566,10 +739,11 @@ func (e *InteractionEngine) completeIfPlayedLocked(t *interactionTurn) {
 			return
 		}
 	}
-	if t.snapshot.State != "PLAYING" {
-		return
+	if t.snapshot.Generation != nil && t.snapshot.Generation.Complete {
+		e.finishLocked(t, "COMPLETED", "turn_completed", "")
+	} else {
+		e.finishLocked(t, "INCOMPLETE", "turn_incomplete", "incomplete_response")
 	}
-	e.finishLocked(t, "COMPLETED", "turn_completed", "")
 }
 func (e *InteractionEngine) failLocked(t *interactionTurn, code string) {
 	if interactionTerminal(t.snapshot.State) {
@@ -581,6 +755,9 @@ func (e *InteractionEngine) failLocked(t *interactionTurn, code string) {
 // Commit durable terminal metadata before exposing the terminal state. A storage
 // failure therefore produces one FAILED outcome, never COMPLETED followed by FAILED.
 func (e *InteractionEngine) finishLocked(t *interactionTurn, state, name, code string) {
+	if state == "COMPLETED" && t.snapshot.State != "PLAYING" && !(t.snapshot.State == "THINKING" && t.generationDone) {
+		state, name, code = "FAILED", "turn_failed", "invalid_completion_state"
+	}
 	trace := e.recordTraceLocked(t, name, code, false)
 	if err := e.store.save(t.snapshot.OperationID, t.events); err != nil {
 		state, name, code = "FAILED", "turn_failed", "trace_storage_failed"
@@ -609,6 +786,11 @@ func (e *InteractionEngine) Cancel(op string) (InteractionSnapshot, error) {
 		return InteractionSnapshot{}, errors.New("operation_not_found")
 	}
 	if !interactionTerminal(t.snapshot.State) {
+		if t.snapshot.Generation == nil {
+			t.snapshot.Generation = &GenerationMetadata{SchemaVersion: 2, ProviderFinishReason: "unknown"}
+		}
+		t.snapshot.Generation.FinishReason = "canceled"
+		t.snapshot.Generation.Complete = false
 		e.traceLocked(t, "cancel_requested", "")
 		_ = e.transitionLocked(t, "CANCELING")
 		t.cancel()
@@ -686,6 +868,11 @@ func (e *InteractionEngine) Close() {
 	e.closed = true
 	for _, t := range e.turns {
 		if !interactionTerminal(t.snapshot.State) {
+			if t.snapshot.Generation == nil {
+				t.snapshot.Generation = &GenerationMetadata{SchemaVersion: 2, ProviderFinishReason: "unknown"}
+			}
+			t.snapshot.Generation.FinishReason = "canceled"
+			t.snapshot.Generation.Complete = false
 			e.traceLocked(t, "cancel_requested", "")
 			_ = e.transitionLocked(t, "CANCELING")
 			t.cancel()
@@ -735,12 +922,12 @@ func (e *InteractionEngine) recordTraceLocked(t *interactionTurn, name, code str
 		}
 		t.events = append(t.events[:remove], t.events[remove+1:]...)
 	}
-	provider, model, config := "desktop", "interaction", "c0-v1"
+	provider, model, config := "desktop", "interaction", "c01-v2"
 	switch {
 	case strings.HasPrefix(name, "asr_"):
-		provider, model, config = stableVoiceIdentity(e.asr, "native-asr", "macOS", "on-device")
+		provider, model, config = stableVoiceIdentity(e.asr, "asr-adapter", "configured", "default")
 	case strings.HasPrefix(name, "tts_"):
-		provider, model, config = stableVoiceIdentity(e.tts, "native-tts", "Kyoko", "default")
+		provider, model, config = stableVoiceIdentity(e.tts, "tts-adapter", "configured", "default")
 	case strings.HasPrefix(name, "llm_"):
 		provider, model, config = "gateway", "configured", "default"
 		if interactionIdentifier.MatchString(t.request.Chat.ProviderID) {
@@ -754,7 +941,7 @@ func (e *InteractionEngine) recordTraceLocked(t *interactionTurn, name, code str
 		}
 	}
 	s := t.snapshot
-	trace := InteractionTraceEvent{SchemaVersion: 1, EventID: interactionID("event_"), TraceID: s.TraceID, SessionID: s.SessionID, TurnID: s.TurnID, OperationID: s.OperationID, Name: name, Source: t.source, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), MonotonicMS: time.Since(t.created).Milliseconds(), Status: s.State, ErrorCode: code, ProviderID: provider, ModelID: model, ConfigurationID: config}
+	trace := InteractionTraceEvent{SchemaVersion: 2, EventID: interactionID("event_"), TraceID: s.TraceID, SessionID: s.SessionID, TurnID: s.TurnID, OperationID: s.OperationID, Name: name, Source: t.source, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), MonotonicMS: time.Since(t.created).Milliseconds(), Status: s.State, ErrorCode: code, ProviderID: provider, ModelID: model, ConfigurationID: config, Generation: cloneGenerationMetadata(s.Generation), GenerationRevision: s.GenerationRevision}
 	if name == "turn_completed" {
 		trace.Status = "COMPLETED"
 	}
@@ -763,6 +950,9 @@ func (e *InteractionEngine) recordTraceLocked(t *interactionTurn, name, code str
 	}
 	if name == "cancel_acknowledged" {
 		trace.Status = "CANCELED"
+	}
+	if name == "turn_incomplete" {
+		trace.Status = "INCOMPLETE"
 	}
 	t.events = append(t.events, trace)
 	if publish {

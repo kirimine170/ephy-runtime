@@ -24,6 +24,8 @@ export function ClearExecutionHistory():Promise<Array<main.ExecutionHistoryItem>
 
 export function CommitInteraction(arg1:string,arg2:string):Promise<void>;
 
+export function ContinueInteraction(arg1:string):Promise<main.InteractionSnapshot>;
+
 export function CreatePreferenceSession(arg1:main.PreferenceSessionRequest):Promise<Record<string, any>>;
 
 export function DeleteLocalConfigFile(arg1:main.LocalConfigNameRequest):Promise<Array<main.LocalConfigFile>>;
