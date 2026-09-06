@@ -5,6 +5,7 @@ import {conversationHistory, isConversationHistoryEntry} from './conversationHis
 import {confirmVoiceEntry, previewVoiceEntry, resumeVoiceEntry, settleVoiceEntry} from './voiceConversation';
 import {voiceSessionCallbacks} from './voiceSession';
 import {mountVoiceEvaluation} from './voiceEvaluation';
+import {mountVoiceProfiles, voiceProfilesMarkup} from './voiceProfiles';
 import * as interactionBridge from '../wailsjs/go/main/App';
 import './app.css';
 import {
@@ -166,6 +167,7 @@ let preferenceLastVote = null;
 let preferenceCorrectionVoteId = '';
 let voiceController = null;
 let voiceEvaluation = null;
+let voiceProfiles = null;
 let chatThreadEntries = [];
 let chatConversationId = createKarteConversationId();
 let chatOccurredAt = formatLocalISOString();
@@ -978,6 +980,7 @@ app.innerHTML = `
             </div>
             <div id="chat-output" class="conversation-thread" role="region" aria-label="Conversation"></div>
             <div id="chat-stream-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+            ${voiceProfilesMarkup()}
             <div id="voice-controls" class="voice-controls" role="group" aria-label="音声会話">
               <button id="voice-record" class="ghost-btn" type="button">録音開始</button>
               <button id="voice-cancel" class="ghost-btn" type="button" disabled>Ephyの発話停止</button>
@@ -2039,6 +2042,7 @@ function buildContinuationPrompt(entry) {
 
 function setChatSendState(inFlight) {
   chatSendInFlight = inFlight;
+  voiceProfiles?.setBusy(!!voiceController?.isActive());
   const voiceRecord = document.getElementById('voice-record');
   if (voiceRecord && !voiceController?.isActive()) voiceRecord.disabled = inFlight;
   const sendButton = document.getElementById('send-chat');
@@ -11153,6 +11157,7 @@ document.getElementById('overview-preset-runtime-hint').addEventListener('click'
 
 
 // Voice uses the existing thread and Chat gateway，with bounded metadata-only diagnostics．
+voiceProfiles = mountVoiceProfiles({root: document, bridge: interactionBridge, isBusy: () => !!voiceController?.isActive()});
 voiceController = mountVoiceInteraction({
   root: document,
   bridge: interactionBridge,
@@ -11160,6 +11165,7 @@ voiceController = mountVoiceInteraction({
   subscribe: callback => window.runtime?.EventsOnMultiple ? EventsOn('interaction-event', callback) : () => {},
   getRequest: () => ({
     session_id: chatConversationId,
+    speech: voiceProfiles.readSettings(),
     chat: {mode: document.getElementById('chat-mode').value, prompt: '',
       messages: conversationHistory(chatThreadEntries), ...buildChatGroundingPayload(),
       temperature: 0.2, max_tokens: 512, stream: true, web_search: false},

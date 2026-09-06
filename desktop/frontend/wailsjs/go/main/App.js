@@ -174,6 +174,10 @@ export function GetSavedRequests() {
   return window['go']['main']['App']['GetSavedRequests']();
 }
 
+export function GetVoiceProfiles() {
+  return window['go']['main']['App']['GetVoiceProfiles']();
+}
+
 export function Health() {
   return window['go']['main']['App']['Health']();
 }

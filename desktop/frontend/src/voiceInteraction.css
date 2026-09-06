@@ -1,5 +1,15 @@
 .voice-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid #deddd6; }
 .voice-controls button { min-height: 36px; }
+.voice-profile-settings { margin: 8px 0; padding: 8px 10px; border: 1px solid #deddd6; border-radius: 8px; }
+.voice-profile-settings summary { cursor: pointer; }
+.voice-profile-picker { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.voice-profile-picker .field { flex: 1; min-width: 180px; }
+.voice-style-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 10px; }
+.voice-profile-settings select, .voice-profile-settings input { box-sizing: border-box; width: 100%; min-height: 36px; padding: 6px 8px; color: #172634; background: white; border: 1px solid #deddd6; border-radius: 6px; }
+.voice-profile-settings button { min-height: 36px; }
+.voice-profile-settings :is(select, input, button, summary):focus-visible { outline: 2px solid #405f8d; outline-offset: 3px; }
+.voice-profile-settings [role="status"] { margin: 8px 0 0; font-size: 13px; }
+.voice-profile-settings [role="status"]:empty { display: none; }
 .voice-live-transcript[hidden] { display: none; }
 .voice-transcript-stable { font-weight: 600; }
 .voice-transcript-revisable { opacity: 0.7; text-decoration: underline dotted; text-underline-offset: 3px; }

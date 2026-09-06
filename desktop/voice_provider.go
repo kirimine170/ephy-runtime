@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -193,6 +195,13 @@ func (p *NativeVoiceTTS) Identity() (string, string, string) {
 	return "macos-say", p.voice, "pcm16-22050-" + p.locale
 }
 
+func (p *NativeVoiceTTS) Profile() VoiceProfile {
+	return VoiceProfile{VoiceProfileID: "macos-kyoko", DisplayName: p.voice, Provider: "macos-say", ModelRevision: "installed-voice", Language: p.locale,
+		DefaultStyle: defaultSpeechStyle(), Available: p.osName == "darwin", Capabilities: VoiceCapabilities{Streaming: true, StreamingMode: "phrase", Interruptible: true, Controls: map[string]VoiceControl{
+			"pace": {Type: "number", Min: 0.5, Max: 2, Step: 0.1}, "volume": {Type: "number", Min: 0, Max: 1, Step: 0.1},
+		}}}
+}
+
 func (p *NativeVoiceTTS) Ready(ctx context.Context) error {
 	ctx, cancelReadiness := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelReadiness()
@@ -233,6 +242,17 @@ func (p *NativeVoiceTTS) Ready(ctx context.Context) error {
 }
 
 func (p *NativeVoiceTTS) Stream(ctx context.Context, text string, emit func([]byte) error) error {
+	return p.StreamSpeech(ctx, SpeechRequest{SpeechStyle: defaultSpeechStyle(), SpeechText: text, VoiceProfileID: p.Profile().VoiceProfileID}, emit)
+}
+
+func (p *NativeVoiceTTS) StreamSpeech(ctx context.Context, request SpeechRequest, emit func([]byte) error) error {
+	text := request.SpeechText
+	if request.VoiceProfileID != p.Profile().VoiceProfileID {
+		return errors.New("voice_profile_unavailable")
+	}
+	if err := validateSpeechStyle(request.SpeechStyle, p.Profile()); err != nil {
+		return err
+	}
 	if emit == nil || !utf8.ValidString(text) || utf8.RuneCountInString(text) > 16000 {
 		return errors.New("invalid_speech_text")
 	}
@@ -244,7 +264,7 @@ func (p *NativeVoiceTTS) Stream(ctx context.Context, text string, emit func([]by
 			p.readiness.invalidate()
 			return ctx.Err()
 		}
-		audio, err := p.synthesize(ctx, chunk)
+		audio, err := p.synthesizeStyled(ctx, chunk, request.SpeechStyle)
 		if err != nil {
 			p.readiness.invalidate()
 			return err
@@ -261,6 +281,10 @@ func (p *NativeVoiceTTS) Stream(ctx context.Context, text string, emit func([]by
 }
 
 func (p *NativeVoiceTTS) synthesize(ctx context.Context, text string) (audio []byte, resultErr error) {
+	return p.synthesizeStyled(ctx, text, defaultSpeechStyle())
+}
+
+func (p *NativeVoiceTTS) synthesizeStyled(ctx context.Context, text string, style SpeechStyle) (audio []byte, resultErr error) {
 	// A private directory protects the file even if say recreates it with its own mode．
 	dir, err := os.MkdirTemp(p.tempRoot, "ephy-tts-")
 	if err != nil {
@@ -282,7 +306,12 @@ func (p *NativeVoiceTTS) synthesize(ctx context.Context, text string) (audio []b
 	}
 	processCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	_, _, err = p.run(processCtx, p.executable, []string{"-v", p.voice, "-o", output, "--file-format=WAVE", "--data-format=LEI16@22050", "--channels=1", "-f", "-"}, []byte(text))
+	args := []string{"-v", p.voice, "-o", output, "--file-format=WAVE", "--data-format=LEI16@22050", "--channels=1", "-f", "-"}
+	// Neutral retains the installed voice's natural rate．Explicit pace uses say's documented WPM control．
+	if style.Pace != 1 {
+		args = append(args, "-r", strconv.Itoa(int(175*style.Pace)))
+	}
+	_, _, err = p.run(processCtx, p.executable, args, []byte(text))
 	if processCtx.Err() != nil {
 		return nil, processCtx.Err()
 	}
@@ -297,11 +326,29 @@ func (p *NativeVoiceTTS) synthesize(ctx context.Context, text string) (audio []b
 	if err != nil || !validVoiceWAV(audio, 60) {
 		return nil, errors.New("tts_invalid_audio")
 	}
+	if style.Volume != 1 {
+		scaleSpeechPCM(audio, style.Volume)
+	}
 	// No raw audio file exists by the time the consumer receives a chunk．
 	if err := os.RemoveAll(dir); err != nil {
 		return nil, errors.New("tts_cleanup_failed")
 	}
 	return audio, nil
+}
+
+// Operates only on an already validated PCM16 WAV，preserving framing and duration．
+func scaleSpeechPCM(audio []byte, volume float64) {
+	for offset := 12; offset < len(audio); {
+		size := int(binary.LittleEndian.Uint32(audio[offset+4 : offset+8]))
+		start := offset + 8
+		if string(audio[offset:offset+4]) == "data" {
+			for i := start; i < start+size; i += 2 {
+				value := int16(binary.LittleEndian.Uint16(audio[i : i+2]))
+				binary.LittleEndian.PutUint16(audio[i:i+2], uint16(int16(float64(value)*volume)))
+			}
+		}
+		offset = start + size + size%2
+	}
 }
 
 func splitVoiceSentences(text string, maxRunes int) []string {

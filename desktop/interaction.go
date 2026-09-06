@@ -31,6 +31,7 @@ type VoiceTurnRequest struct {
 	InputKind        string           `json:"input_kind,omitempty"`
 	Chat             ChatRequest      `json:"chat"`
 	GenerationLimits GenerationLimits `json:"generation_limits"`
+	Speech           SpeechOptions    `json:"speech"`
 }
 type VoiceHint struct {
 	Pace   float64 `json:"pace"`
@@ -95,6 +96,7 @@ type interactionTurn struct {
 	source                 string
 	requestConfigurationID string
 	asr                    *interactionASRSession
+	speech                 *preparedSpeech
 }
 type InteractionEngine struct {
 	mu      sync.Mutex
@@ -228,6 +230,15 @@ func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot
 	}
 	request.Chat.Messages = append([]GatewayMessage(nil), request.Chat.Messages...)
 	request.Chat.Tags = append([]string(nil), request.Chat.Tags...)
+	// Copy caller-owned style before validating and pinning it to this operation．
+	if request.Speech.Style != nil {
+		style := *request.Speech.Style
+		request.Speech.Style = &style
+	}
+	prepared, err := prepareSpeechProvider(e.tts, request.Speech)
+	if err != nil {
+		return InteractionSnapshot{}, err
+	}
 	if request.SessionID == "" {
 		request.SessionID = interactionID("session_")
 	}
@@ -257,6 +268,7 @@ func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot
 	ctx, cancel := context.WithCancel(context.Background())
 	op := interactionID("operation_")
 	t := &interactionTurn{snapshot: InteractionSnapshot{TraceID: interactionID("trace_"), SessionID: request.SessionID, TurnID: interactionID("turn_"), OperationID: op, State: "IDLE", GenerationRevision: 1}, request: request, ctx: ctx, cancel: cancel, created: time.Now(), chunks: map[int]*playbackChunk{}, source: request.InputKind, requestConfigurationID: request.Chat.ConfigurationID}
+	t.speech = prepared
 	e.turns[op] = t
 	e.active = op
 	e.traceLocked(t, "user_speech_start", "")
@@ -392,6 +404,7 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 	firstSequence := t.snapshot.LastAudioSequence
 	req, limits := t.request.Chat, t.request.GenerationLimits
 	requestConfigurationID := t.requestConfigurationID
+	prepared := t.speech
 	e.traceLocked(t, "llm_requested", "")
 	e.mu.Unlock()
 	speech := make(chan string, 64)
@@ -418,12 +431,22 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 			}
 			started := time.Now()
 			_, err := runInteractionStage(ctx, remaining, func(ttsCtx context.Context) (bool, error) {
+				provider := e.tts
+				if prepared != nil {
+					provider = prepared.provider
+				}
 				if units == 0 {
-					if err := e.tts.Ready(ttsCtx); err != nil {
+					if err := provider.Ready(ttsCtx); err != nil {
 						return false, err
 					}
 				}
-				err := e.tts.Stream(ttsCtx, text, func(chunk []byte) error { return e.emitGenerationAudio(t, revision, ttsCtx, chunk) })
+				emit := func(chunk []byte) error { return e.emitGenerationAudio(t, revision, ttsCtx, chunk) }
+				var err error
+				if prepared != nil {
+					err = prepared.provider.StreamSpeech(ttsCtx, SpeechRequest{SpeechStyle: prepared.style, SpeechText: text, VoiceProfileID: prepared.profile.VoiceProfileID}, emit)
+				} else {
+					err = provider.Stream(ttsCtx, text, emit)
+				}
 				return err == nil, err
 			})
 			remaining -= time.Since(started)
@@ -654,6 +677,9 @@ func (e *InteractionEngine) stageFailure(t *interactionTurn, stage string, err e
 	if errors.Is(err, context.DeadlineExceeded) {
 		code = stage + "_timeout"
 	} else {
+		if stage == "tts" && knownSpeechError(err.Error()) {
+			code = err.Error()
+		}
 		if stage == "llm" {
 			switch err.Error() {
 			case "generation_transport_eof":
@@ -894,6 +920,10 @@ func (e *InteractionEngine) GetRequest(op string) (VoiceTurnRequest, error) {
 		return VoiceTurnRequest{}, errors.New("operation_not_found")
 	}
 	request := t.request
+	if request.Speech.Style != nil {
+		style := *request.Speech.Style
+		request.Speech.Style = &style
+	}
 	request.Chat.Tags = append([]string(nil), request.Chat.Tags...)
 	request.Chat.Messages = append([]GatewayMessage(nil), request.Chat.Messages...)
 	return request, nil
@@ -976,6 +1006,9 @@ func (e *InteractionEngine) recordTraceLocked(t *interactionTurn, name, code str
 		provider, model, config = stableVoiceIdentity(e.asr, "asr-adapter", "configured", "default")
 	case strings.HasPrefix(name, "tts_"):
 		provider, model, config = stableVoiceIdentity(e.tts, "tts-adapter", "configured", "default")
+		if t.speech != nil {
+			provider, model, config = stableVoiceIdentity(t.speech, provider, model, config)
+		}
 	case strings.HasPrefix(name, "llm_"):
 		provider, model, config = "gateway", "configured", "default"
 		if interactionIdentifier.MatchString(t.request.Chat.ProviderID) {

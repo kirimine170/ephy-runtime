@@ -88,6 +88,8 @@ export function GetRuntimeStatus():Promise<main.RuntimeStatus>;
 
 export function GetSavedRequests():Promise<Array<main.SavedRequest>>;
 
+export function GetVoiceProfiles():Promise<main.VoiceProfileCatalog>;
+
 export function Health():Promise<main.HealthResponse>;
 
 export function ImportLocalModel(arg1:main.ImportLocalModelRequest):Promise<main.LocalModelCatalog>;

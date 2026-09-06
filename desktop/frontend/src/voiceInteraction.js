@@ -14,6 +14,9 @@ const STATUS = {
   INCOMPLETE: '応答は未完了です．続きを生成するか，テキスト入力で続行できます．',
 };
 const FAILURES = {
+  voice_profile_unavailable: '選択した声を利用できません．声を選び直すか，テキスト入力を利用できます．',
+  invalid_voice_profile: '選択した声の設定を確認できません．標準の声かテキスト入力を利用できます．',
+  unsupported_voice_control: '選択した声で利用できない話し方の設定です．設定を見直すか，テキスト入力を利用できます．',
   microphone_permission_denied: 'マイクの許可がありません．テキスト入力を利用できます．',
   microphone_unavailable: 'マイクを利用できません．テキスト入力を利用できます．',
   microphone_failed: '録音できませんでした．テキスト入力を利用できます．',
@@ -46,6 +49,7 @@ const MAX_PLAYBACK_CHUNK_BYTES = 8 * 1024 * 1024;
 const MAX_PLAYBACK_CHUNKS = 64;
 const MAX_EARLY_EVENT_BYTES = Math.ceil(MAX_PLAYBACK_BYTES / 3) * 4 + 512 * 1024;
 const READINESS_ERROR_CODES = new Set(['asr_unavailable', 'asr_permission_denied', 'asr_permission_restricted', 'asr_on_device_unavailable', 'asr_timeout', 'asr_canceled', 'invalid_voice_config']);
+const VOICE_PROFILE_ERROR_CODES = new Set(['voice_profile_unavailable', 'invalid_voice_profile', 'unsupported_voice_control']);
 const ASR_BRIDGE_ERROR_CODES = new Set([
   'asr_failed', 'asr_backpressure', 'asr_protocol_error', 'asr_timeout', 'asr_canceled', 'asr_unavailable',
   'asr_on_device_unavailable', 'asr_permission_denied', 'asr_permission_restricted', 'asr_stream_invalid',
@@ -441,10 +445,13 @@ export function mountVoiceInteraction({
       run.earlyBytes = 0;
       for (const event of early) receive(event);
       return live(run);
-    } catch {
+    } catch (error) {
       run.resolveIdentity(null);
       if (run.cancelRequested) finish(run, {...run.snapshot, state: 'CANCELED'});
-      else await fail(run, 'microphone_unavailable');
+      else {
+        const code = typeof error === 'string' ? error : error?.message;
+        await fail(run, VOICE_PROFILE_ERROR_CODES.has(code) ? code : 'microphone_unavailable');
+      }
       return false;
     }
   }

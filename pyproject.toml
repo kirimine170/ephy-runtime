@@ -18,7 +18,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+speech = [
+  "numpy>=2.2,<3.0",
+]
 dev = [
+  "numpy>=2.2,<3.0",
   "jsonschema[format]>=4.23,<5.0",
   "pytest>=8.2,<9.0",
 ]
