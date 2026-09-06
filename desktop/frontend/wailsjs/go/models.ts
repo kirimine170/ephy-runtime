@@ -2176,6 +2176,22 @@ export namespace main {
 	        this.volume = source["volume"];
 	    }
 	}
+	export class VoiceReadiness {
+	    state: string;
+	    can_start: boolean;
+	    error_code?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceReadiness(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.can_start = source["can_start"];
+	        this.error_code = source["error_code"];
+	    }
+	}
 	export class VoiceTurnRequest {
 	    session_id: string;
 	    input_kind?: string;

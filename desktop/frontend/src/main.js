@@ -11155,6 +11155,7 @@ document.getElementById('overview-preset-runtime-hint').addEventListener('click'
 voiceController = mountVoiceInteraction({
   root: document,
   bridge: interactionBridge,
+  getSessionID: () => chatConversationId,
   subscribe: callback => window.runtime?.EventsOnMultiple ? EventsOn('interaction-event', callback) : () => {},
   getRequest: () => ({
     session_id: chatConversationId,

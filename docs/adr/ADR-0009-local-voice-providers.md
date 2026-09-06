@@ -16,9 +16,11 @@ ASR helperのsourceは`desktop/voice/EphyASR.swift`に置き，`bash scripts/bui
 
 `--check --locale ja-JP`は権限状態，`supportsOnDeviceRecognition`，`isAvailable`を確認し，権限を要求しない．権限未決定の場合は`permission_required`をstdoutへ出して成功する．実際のtranscriptionが開始された場合だけ，必要に応じてmacOSのSpeech権限を要求する．認識要求は常に`requiresOnDeviceRecognition = true`とし，端末内認識が利用できなければ停止する．最終transcriptだけをstdoutに返し，stderrにはallowlistされた固定error codeだけを出す．Go側でも未知のdiagnosticを`asr_failed`へ置き換える．
 
-TTSは句点・疑問符・感嘆符・改行，または180 Unicode文字以内でtextを分割する．各chunkをstdinで`/usr/bin/say`へ渡し，22，050 Hz／mono／PCM16の独立したWAVを生成する．textはprocessの引数へ渡さず，`say`の埋込み命令delimiterを除去する．一時directoryは0700，WAVは0600で作成する．生成結果のformatと長さを検証し，音声fileを削除してからcallbackへ渡す．失敗とcancel時もcleanupを行う．callbackは再生を担当せず，interaction loopがplayback queueを管理する．
+TTSは確定済みの発話単位を，最大180 Unicode runeのchunkへ分割する．上限内では文末（句点・疑問符・感嘆符・改行），読点・空白，rune境界の順に優先する．句読点のない16，000 rune入力も有限長へ分割し，空chunkや不正UTF-8を作らない．未確定の生成末尾をこの分割処理へ渡さない．各chunkをstdinで`/usr/bin/say`へ渡し，22，050 Hz／mono／PCM16の独立したWAVを生成する．textはprocessの引数へ渡さず，`say`の埋込み命令delimiterを除去する．一時directoryは0700，WAVは0600で作成する．生成結果のformatと長さを検証し，音声fileを削除してからcallbackへ渡す．失敗とcancel時もcleanupを行う．callbackは再生を担当せず，interaction loopがplayback queueを管理する．
 
 ASR processは45秒，TTSの各chunkは30秒，準備確認は5秒を上限とし，親contextのcancel／deadlineを引き継ぐ．processのcancelは`exec.CommandContext`で実行する．raw audioをrepository，conversation history，traceへ保存する経路はproviderに設けない．TTSの一時fileだけが短時間存在する．
+
+録音開始前にprovider共通のreadinessを確認する．`ready`と`permission_required`は開始可能，`unavailable`は固定error codeとともに開始不可とする．未許可のSpeech権限を許可済みとは表示しない．Native providerはinstance／configuration／実行file identity単位で並行するreadiness probeを共有し，ASR readyは5秒，permission_requiredは1秒，TTS readyは30秒で失効する．失敗をcacheせず，認識・合成失敗や実行file変更後に再検証する．権限の外部変更は有限TTL後のprobe，および認識失敗で検出する．
 
 設定は以下に限定する．無効な構文は`invalid_voice_config`で停止する．
 

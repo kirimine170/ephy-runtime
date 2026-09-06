@@ -155,11 +155,11 @@ func TestNativeVoiceTTSChunksAndCleanup(t *testing.T) {
 		}
 		return nil
 	})
-	if err != nil || emitted != 3 || len(synthesized) != 3 {
+	if err != nil || emitted != 4 || len(synthesized) != 4 {
 		t.Fatalf("err=%v emitted=%d chunks=%d", err, emitted, len(synthesized))
 	}
-	if synthesized[2] != strings.Repeat("あ", 190) {
-		t.Fatal("committed utterance was split mid-word")
+	if synthesized[2] != strings.Repeat("あ", 180) || synthesized[3] != strings.Repeat("あ", 10) {
+		t.Fatal("long committed utterance did not respect the provider chunk bound")
 	}
 	entries, _ := os.ReadDir(tempRoot)
 	if len(entries) != 0 {

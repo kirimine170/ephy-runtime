@@ -1,7 +1,8 @@
 const TERMINAL = new Set(['COMPLETED', 'INCOMPLETE', 'CANCELED', 'FAILED']);
-const STATE_ORDER = ['IDLE', 'RECORDING', 'TRANSCRIBING', 'THINKING', 'SYNTHESIZING', 'PLAYING', 'CANCELING'];
+const STATE_ORDER = ['IDLE', 'PREPARING', 'RECORDING', 'TRANSCRIBING', 'THINKING', 'SYNTHESIZING', 'PLAYING', 'CANCELING'];
 const STATUS = {
   IDLE: '音声入力を開始できます．',
+  PREPARING: '音声認識を利用できるか確認しています．',
   RECORDING: '録音中です．停止すると送信します．',
   TRANSCRIBING: '音声を文字に変換しています．',
   THINKING: '応答を考えています．',
@@ -18,6 +19,7 @@ const FAILURES = {
   microphone_failed: '録音できませんでした．テキスト入力を利用できます．',
   invalid_audio: '録音した音声を読み取れませんでした．テキスト入力を利用できます．',
   asr_permission_denied: '音声認識の許可がありません．テキスト入力を利用できます．',
+  asr_permission_restricted: '音声認識の利用が制限されています．テキスト入力を利用できます．',
   asr_unavailable: '音声認識を利用できません．テキスト入力を利用できます．',
   asr_on_device_unavailable: '端末内の音声認識を利用できません．テキスト入力を利用できます．',
   asr_empty_result: '音声を認識できませんでした．テキスト入力を利用できます．',
@@ -33,9 +35,10 @@ const MAX_RECORDING_BYTES = 8 * 1024 * 1024;
 const MAX_RECORDING_MS = 60_000;
 const MAX_ASR_SAMPLE_RATE = 48000;
 const MAX_PLAYBACK_BYTES = 16 * 1024 * 1024;
-const MAX_PLAYBACK_CHUNK_BYTES = 2 * 1024 * 1024;
+const MAX_PLAYBACK_CHUNK_BYTES = 8 * 1024 * 1024;
 const MAX_PLAYBACK_CHUNKS = 64;
 const MAX_EARLY_EVENT_BYTES = Math.ceil(MAX_PLAYBACK_BYTES / 3) * 4 + 512 * 1024;
+const READINESS_ERROR_CODES = new Set(['asr_unavailable', 'asr_permission_denied', 'asr_permission_restricted', 'asr_on_device_unavailable', 'asr_timeout', 'asr_canceled', 'invalid_voice_config']);
 
 export function voiceStatusText(snapshot) {
   if (snapshot?.state === 'FAILED') {
@@ -133,6 +136,7 @@ export function mountVoiceInteraction({
   bridge,
   subscribe = () => () => {},
   getRequest = () => ({}),
+  getSessionID,
   onTranscript = () => {},
   onToken = () => {},
   onOutput = () => {},
@@ -180,7 +184,9 @@ export function mountVoiceInteraction({
       status.setAttribute('aria-live', 'polite');
       status.textContent = current?.permissionPending && !current.cancelRequested
         ? 'マイクの許可を確認しています．'
-        : voiceStatusText(current?.snapshot);
+        : recording && current?.readinessState === 'permission_required'
+          ? '録音中です．送信時に音声認識の許可を確認します．'
+          : voiceStatusText(current?.snapshot);
     }
     if (fallback) {
       fallback.hidden = !['FAILED', 'INCOMPLETE'].includes(current?.snapshot.state) || !current.snapshot.transcript;
@@ -281,11 +287,11 @@ export function mountVoiceInteraction({
     }
   }
 
-  function begin(expected = {}) {
+  function begin(expected = {}, preparing = false) {
     if (active() || disposed) return null;
     let ready;
     const run = {
-      snapshot: {state: 'RECORDING', operation_id: ''},
+      snapshot: {state: preparing ? 'PREPARING' : 'RECORDING', operation_id: ''},
       finished: false, cancelRequested: false, cancelPromise: null,
       recording: false, permissionPending: false, chunks: [], samples: 0,
       timer: null, context: null, contextReady: null,
@@ -294,6 +300,8 @@ export function mountVoiceInteraction({
       identityReady: new Promise((resolve) => { ready = resolve; }),
       resolveIdentity: null,
       expected,
+      operationRequested: !preparing,
+      readinessState: '',
     };
     run.resolveIdentity = ready;
     current = run;
@@ -335,7 +343,7 @@ export function mountVoiceInteraction({
   }
 
   async function start() {
-    const run = begin();
+    const run = begin({}, true);
     if (!run) return false;
     let request;
     try { request = getRequest(); } catch {
@@ -343,6 +351,27 @@ export function mountVoiceInteraction({
       await fail(run, 'microphone_unavailable');
       return false;
     }
+    if (!live(run)) return false;
+    let readiness;
+    try { readiness = await bridge.GetInteractionASRReadiness(); } catch {
+      run.resolveIdentity(null);
+      if (live(run)) await fail(run, 'asr_unavailable');
+      return false;
+    }
+    // Readiness owns no backend turn．A canceled or detached check must not
+    // create an operation or ask for microphone access when it returns late．
+    if (!live(run)) return false;
+    if (getSessionID && getSessionID() !== request.session_id) {
+      await cancel();
+      return false;
+    }
+    if (!readiness?.can_start || !['ready', 'permission_required'].includes(readiness.state) || readiness.error_code) {
+      run.resolveIdentity(null);
+      await fail(run, READINESS_ERROR_CODES.has(readiness?.error_code) ? readiness.error_code : 'asr_unavailable');
+      return false;
+    }
+    run.readinessState = readiness.state;
+    run.operationRequested = true;
     let pending;
     try { pending = bridge.StartInteraction(request); } catch { pending = Promise.reject(new Error('start_failed')); }
     if (!await identify(run, pending)) return false;
@@ -420,6 +449,7 @@ export function mountVoiceInteraction({
     run.snapshot = {...run.snapshot, state: 'CANCELING'};
     // Stop audible output and every microphone track before contacting Go．
     release(run);
+    if (!run.operationRequested) run.resolveIdentity(null);
     render();
     run.cancelPromise = (async () => {
       const operationID = run.snapshot.operation_id || await run.identityReady;

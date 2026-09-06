@@ -42,6 +42,16 @@ C0.3は上記SpeechUnits境界を再利用できる．そのGateで`VoiceTTS.Str
 
 ASR／TTSモデル導入，download，音声sample取込み，streaming ASR，VAD，barge-in，filler，Avatar，LoRA変更は実装していない．push，PR，merge，Sheets更新，次Gate開始には別の承認を必要とする．
 
+## C0.1安定化
+
+main `0b334c11478ac4abe7323a3358f773cf652a15f3`を基点に，生成内容の意味を変えずにnative speechと再生の境界を安定化する．確定済みSpeechUnitsのprovider内部で180 rune以内へ分割し，未確定bufferは引き続きTTSへ渡さない．
+
+RuntimeはRIFF全体，PCM16／mono／8，000〜48，000 Hz，data size，60秒以内を検証してdurationを得る．providerとRuntime／Frontendは1 chunk 8 MiB以内で一致させ，operation全体は16 MiB／64 audio chunksの上限を維持する．再生期限は最古の未完了chunkが所有する．再生開始ACK前は有限margin，開始後は検証済みdurationの残り＋同marginとし，marginの既定値・最大値は30秒である．後続chunkの生成や重複ACKで期限を延長せず，cancel／終端でtimerを解除する．
+
+Frontendはuser gesture内のAudioContext resumeを維持し，ASR readiness成功後だけoperation開始とgetUserMediaへ進む．確認中のcancel，会話切替，遅延結果はoperationを作らず終了する．`permission_required`は開始可能な未許可状態として区別し，開始不可の場合も通常text chatを利用できる．readinessのprovider/configuration単位cacheと再検証はADR-0009に従う．
+
+trace coalescingの実装は変更しない．8 revisions，24 generation segments，16 automatic continuations，64 audio chunksの統合testでevents上限128とcritical event保持を検証する．毎revisionに保存したtraceを新しいEngineから再読込し，正常完了・上限到達・cancelの各終端と，cancel後の旧audio/token破棄を検証する．
+
 ## 検証とrollback
 
 Python正規suite，Go全suiteとrace，Frontend suite，production build，repository validation，shell syntax，bindingsの2回生成一致を確認する．`TestGenerationInstalledSeasonsAndPlayback`は明示opt-inで既存modelとKyokoおよび実afplayを使用し，prompt cache cold／warm，再実行，cancel後の新session，一時WAV cleanupを検証する．raw音声を記録するASR試験ではない．再生開始はOS processの開始時刻であり，音響的な発音開始の計測とは区別する．

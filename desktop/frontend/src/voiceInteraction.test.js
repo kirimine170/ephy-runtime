@@ -69,12 +69,13 @@ function harness(options = {}) {
   let listener;
   let identity = 0;
   const nodes = Object.fromEntries(['voice-record', 'voice-cancel', 'voice-status', 'voice-fallback'].map((id) => [id, button()]));
-  const calls = {commit: [], cancel: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
+  const calls = {start: [], readiness: [], commit: [], cancel: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
   const contexts = [];
   const streams = [];
   const timeouts = new Map();
   const bridge = {
-    async StartInteraction(request) { calls.request = request; return snapshot(++identity); },
+    async GetInteractionASRReadiness() { calls.readiness.push(true); return {state: 'ready', can_start: true}; },
+    async StartInteraction(request) { calls.start.push(request); calls.request = request; return snapshot(++identity); },
     async CommitInteraction(...args) { calls.commit.push(args); },
     async CancelInteraction(op) {
       calls.cancel.push(op);
@@ -227,6 +228,7 @@ test('double cancel while Start is pending waits for identity and cancels once',
   const start = deferred();
   const h = harness({bridge: {StartInteraction: () => start.promise}});
   const starting = h.controller.start();
+  await tick(); // Readiness has passed，and backend Start now owns the pending identity．
   const cancelA = h.controller.cancel();
   const cancelB = h.controller.cancel();
   assert.equal(cancelA, cancelB);
@@ -621,4 +623,117 @@ test('cancel while continuation identity is pending cancels the resumed generati
   assert.equal(h.calls.complete.length, 0);
   assert.equal(h.calls.output.length, 0);
   assert.equal(h.controller.isActive(), false);
+});
+
+test('ASR readiness runs before operation creation or microphone capture and resumes audio in the user gesture', async () => {
+  const readiness = deferred();
+  let resumed = false;
+  const h = harness({
+    bridge: {GetInteractionASRReadiness() { assert.equal(resumed, true); return readiness.promise; }},
+    createAudioContext() { const context = new FakeContext(); context.resume = () => { resumed = true; return Promise.resolve(); }; return context; },
+  });
+  const starting = h.controller.start();
+  assert.equal(resumed, true);
+  assert.equal(h.calls.start.length, 0);
+  assert.equal(h.streams.length, 0);
+  assert.equal(h.nodes['voice-record'].attributes['aria-pressed'], 'false');
+  assert.match(h.nodes['voice-status'].textContent, /確認/);
+  readiness.resolve({state: 'ready', can_start: true});
+  assert.equal(await starting, true);
+  assert.equal(h.calls.start.length, 1);
+  assert.equal(h.streams.length, 1);
+  await h.controller.cancel();
+});
+
+test('unavailable denied restricted and malformed readiness never open a microphone or create a turn', async () => {
+  for (const result of [
+    {state: 'unavailable', can_start: false, error_code: 'asr_unavailable'},
+    {state: 'unavailable', can_start: false, error_code: 'asr_permission_denied'},
+    {state: 'unavailable', can_start: false, error_code: 'asr_permission_restricted'},
+    {state: 'unavailable', can_start: false, error_code: 'asr_on_device_unavailable'},
+    {state: 'ready', can_start: true, error_code: 'private provider diagnostic'},
+    {state: 'private provider state', can_start: true},
+    {state: 'permission_required', can_start: false},
+  ]) {
+    const h = harness({bridge: {GetInteractionASRReadiness: async () => result}});
+    assert.equal(await h.controller.start(), false);
+    assert.equal(h.calls.start.length, 0);
+    assert.equal(h.calls.fail.length, 0);
+    assert.equal(h.streams.length, 0);
+    assert.equal(h.contexts[0].closed, true);
+    assert.equal(h.controller.isActive(), false);
+    assert.deepEqual(h.calls.busy, [[true], [false]]);
+    assert.equal(h.nodes['voice-record'].attributes['aria-pressed'], 'false');
+    assert.match(h.nodes['voice-status'].textContent, /テキスト入力/);
+    assert.doesNotMatch(h.nodes['voice-status'].textContent, /private/);
+  }
+});
+
+test('permission-required readiness permits explicit recording without claiming Speech authorization', async () => {
+  const h = harness({bridge: {GetInteractionASRReadiness: async () => ({state: 'permission_required', can_start: true})}});
+  assert.equal(await h.controller.start(), true);
+  assert.equal(h.streams.length, 1);
+  assert.match(h.nodes['voice-status'].textContent, /送信時に音声認識の許可/);
+  await h.controller.cancel();
+});
+
+test('cancel during readiness returns immediately and a late ready result cannot start the old turn', async () => {
+  const pending = deferred();
+  let probes = 0;
+  const h = harness({bridge: {GetInteractionASRReadiness: () => ++probes === 1 ? pending.promise : Promise.resolve({state: 'ready', can_start: true})}});
+  const oldStart = h.controller.start();
+  assert.equal((await h.controller.cancel()).state, 'CANCELED');
+  assert.equal(h.calls.cancel.length, 0);
+  assert.equal(h.calls.start.length, 0);
+  assert.equal(await h.controller.start(), true);
+  pending.resolve({state: 'ready', can_start: true});
+  assert.equal(await oldStart, false);
+  assert.equal(h.calls.start.length, 1);
+  assert.equal(h.streams.length, 1);
+  assert.equal(h.controller.lastSnapshot.operation_id, 'op-1');
+  await h.controller.cancel();
+});
+
+test('session switch and dispose discard readiness without creating old operations', async () => {
+  for (const action of ['session', 'dispose']) {
+    const pending = deferred();
+    let session = 'session';
+    const h = harness({getSessionID: () => session, bridge: {GetInteractionASRReadiness: () => pending.promise}});
+    const starting = h.controller.start();
+    if (action === 'dispose') await h.controller.dispose();
+    else session = 'new-session';
+    pending.resolve({state: 'ready', can_start: true});
+    assert.equal(await starting, false);
+    assert.equal(h.calls.start.length, 0);
+    assert.equal(h.calls.cancel.length, 0);
+    assert.equal(h.streams.length, 0);
+    assert.equal(h.controller.isActive(), false);
+  }
+});
+
+test('rejected readiness returns text chat availability without exposing provider diagnostics', async () => {
+  const h = harness({bridge: {GetInteractionASRReadiness: async () => { throw new Error('private /provider/path'); }}});
+  assert.equal(await h.controller.start(), false);
+  assert.equal(h.controller.lastSnapshot.error_code, 'asr_unavailable');
+  assert.equal(h.calls.start.length, 0);
+  assert.equal(h.streams.length, 0);
+  assert.deepEqual(h.calls.busy, [[true], [false]]);
+  assert.doesNotMatch(h.nodes['voice-status'].textContent, /private|provider/);
+});
+
+test('playback accepts a complete 60-second 48-kHz mono PCM16 WAV within the provider contract', async () => {
+  const header = Buffer.from(encodePCM16Wav([new Float32Array([0])], 48000));
+  const dataBytes = 60 * 48000 * 2;
+  const bytes = Buffer.alloc(44 + dataBytes);
+  header.copy(bytes, 0, 0, 44);
+  bytes.writeUInt32LE(bytes.length - 8, 4);
+  bytes.writeUInt32LE(dataBytes, 40);
+  const h = harness();
+  await h.controller.adopt(snapshot(1, 'SYNTHESIZING'));
+  h.event(1, 'audio', {sequence: 1, audio_base64: bytes.toString('base64')});
+  await tick();
+  assert.equal(h.calls.fail.length, 0);
+  assert.equal(h.contexts[0].sources.length, 1);
+  assert.deepEqual(h.calls.playback[0], ['op-1', 1, 'started']);
+  await h.controller.cancel();
 });
