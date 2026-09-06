@@ -227,7 +227,7 @@ test('save and correction update use only evaluation fields and protect against 
   h.node('voice-comparison-choice').trigger('change');
   h.node('voice-comparison-correction').value = 'explicit correction';
   h.tags[0].checked = true;
-  h.tags[9].checked = true;
+  h.tags.find(tag => tag.value === 'other').checked = true;
   const pending = deferred();
   h.bridge.SaveInteractionEvaluation = async (request) => { h.calls.saved.push(request); return pending.promise; };
   const saving = h.evaluation.save();
@@ -288,7 +288,8 @@ test('exports call backend by format only and clearly disclose persisted correct
   assert.match(html, /修正文はローカルに保存され，JSON／JSONLにも出力/);
   assert.match(html, /候補文・元の発話・履歴は評価ファイルに保存・出力しません/);
   assert.match(html, /保存済みの全評価/);
-  assert.equal(Object.keys(VOICE_FAILURE_TAGS).length, 10);
+  assert.equal(Object.keys(VOICE_FAILURE_TAGS).length, 11);
+  assert.equal(VOICE_FAILURE_TAGS.incomplete_response, '応答が途中で終了した');
 });
 
 test('late export result from another session is suppressed and export errors stay generic', async () => {

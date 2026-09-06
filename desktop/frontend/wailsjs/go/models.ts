@@ -167,6 +167,7 @@ export namespace main {
 		}
 	}
 	export class ChatResponse {
+	    generation?: GenerationMetadata;
 	    answer: string;
 	    thinking?: string;
 	    sources?: SearchItem[];
@@ -181,6 +182,7 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.generation = this.convertValues(source["generation"], GenerationMetadata);
 	        this.answer = source["answer"];
 	        this.thinking = source["thinking"];
 	        this.sources = this.convertValues(source["sources"], SearchItem);
@@ -434,6 +436,72 @@ export namespace main {
 	        this.content = source["content"];
 	    }
 	}
+	export class GenerationLimits {
+	    segment_tokens: number;
+	    max_segments: number;
+	    max_total_tokens: number;
+	    soft_target_percent: number;
+
+	    static createFrom(source: any = {}) {
+	        return new GenerationLimits(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.segment_tokens = source["segment_tokens"];
+	        this.max_segments = source["max_segments"];
+	        this.max_total_tokens = source["max_total_tokens"];
+	        this.soft_target_percent = source["soft_target_percent"];
+	    }
+	}
+	export class GenerationMetadata {
+	    schema_version: number;
+	    finish_reason: string;
+	    provider_finish_reason: string;
+	    output_budget: number;
+	    total_token_budget: number;
+	    max_segments: number;
+	    soft_target_percent: number;
+	    completion_tokens: number;
+	    completion_tokens_observed: boolean;
+	    reasoning_tokens?: number;
+	    reasoning_token_source: string;
+	    segment_count: number;
+	    continuation_count: number;
+	    first_raw_delta_at?: string;
+	    first_visible_content_at?: string;
+	    terminal_sse_at?: string;
+	    terminal_sse: boolean;
+	    done_received: boolean;
+	    complete: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new GenerationMetadata(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.finish_reason = source["finish_reason"];
+	        this.provider_finish_reason = source["provider_finish_reason"];
+	        this.output_budget = source["output_budget"];
+	        this.total_token_budget = source["total_token_budget"];
+	        this.max_segments = source["max_segments"];
+	        this.soft_target_percent = source["soft_target_percent"];
+	        this.completion_tokens = source["completion_tokens"];
+	        this.completion_tokens_observed = source["completion_tokens_observed"];
+	        this.reasoning_tokens = source["reasoning_tokens"];
+	        this.reasoning_token_source = source["reasoning_token_source"];
+	        this.segment_count = source["segment_count"];
+	        this.continuation_count = source["continuation_count"];
+	        this.first_raw_delta_at = source["first_raw_delta_at"];
+	        this.first_visible_content_at = source["first_visible_content_at"];
+	        this.terminal_sse_at = source["terminal_sse_at"];
+	        this.terminal_sse = source["terminal_sse"];
+	        this.done_received = source["done_received"];
+	        this.complete = source["complete"];
+	    }
+	}
 	export class HealthResponse {
 	    status: string;
 	    service: string;
@@ -532,6 +600,7 @@ export namespace main {
 	    model_id: string;
 	    configuration_id: string;
 	    latency_ms: number;
+	    generation?: GenerationMetadata;
 
 	    static createFrom(source: any = {}) {
 	        return new InteractionCandidateIdentity(source);
@@ -544,7 +613,26 @@ export namespace main {
 	        this.model_id = source["model_id"];
 	        this.configuration_id = source["configuration_id"];
 	        this.latency_ms = source["latency_ms"];
+	        this.generation = this.convertValues(source["generation"], GenerationMetadata);
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class InteractionComparisonRequest {
 	    request_id: string;
@@ -576,6 +664,7 @@ export namespace main {
 	    trace_id: string;
 	    session_id: string;
 	    turn_id: string;
+	    generation_revision?: number;
 	    comparison_id?: string;
 	    candidates?: InteractionCandidateIdentity[];
 	    choice: string;
@@ -595,6 +684,7 @@ export namespace main {
 	        this.trace_id = source["trace_id"];
 	        this.session_id = source["session_id"];
 	        this.turn_id = source["turn_id"];
+	        this.generation_revision = source["generation_revision"];
 	        this.comparison_id = source["comparison_id"];
 	        this.candidates = this.convertValues(source["candidates"], InteractionCandidateIdentity);
 	        this.choice = source["choice"];
@@ -661,6 +751,9 @@ export namespace main {
 	    transcript?: string;
 	    response_plan?: ResponsePlan;
 	    error_code?: string;
+	    generation?: GenerationMetadata;
+	    generation_revision: number;
+	    last_audio_sequence: number;
 
 	    static createFrom(source: any = {}) {
 	        return new InteractionSnapshot(source);
@@ -676,6 +769,9 @@ export namespace main {
 	        this.transcript = source["transcript"];
 	        this.response_plan = this.convertValues(source["response_plan"], ResponsePlan);
 	        this.error_code = source["error_code"];
+	        this.generation = this.convertValues(source["generation"], GenerationMetadata);
+	        this.generation_revision = source["generation_revision"];
+	        this.last_audio_sequence = source["last_audio_sequence"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -712,6 +808,8 @@ export namespace main {
 	    provider_id: string;
 	    model_id: string;
 	    configuration_id: string;
+	    generation?: GenerationMetadata;
+	    generation_revision?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new InteractionTraceEvent(source);
@@ -734,7 +832,27 @@ export namespace main {
 	        this.provider_id = source["provider_id"];
 	        this.model_id = source["model_id"];
 	        this.configuration_id = source["configuration_id"];
+	        this.generation = this.convertValues(source["generation"], GenerationMetadata);
+	        this.generation_revision = source["generation_revision"];
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class KarteContextStatus {
 	    status: string;
@@ -2062,6 +2180,7 @@ export namespace main {
 	    session_id: string;
 	    input_kind?: string;
 	    chat: ChatRequest;
+	    generation_limits: GenerationLimits;
 
 	    static createFrom(source: any = {}) {
 	        return new VoiceTurnRequest(source);
@@ -2072,6 +2191,7 @@ export namespace main {
 	        this.session_id = source["session_id"];
 	        this.input_kind = source["input_kind"];
 	        this.chat = this.convertValues(source["chat"], ChatRequest);
+	        this.generation_limits = this.convertValues(source["generation_limits"], GenerationLimits);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

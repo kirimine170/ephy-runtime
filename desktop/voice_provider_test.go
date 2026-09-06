@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 )
 
 func providerTestWAV() []byte {
@@ -156,13 +155,11 @@ func TestNativeVoiceTTSChunksAndCleanup(t *testing.T) {
 		}
 		return nil
 	})
-	if err != nil || emitted != 4 || len(synthesized) != 4 {
+	if err != nil || emitted != 3 || len(synthesized) != 3 {
 		t.Fatalf("err=%v emitted=%d chunks=%d", err, emitted, len(synthesized))
 	}
-	for _, chunk := range synthesized {
-		if utf8.RuneCountInString(chunk) > 180 {
-			t.Fatal("unbounded chunk")
-		}
+	if synthesized[2] != strings.Repeat("あ", 190) {
+		t.Fatal("committed utterance was split mid-word")
 	}
 	entries, _ := os.ReadDir(tempRoot)
 	if len(entries) != 0 {

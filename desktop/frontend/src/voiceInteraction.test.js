@@ -69,7 +69,7 @@ function harness(options = {}) {
   let listener;
   let identity = 0;
   const nodes = Object.fromEntries(['voice-record', 'voice-cancel', 'voice-status', 'voice-fallback'].map((id) => [id, button()]));
-  const calls = {commit: [], cancel: [], playback: [], fail: [], transcript: [], token: [], complete: [], failure: [], canceled: [], busy: [], fallback: []};
+  const calls = {commit: [], cancel: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
   const contexts = [];
   const streams = [];
   const timeouts = new Map();
@@ -97,7 +97,9 @@ function harness(options = {}) {
     },
     onTranscript: (...args) => calls.transcript.push(args),
     onToken: (...args) => calls.token.push(args),
+    onOutput: (...args) => calls.output.push(args),
     onComplete: (...args) => calls.complete.push(args),
+    onIncomplete: (...args) => calls.incomplete.push(args),
     onFailure: (...args) => calls.failure.push(args),
     onCancel: (...args) => calls.canceled.push(args),
     onBusy: (...args) => calls.busy.push(args),
@@ -542,4 +544,81 @@ test('all lifecycle states have fixed status messages with a text fallback on fa
   }
   assert.match(voiceStatusText({state: 'FAILED', error_code: 'unknown private data'}), /テキスト入力/);
   assert.doesNotMatch(voiceStatusText({state: 'FAILED', error_code: 'unknown private data'}), /private/);
+});
+
+test('INCOMPLETE releases microphone and playback，preserves fixed status and text fallback without completion', async () => {
+  const h = harness();
+  await h.controller.start();
+  h.state(1, 'INCOMPLETE', {transcript: '四季を説明して', response_plan: {text: '春には花が咲きます．'}, generation: {finish_reason: 'length', complete: false}});
+  assert.equal(h.controller.isActive(), false);
+  assert.equal(h.calls.complete.length, 0);
+  assert.equal(h.calls.incomplete.length, 1);
+  assert.ok(h.streams[0].tracks.every(track => track.stopped));
+  assert.equal(h.contexts[0].closed, true);
+  assert.match(h.nodes['voice-status'].textContent, /未完了/);
+  assert.equal(h.nodes['voice-fallback'].hidden, false);
+  h.nodes['voice-fallback'].click();
+  assert.equal(h.calls.fallback[0][0].transcript, '四季を説明して');
+});
+
+test('confirmed output replaces the document while playback continues and mismatched snapshots are rejected', async () => {
+  const h = harness();
+  await h.controller.adopt(snapshot(1, 'THINKING', {transcript: 'prompt'}));
+  h.state(1, 'PLAYING');
+  h.event(1, 'output', {snapshot: snapshot(1, 'THINKING', {response_plan: {text: '春．'}, generation: {segment_count: 1}})});
+  assert.equal(h.calls.output.length, 1);
+  assert.equal(h.calls.output[0][0].state, 'PLAYING');
+  assert.equal(h.controller.lastSnapshot.response_plan.text, '春．');
+  h.event(1, 'output', {snapshot: snapshot(1, 'THINKING', {session_id: 'old-session', response_plan: {text: 'late'}})});
+  assert.equal(h.calls.output.length, 1);
+  await h.controller.cancel();
+});
+
+test('same-operation continuation rejects old-revision terminal output tokens and audio and resumes audio sequence', async () => {
+  const h = harness();
+  await h.controller.adopt(snapshot(1, 'THINKING', {generation_revision: 1, transcript: 'prompt'}));
+  h.state(1, 'INCOMPLETE', {generation_revision: 1, transcript: 'prompt', response_plan: {text: '春．'}});
+  const pending = deferred();
+  const adopted = h.controller.adopt(pending.promise, {operationID: 'op-1', revision: 2});
+  h.state(1, 'COMPLETED', {generation_revision: 1});
+  pending.resolve(snapshot(1, 'THINKING', {generation_revision: 2, transcript: 'prompt', last_audio_sequence: 3, response_plan: {text: '春．'}}));
+  assert.equal(await adopted, true);
+  const before = {tokens: h.calls.token.length, outputs: h.calls.output.length};
+  h.event(1, 'token', {generation_revision: 1, text: 'old text'});
+  h.event(1, 'output', {generation_revision: 1, snapshot: snapshot(1, 'THINKING', {generation_revision: 1, response_plan: {text: 'old full text'}})});
+  h.audio(1, 4);
+  h.state(1, 'COMPLETED', {generation_revision: 1});
+  assert.equal(h.controller.isActive(), true);
+  assert.equal(h.calls.token.length, before.tokens);
+  assert.equal(h.calls.output.length, before.outputs);
+  assert.equal(h.contexts[1].sources.length, 0);
+  h.event(1, 'token', {generation_revision: 2, text: '夏．'});
+  h.event(1, 'audio', {generation_revision: 2, sequence: 4, audio_base64: wav()});
+  await tick();
+  assert.equal(h.calls.token.at(-1)[1], '夏．');
+  assert.equal(h.contexts[1].sources.length, 1);
+  assert.deepEqual(h.calls.playback.at(-1), ['op-1', 4, 'started']);
+  const canceled = snapshot(1, 'CANCELED', {generation_revision: 2});
+  h.bridge.CancelInteraction = async () => canceled;
+  await h.controller.cancel();
+  h.event(1, 'audio', {generation_revision: 2, sequence: 5, audio_base64: wav()});
+  h.event(1, 'token', {generation_revision: 2, text: 'after cancel'});
+  assert.equal(h.contexts[1].sources.length, 1);
+  assert.equal(h.contexts[1].sources[0].stopped, true);
+  assert.equal(h.calls.token.at(-1)[1], '夏．');
+});
+
+test('cancel while continuation identity is pending cancels the resumed generation and blocks late output', async () => {
+  const h = harness();
+  const pending = deferred();
+  const adopted = h.controller.adopt(pending.promise, {operationID: 'op-1', revision: 2});
+  const canceled = h.controller.cancel();
+  pending.resolve(snapshot(1, 'THINKING', {generation_revision: 2, transcript: 'old session text'}));
+  assert.equal(await adopted, false);
+  await canceled;
+  h.event(1, 'output', {generation_revision: 2, snapshot: snapshot(1, 'THINKING', {generation_revision: 2, response_plan: {text: 'late'}})});
+  assert.deepEqual(h.calls.cancel, ['op-1']);
+  assert.equal(h.calls.complete.length, 0);
+  assert.equal(h.calls.output.length, 0);
+  assert.equal(h.controller.isActive(), false);
 });

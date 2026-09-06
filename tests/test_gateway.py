@@ -407,7 +407,8 @@ def test_chat_streaming_emits_structured_error_when_backend_is_not_ready() -> No
     assert response.status_code == 200
     assert b"event: error" in payload
     assert b"backend_unavailable" in payload
-    assert b"503 Service Unavailable" in payload
+    assert b"503 Service Unavailable" not in payload
+    assert b'"finish_reason": "unknown"' in payload
     assert b"qwen3-30b-a3b" in payload
 
 

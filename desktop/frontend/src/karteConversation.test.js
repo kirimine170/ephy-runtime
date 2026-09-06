@@ -37,6 +37,20 @@ test('conversation request keeps only completed user and assistant messages', ()
   ]);
 });
 
+test('Karte never serializes unconfirmed or unsuccessful voice assistant entries', () => {
+  for (const terminalState of ['FAILED', 'CANCELED', 'INCOMPLETE', '']) {
+    assert.throws(() => buildKarteConversationRequest({entries: [
+      {role: 'user', text: 'question'},
+      {role: 'assistant', voice: true, terminalState, text: '未完の回答'},
+    ]}), /完了済み/);
+  }
+  const payload = buildKarteConversationRequest({entries: [
+    {role: 'user', text: 'question'},
+    {role: 'assistant', voice: true, terminalState: 'COMPLETED', finishReason: 'stop', text: '回答は完結しました．', pendingText: 'private preview'},
+  ]});
+  assert.deepEqual(payload.messages.at(-1), {role: 'assistant', content: '回答は完結しました．'});
+});
+
 
 test('local ISO timestamp preserves the local offset', () => {
   const date = new Date(2026, 8, 1, 10, 30, 45);

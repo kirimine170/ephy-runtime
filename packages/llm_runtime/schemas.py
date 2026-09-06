@@ -14,6 +14,9 @@ class RequestMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     mode: str | None = None
+    resolved_mode: str | None = None
+    completion_guidance: str | None = Field(default=None, max_length=2000)
+    routing_message_count: int | None = Field(default=None, ge=1, le=32)
     session_mode: Literal["default", "voice", "writing", "tech"] = "default"
     project: str | None = None
     source_path: str | None = None

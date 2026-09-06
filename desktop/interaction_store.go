@@ -13,21 +13,23 @@ import (
 // This allowlisted schema deliberately has no payload, prompt, transcript,
 // response, private context, audio bytes, or free-form provider error field.
 type InteractionTraceEvent struct {
-	SchemaVersion   int    `json:"schema_version"`
-	EventID         string `json:"event_id"`
-	TraceID         string `json:"trace_id"`
-	SessionID       string `json:"session_id"`
-	TurnID          string `json:"turn_id"`
-	OperationID     string `json:"operation_id"`
-	Name            string `json:"name"`
-	Source          string `json:"source"`
-	Timestamp       string `json:"timestamp"`
-	MonotonicMS     int64  `json:"monotonic_ms"`
-	Status          string `json:"status"`
-	ErrorCode       string `json:"error_code,omitempty"`
-	ProviderID      string `json:"provider_id"`
-	ModelID         string `json:"model_id"`
-	ConfigurationID string `json:"configuration_id"`
+	SchemaVersion      int                 `json:"schema_version"`
+	EventID            string              `json:"event_id"`
+	TraceID            string              `json:"trace_id"`
+	SessionID          string              `json:"session_id"`
+	TurnID             string              `json:"turn_id"`
+	OperationID        string              `json:"operation_id"`
+	Name               string              `json:"name"`
+	Source             string              `json:"source"`
+	Timestamp          string              `json:"timestamp"`
+	MonotonicMS        int64               `json:"monotonic_ms"`
+	Status             string              `json:"status"`
+	ErrorCode          string              `json:"error_code,omitempty"`
+	ProviderID         string              `json:"provider_id"`
+	ModelID            string              `json:"model_id"`
+	ConfigurationID    string              `json:"configuration_id"`
+	Generation         *GenerationMetadata `json:"generation,omitempty"`
+	GenerationRevision int                 `json:"generation_revision,omitempty"`
 }
 type TraceValidation struct {
 	Valid       bool             `json:"valid"`
@@ -40,6 +42,9 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 	first := map[string]int64{}
 	last := map[string]int64{}
 	for _, event := range events {
+		if event.Name == "turn_completed" && event.SchemaVersion >= 2 && (event.Generation == nil || !event.Generation.Complete || !event.Generation.TerminalSSE || !event.Generation.DoneReceived || event.Generation.FinishReason != "stop") {
+			validation.Missing = append(validation.Missing, "generation_complete")
+		}
 		if _, ok := first[event.Name]; !ok {
 			first[event.Name] = event.MonotonicMS
 		}
@@ -47,11 +52,16 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 	}
 	required := []string{"user_speech_start"}
 	if _, completed := first["turn_completed"]; completed {
-		required = append(required, "user_speech_end", "endpoint_commit", "asr_started", "asr_final", "llm_requested", "llm_first_token", "llm_completed", "tts_requested", "tts_first_chunk", "tts_completed", "audio_play_started", "audio_play_stopped")
+		required = append(required, "user_speech_end", "endpoint_commit", "asr_started", "asr_final", "llm_requested", "llm_first_token", "llm_completed")
+		if _, skipped := first["tts_skipped"]; !skipped {
+			required = append(required, "tts_requested", "tts_first_chunk", "tts_completed", "audio_play_started", "audio_play_stopped")
+		}
 	} else if _, canceled := first["cancel_requested"]; canceled {
 		required = append(required, "cancel_acknowledged")
 	} else if _, failed := first["turn_failed"]; !failed {
-		required = append(required, "terminal_event")
+		if _, incomplete := first["turn_incomplete"]; !incomplete {
+			required = append(required, "terminal_event")
+		}
 	}
 	for _, name := range required {
 		if _, ok := first[name]; !ok {

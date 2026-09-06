@@ -85,26 +85,29 @@ type ModelItem struct {
 }
 
 type ChatRequest struct {
-	temperatureExplicit bool
-	Messages            []GatewayMessage `json:"messages,omitempty"`
-	SessionID           string           `json:"session_id,omitempty"`
-	SessionMode         string           `json:"session_mode,omitempty"`
-	ModelID             string           `json:"model_id,omitempty"`
-	ProviderID          string           `json:"provider_id,omitempty"`
-	ConfigurationID     string           `json:"configuration_id,omitempty"`
-	Mode                string           `json:"mode"`
-	Prompt              string           `json:"prompt"`
-	Project             string           `json:"project,omitempty"`
-	SourcePath          string           `json:"source_path,omitempty"`
-	SourceScope         string           `json:"source_scope,omitempty"`
-	TopK                int              `json:"top_k,omitempty"`
-	Tags                []string         `json:"tags,omitempty"`
-	Temperature         float64          `json:"temperature"`
-	MaxTokens           int              `json:"max_tokens"`
-	RequestID           string           `json:"request_id,omitempty"`
-	Stream              bool             `json:"stream,omitempty"`
-	WebSearch           bool             `json:"web_search,omitempty"`
-	WebPlanID           string           `json:"web_search_plan_id,omitempty"`
+	generationMessages            []GatewayMessage
+	generationInstruction         string
+	generationRoutingMessageCount int
+	temperatureExplicit           bool
+	Messages                      []GatewayMessage `json:"messages,omitempty"`
+	SessionID                     string           `json:"session_id,omitempty"`
+	SessionMode                   string           `json:"session_mode,omitempty"`
+	ModelID                       string           `json:"model_id,omitempty"`
+	ProviderID                    string           `json:"provider_id,omitempty"`
+	ConfigurationID               string           `json:"configuration_id,omitempty"`
+	Mode                          string           `json:"mode"`
+	Prompt                        string           `json:"prompt"`
+	Project                       string           `json:"project,omitempty"`
+	SourcePath                    string           `json:"source_path,omitempty"`
+	SourceScope                   string           `json:"source_scope,omitempty"`
+	TopK                          int              `json:"top_k,omitempty"`
+	Tags                          []string         `json:"tags,omitempty"`
+	Temperature                   float64          `json:"temperature"`
+	MaxTokens                     int              `json:"max_tokens"`
+	RequestID                     string           `json:"request_id,omitempty"`
+	Stream                        bool             `json:"stream,omitempty"`
+	WebSearch                     bool             `json:"web_search,omitempty"`
+	WebPlanID                     string           `json:"web_search_plan_id,omitempty"`
 }
 
 type GatewayChatRequest struct {
@@ -122,19 +125,22 @@ type GatewayMessage struct {
 }
 
 type GatewayMetadata struct {
-	SessionID   string   `json:"session_id,omitempty"`
-	SessionMode string   `json:"session_mode,omitempty"`
-	Mode        string   `json:"mode"`
-	Project     string   `json:"project,omitempty"`
-	SourcePath  string   `json:"source_path,omitempty"`
-	SourceScope string   `json:"source_scope,omitempty"`
-	TopK        int      `json:"top_k,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	WebSearch   bool     `json:"web_search,omitempty"`
-	WebPlanID   string   `json:"web_search_plan_id,omitempty"`
+	CompletionGuidance  string   `json:"completion_guidance,omitempty"`
+	RoutingMessageCount int      `json:"routing_message_count,omitempty"`
+	SessionID           string   `json:"session_id,omitempty"`
+	SessionMode         string   `json:"session_mode,omitempty"`
+	Mode                string   `json:"mode"`
+	Project             string   `json:"project,omitempty"`
+	SourcePath          string   `json:"source_path,omitempty"`
+	SourceScope         string   `json:"source_scope,omitempty"`
+	TopK                int      `json:"top_k,omitempty"`
+	Tags                []string `json:"tags,omitempty"`
+	WebSearch           bool     `json:"web_search,omitempty"`
+	WebPlanID           string   `json:"web_search_plan_id,omitempty"`
 }
 
 type ChatResponse struct {
+	Generation         *GenerationMetadata `json:"generation,omitempty"`
 	Answer             string              `json:"answer"`
 	Thinking           string              `json:"thinking,omitempty"`
 	Sources            []SearchItem        `json:"sources,omitempty"`
@@ -825,16 +831,18 @@ func (a *App) chatWithContext(ctx context.Context, request ChatRequest, onToken 
 		Model:    "auto",
 		Messages: messages,
 		Metadata: GatewayMetadata{
-			SessionID:   request.SessionID,
-			SessionMode: request.SessionMode,
-			Mode:        mode,
-			Project:     request.Project,
-			SourcePath:  request.SourcePath,
-			SourceScope: request.SourceScope,
-			TopK:        request.TopK,
-			Tags:        request.Tags,
-			WebSearch:   request.WebSearch,
-			WebPlanID:   request.WebPlanID,
+			CompletionGuidance:  request.generationInstruction,
+			RoutingMessageCount: request.generationRoutingMessageCount,
+			SessionID:           request.SessionID,
+			SessionMode:         request.SessionMode,
+			Mode:                mode,
+			Project:             request.Project,
+			SourcePath:          request.SourcePath,
+			SourceScope:         request.SourceScope,
+			TopK:                request.TopK,
+			Tags:                request.Tags,
+			WebSearch:           request.WebSearch,
+			WebPlanID:           request.WebPlanID,
 		},
 	}
 	if request.Temperature > 0 || request.temperatureExplicit {
@@ -850,14 +858,28 @@ func (a *App) chatWithContext(ctx context.Context, request ChatRequest, onToken 
 
 	var raw map[string]any
 	if err := a.postJSONContext(ctx, "/v1/chat/completions", payload, &raw); err != nil {
-		return nil, err
+		fixed := safeGenerationError(ctx, err)
+		return &ChatResponse{FinishReason: fixed.reason, Generation: &GenerationMetadata{
+			SchemaVersion: 2, FinishReason: fixed.reason, ProviderFinishReason: "unknown",
+			OutputBudget: request.MaxTokens, SegmentCount: 1,
+		}}, fixed
+	}
+	generation := &GenerationMetadata{SchemaVersion: 2, OutputBudget: request.MaxTokens, SegmentCount: 1}
+	generation.ProviderFinishReason = normalizedFinishReason(extractFinishReason(raw))
+	generation.FinishReason = generation.ProviderFinishReason
+	generation.Complete = generation.FinishReason == "stop"
+	if err := applyGenerationUsage(generation, raw); err != nil {
+		generation.Complete = false
+		generation.FinishReason = "transport_eof"
+		return &ChatResponse{Generation: generation, FinishReason: generation.FinishReason}, err
 	}
 
 	return &ChatResponse{
+		Generation:         generation,
 		Answer:             extractChatAnswer(raw),
 		Thinking:           extractChatReasoning(raw),
 		Sources:            extractChatSources(raw),
-		FinishReason:       extractFinishReason(raw),
+		FinishReason:       generation.FinishReason,
 		Raw:                raw,
 		WebSearchStatus:    extractWebSearchStatus(raw),
 		KarteContextStatus: extractKarteContextStatus(raw),
@@ -1000,140 +1022,7 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 }
 
 func (a *App) chatStreamContext(ctx context.Context, payload GatewayChatRequest, requestID string, onToken func(string)) (*ChatResponse, error) {
-	emit := func(event ChatStreamEvent) {
-		if ctx.Err() != nil {
-			return
-		}
-		if onToken != nil {
-			if event.Kind == "delta" && event.Channel == "answer" {
-				onToken(event.Delta)
-			}
-			return
-		}
-		a.emitChatStreamEvent(event)
-	}
-	var answerBuilder strings.Builder
-	var thinkingBuilder strings.Builder
-	sources := []SearchItem{}
-	finishReason := ""
-	var webSearchStatus *WebSearchStatus
-	var karteContextStatus *KarteContextStatus
-
-	err := a.streamGatewayResponseContext(ctx, "/v1/chat/completions", payload, func(eventType string, data string) error {
-		if data == "[DONE]" {
-			return nil
-		}
-		if eventType == "route" {
-			var route struct {
-				Provider        string `json:"provider"`
-				Model           string `json:"model"`
-				ConfigurationID string `json:"configuration_id"`
-			}
-			if err := json.Unmarshal([]byte(data), &route); err != nil {
-				return fmt.Errorf("invalid route event")
-			}
-			reportInteractionModel(ctx, route.Provider, route.Model, route.ConfigurationID)
-			return nil
-		}
-		if eventType == "error" {
-			return parseStreamError(data)
-		}
-		if eventType == "web_search_status" {
-			var status WebSearchStatus
-			if err := json.Unmarshal([]byte(data), &status); err != nil {
-				return nil
-			}
-			webSearchStatus = &status
-			emit(ChatStreamEvent{
-				RequestID:       requestID,
-				Kind:            "web_search_status",
-				WebSearchStatus: &status,
-			})
-			return nil
-		}
-		if eventType == "karte_context_status" {
-			var status KarteContextStatus
-			if err := json.Unmarshal([]byte(data), &status); err != nil {
-				return nil
-			}
-			karteContextStatus = &status
-			emit(ChatStreamEvent{
-				RequestID:          requestID,
-				Kind:               "karte_context_status",
-				KarteContextStatus: &status,
-			})
-			return nil
-		}
-		if eventType == "sources" {
-			var payload struct {
-				Sources []SearchItem `json:"sources"`
-			}
-			if err := json.Unmarshal([]byte(data), &payload); err != nil {
-				return nil
-			}
-			sources = payload.Sources
-			emit(ChatStreamEvent{
-				RequestID: requestID,
-				Kind:      "sources",
-				Sources:   sources,
-			})
-			return nil
-		}
-		chunk, err := parseStreamChunk(eventType, data)
-		if err != nil {
-			return nil
-		}
-		if chunk.Thinking != "" {
-			thinkingBuilder.WriteString(chunk.Thinking)
-			emit(ChatStreamEvent{
-				RequestID: requestID,
-				Kind:      "delta",
-				Channel:   "thinking",
-				Delta:     chunk.Thinking,
-			})
-		}
-		if chunk.Answer != "" {
-			answerBuilder.WriteString(chunk.Answer)
-			emit(ChatStreamEvent{
-				RequestID: requestID,
-				Kind:      "delta",
-				Channel:   "answer",
-				Delta:     chunk.Answer,
-			})
-		}
-		if chunk.FinishReason != "" {
-			finishReason = chunk.FinishReason
-		}
-		return nil
-	})
-	if err != nil {
-		emit(ChatStreamEvent{RequestID: requestID, Kind: "error", Error: err.Error()})
-		return nil, err
-	}
-
-	response := &ChatResponse{
-		Answer:       answerBuilder.String(),
-		Thinking:     thinkingBuilder.String(),
-		Sources:      sources,
-		FinishReason: finishReason,
-		Raw: map[string]any{
-			"stream":               true,
-			"finish_reason":        finishReason,
-			"sources":              sources,
-			"karte_context_status": karteContextStatus,
-		},
-		WebSearchStatus:    webSearchStatus,
-		KarteContextStatus: karteContextStatus,
-	}
-	emit(ChatStreamEvent{
-		RequestID:    requestID,
-		Kind:         "done",
-		Thinking:     response.Thinking,
-		Answer:       response.Answer,
-		Sources:      response.Sources,
-		FinishReason: response.FinishReason,
-	})
-	return response, nil
+	return a.consumeGenerationStream(ctx, payload, requestID, onToken)
 }
 
 func (a *App) queryStream(request QueryRequest) (*QueryResponse, error) {
@@ -5512,6 +5401,9 @@ func (a *App) streamGatewayResponseContext(ctx context.Context, path string, pay
 	defer response.Body.Close()
 
 	if response.StatusCode >= http.StatusBadRequest {
+		if path == "/v1/chat/completions" {
+			return &generationStreamError{code: "backend_unavailable", reason: "unknown"}
+		}
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 		trimmed := strings.TrimSpace(string(data))
 		if trimmed == "" {
@@ -5560,7 +5452,11 @@ func (a *App) streamGatewayResponseContext(ctx context.Context, path string, pay
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-	return dispatch()
+	// A truncated SSE frame is not a terminal event，even if its JSON parses．
+	if len(dataLines) != 0 {
+		return io.ErrUnexpectedEOF
+	}
+	return ctx.Err()
 }
 
 func (a *App) emitChatStreamEvent(event ChatStreamEvent) {
@@ -5596,21 +5492,7 @@ func parseStreamChunk(eventType string, data string) (*parsedStreamChunk, error)
 }
 
 func parseStreamError(data string) error {
-	var payload struct {
-		Error string `json:"error"`
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return fmt.Errorf("gateway stream failed: %s", strings.TrimSpace(data))
-	}
-	message := strings.TrimSpace(payload.Error)
-	if message == "" {
-		message = "backend stream failed"
-	}
-	if model := strings.TrimSpace(payload.Model); model != "" {
-		return fmt.Errorf("%s: %s", model, message)
-	}
-	return fmt.Errorf("%s", message)
+	return parseGenerationStreamError(data)
 }
 
 func (a *App) captureGatewayStream(reader io.ReadCloser) {
