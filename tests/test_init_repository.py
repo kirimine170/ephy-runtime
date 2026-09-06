@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+
+from repository_fixture import copy_template_repository
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -18,11 +19,7 @@ class InitRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.repository = Path(self.temporary_directory.name) / "repository"
-        shutil.copytree(
-            REPOSITORY_ROOT,
-            self.repository,
-            ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
-        )
+        copy_template_repository(REPOSITORY_ROOT, self.repository)
         (self.repository / ".ephy" / "project.yaml").write_text(
             """schema_version: 1
 

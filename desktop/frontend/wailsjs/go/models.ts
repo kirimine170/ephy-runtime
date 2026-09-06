@@ -118,88 +118,6 @@ export namespace main {
 	        this.web_search_plan_id = source["web_search_plan_id"];
 	    }
 	}
-	export class WebSearchStatus {
-	    status: string;
-	    detail?: string;
-	    source_count: number;
-
-	    static createFrom(source: any = {}) {
-	        return new WebSearchStatus(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.status = source["status"];
-	        this.detail = source["detail"];
-	        this.source_count = source["source_count"];
-	    }
-	}
-	export class KarteContextStatus {
-	    status: string;
-	    source_count: number;
-	    searched_count: number;
-	    read_count: number;
-	    read_failed_count: number;
-
-	    static createFrom(source: any = {}) {
-	        return new KarteContextStatus(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.status = source["status"];
-	        this.source_count = source["source_count"];
-	        this.searched_count = source["searched_count"];
-	        this.read_count = source["read_count"];
-	        this.read_failed_count = source["read_failed_count"];
-	    }
-	}
-	export class SearchItem {
-	    chunk_id: string;
-	    doc_id?: string;
-	    source_path: string;
-	    relative_path?: string;
-	    heading_path: string[];
-	    project: string;
-	    kind?: string;
-	    tags: string[];
-	    sensitivity?: string;
-	    chunk_text: string;
-	    score: number;
-	    source_type?: string;
-	    source_id?: string;
-	    title?: string;
-	    url?: string;
-	    snippet?: string;
-	    trust_level?: string;
-	    injection_suspected?: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new SearchItem(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.chunk_id = source["chunk_id"];
-	        this.doc_id = source["doc_id"];
-	        this.source_path = source["source_path"];
-	        this.relative_path = source["relative_path"];
-	        this.heading_path = source["heading_path"];
-	        this.project = source["project"];
-	        this.kind = source["kind"];
-	        this.tags = source["tags"];
-	        this.sensitivity = source["sensitivity"];
-	        this.chunk_text = source["chunk_text"];
-	        this.score = source["score"];
-	        this.source_type = source["source_type"];
-	        this.source_id = source["source_id"];
-	        this.title = source["title"];
-	        this.url = source["url"];
-	        this.snippet = source["snippet"];
-	        this.trust_level = source["trust_level"];
-	        this.injection_suspected = source["injection_suspected"];
-	    }
-	}
 	export class ChatResponse {
 	    answer: string;
 	    thinking?: string;
@@ -546,40 +464,24 @@ export namespace main {
 	        this.tags = source["tags"];
 	    }
 	}
-	export class KarteConversationMessage {
-	    role: string;
-	    content: string;
+	export class KarteContextStatus {
+	    status: string;
+	    source_count: number;
+	    searched_count: number;
+	    read_count: number;
+	    read_failed_count: number;
 
 	    static createFrom(source: any = {}) {
-	        return new KarteConversationMessage(source);
+	        return new KarteContextStatus(source);
 	    }
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.role = source["role"];
-	        this.content = source["content"];
-	    }
-	}
-	export class KarteSimilarDocument {
-	    doc_id: string;
-	    title: string;
-	    relative_path: string;
-	    project?: string;
-	    kind?: string;
-	    similarity: number;
-
-	    static createFrom(source: any = {}) {
-	        return new KarteSimilarDocument(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.doc_id = source["doc_id"];
-	        this.title = source["title"];
-	        this.relative_path = source["relative_path"];
-	        this.project = source["project"];
-	        this.kind = source["kind"];
-	        this.similarity = source["similarity"];
+	        this.status = source["status"];
+	        this.source_count = source["source_count"];
+	        this.searched_count = source["searched_count"];
+	        this.read_count = source["read_count"];
+	        this.read_failed_count = source["read_failed_count"];
 	    }
 	}
 	export class KarteConversationContextStatus {
@@ -598,6 +500,20 @@ export namespace main {
 	        this.searched_count = source["searched_count"];
 	        this.read_count = source["read_count"];
 	        this.read_failed_count = source["read_failed_count"];
+	    }
+	}
+	export class KarteConversationMessage {
+	    role: string;
+	    content: string;
+
+	    static createFrom(source: any = {}) {
+	        return new KarteConversationMessage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.content = source["content"];
 	    }
 	}
 	export class KarteConversationPlanResponse {
@@ -750,7 +666,28 @@ export namespace main {
 	        this.receipt = source["receipt"];
 	    }
 	}
+	export class KarteSimilarDocument {
+	    doc_id: string;
+	    title: string;
+	    relative_path: string;
+	    project?: string;
+	    kind?: string;
+	    similarity: number;
 
+	    static createFrom(source: any = {}) {
+	        return new KarteSimilarDocument(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.doc_id = source["doc_id"];
+	        this.title = source["title"];
+	        this.relative_path = source["relative_path"];
+	        this.project = source["project"];
+	        this.kind = source["kind"];
+	        this.similarity = source["similarity"];
+	    }
+	}
 	export class LocalAdapterArtifact {
 	    id: string;
 	    base_model_id: string;
@@ -853,52 +790,6 @@ export namespace main {
 	        this.available = source["available"];
 	    }
 	}
-	export class LocalModelSelection {
-	    model_id: string;
-	    adapter_id?: string;
-
-	    static createFrom(source: any = {}) {
-	        return new LocalModelSelection(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.model_id = source["model_id"];
-	        this.adapter_id = source["adapter_id"];
-	    }
-	}
-	export class RuntimeModelProfile {
-	    family: string;
-	    parameter_count_billions: number;
-	    capabilities: string[];
-	    enabled_capabilities: string[];
-	    thinking_mode: string;
-	    native_context_size: number;
-	    maximum_context_size: number;
-	    default_context_size: number;
-	    startup_timeout_seconds: number;
-	    resource_class: string;
-	    estimated_minimum_memory_bytes: number;
-
-	    static createFrom(source: any = {}) {
-	        return new RuntimeModelProfile(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.family = source["family"];
-	        this.parameter_count_billions = source["parameter_count_billions"];
-	        this.capabilities = source["capabilities"];
-	        this.enabled_capabilities = source["enabled_capabilities"];
-	        this.thinking_mode = source["thinking_mode"];
-	        this.native_context_size = source["native_context_size"];
-	        this.maximum_context_size = source["maximum_context_size"];
-	        this.default_context_size = source["default_context_size"];
-	        this.startup_timeout_seconds = source["startup_timeout_seconds"];
-	        this.resource_class = source["resource_class"];
-	        this.estimated_minimum_memory_bytes = source["estimated_minimum_memory_bytes"];
-	    }
-	}
 	export class LocalModelCatalog {
 	    models: LocalModelArtifact[];
 	    adapters: LocalAdapterArtifact[];
@@ -941,7 +832,20 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class LocalModelSelection {
+	    model_id: string;
+	    adapter_id?: string;
 
+	    static createFrom(source: any = {}) {
+	        return new LocalModelSelection(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model_id = source["model_id"];
+	        this.adapter_id = source["adapter_id"];
+	    }
+	}
 	export class ModelItem {
 	    id: string;
 	    object: string;
@@ -1122,68 +1026,6 @@ export namespace main {
 	        this.detail = source["detail"];
 	    }
 	}
-	export class ProjectPreset {
-	    name: string;
-	    runtime_profile: string;
-	    watch_paths: string;
-	    watch_project: string;
-	    watch_interval: number;
-	    ingest_paths: string;
-	    ingest_project: string;
-	    chat_request_name: string;
-	    chat_expect_contains: string;
-	    ingest_request_name: string;
-	    rag_project: string;
-	    rag_source_path: string;
-	    rag_top_k: number;
-	    rag_request_name: string;
-	    rag_expect_contains: string;
-	    eval_dataset: string;
-	    eval_project: string;
-	    eval_source_path: string;
-	    eval_top_k: number;
-	    eval_with_answer: boolean;
-	    eval_request_name: string;
-	    eval_min_source_hit_rate: number;
-	    workflow_run_smoke: boolean;
-	    smoke_skip_qdrant: boolean;
-	    smoke_skip_embedding: boolean;
-	    smoke_skip_reranker: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new ProjectPreset(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.runtime_profile = source["runtime_profile"];
-	        this.watch_paths = source["watch_paths"];
-	        this.watch_project = source["watch_project"];
-	        this.watch_interval = source["watch_interval"];
-	        this.ingest_paths = source["ingest_paths"];
-	        this.ingest_project = source["ingest_project"];
-	        this.chat_request_name = source["chat_request_name"];
-	        this.chat_expect_contains = source["chat_expect_contains"];
-	        this.ingest_request_name = source["ingest_request_name"];
-	        this.rag_project = source["rag_project"];
-	        this.rag_source_path = source["rag_source_path"];
-	        this.rag_top_k = source["rag_top_k"];
-	        this.rag_request_name = source["rag_request_name"];
-	        this.rag_expect_contains = source["rag_expect_contains"];
-	        this.eval_dataset = source["eval_dataset"];
-	        this.eval_project = source["eval_project"];
-	        this.eval_source_path = source["eval_source_path"];
-	        this.eval_top_k = source["eval_top_k"];
-	        this.eval_with_answer = source["eval_with_answer"];
-	        this.eval_request_name = source["eval_request_name"];
-	        this.eval_min_source_hit_rate = source["eval_min_source_hit_rate"];
-	        this.workflow_run_smoke = source["workflow_run_smoke"];
-	        this.smoke_skip_qdrant = source["smoke_skip_qdrant"];
-	        this.smoke_skip_embedding = source["smoke_skip_embedding"];
-	        this.smoke_skip_reranker = source["smoke_skip_reranker"];
-	    }
-	}
 	export class PresetRecoveryActionRequest {
 	    preset: ProjectPreset;
 	    action_kind: string;
@@ -1288,7 +1130,68 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ProjectPreset {
+	    name: string;
+	    runtime_profile: string;
+	    watch_paths: string;
+	    watch_project: string;
+	    watch_interval: number;
+	    ingest_paths: string;
+	    ingest_project: string;
+	    chat_request_name: string;
+	    chat_expect_contains: string;
+	    ingest_request_name: string;
+	    rag_project: string;
+	    rag_source_path: string;
+	    rag_top_k: number;
+	    rag_request_name: string;
+	    rag_expect_contains: string;
+	    eval_dataset: string;
+	    eval_project: string;
+	    eval_source_path: string;
+	    eval_top_k: number;
+	    eval_with_answer: boolean;
+	    eval_request_name: string;
+	    eval_min_source_hit_rate: number;
+	    workflow_run_smoke: boolean;
+	    smoke_skip_qdrant: boolean;
+	    smoke_skip_embedding: boolean;
+	    smoke_skip_reranker: boolean;
 
+	    static createFrom(source: any = {}) {
+	        return new ProjectPreset(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.runtime_profile = source["runtime_profile"];
+	        this.watch_paths = source["watch_paths"];
+	        this.watch_project = source["watch_project"];
+	        this.watch_interval = source["watch_interval"];
+	        this.ingest_paths = source["ingest_paths"];
+	        this.ingest_project = source["ingest_project"];
+	        this.chat_request_name = source["chat_request_name"];
+	        this.chat_expect_contains = source["chat_expect_contains"];
+	        this.ingest_request_name = source["ingest_request_name"];
+	        this.rag_project = source["rag_project"];
+	        this.rag_source_path = source["rag_source_path"];
+	        this.rag_top_k = source["rag_top_k"];
+	        this.rag_request_name = source["rag_request_name"];
+	        this.rag_expect_contains = source["rag_expect_contains"];
+	        this.eval_dataset = source["eval_dataset"];
+	        this.eval_project = source["eval_project"];
+	        this.eval_source_path = source["eval_source_path"];
+	        this.eval_top_k = source["eval_top_k"];
+	        this.eval_with_answer = source["eval_with_answer"];
+	        this.eval_request_name = source["eval_request_name"];
+	        this.eval_min_source_hit_rate = source["eval_min_source_hit_rate"];
+	        this.workflow_run_smoke = source["workflow_run_smoke"];
+	        this.smoke_skip_qdrant = source["smoke_skip_qdrant"];
+	        this.smoke_skip_embedding = source["smoke_skip_embedding"];
+	        this.smoke_skip_reranker = source["smoke_skip_reranker"];
+	    }
+	}
 	export class QueryRequest {
 	    query: string;
 	    project?: string;
@@ -1433,24 +1336,36 @@ export namespace main {
 	        this.content = source["content"];
 	    }
 	}
-	export class WatchRequest {
-	    paths: string[];
-	    project?: string;
-	    tags?: string[];
-	    interval: number;
-	    recursive: boolean;
+	export class RuntimeModelProfile {
+	    family: string;
+	    parameter_count_billions: number;
+	    capabilities: string[];
+	    enabled_capabilities: string[];
+	    thinking_mode: string;
+	    native_context_size: number;
+	    maximum_context_size: number;
+	    default_context_size: number;
+	    startup_timeout_seconds: number;
+	    resource_class: string;
+	    estimated_minimum_memory_bytes: number;
 
 	    static createFrom(source: any = {}) {
-	        return new WatchRequest(source);
+	        return new RuntimeModelProfile(source);
 	    }
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.paths = source["paths"];
-	        this.project = source["project"];
-	        this.tags = source["tags"];
-	        this.interval = source["interval"];
-	        this.recursive = source["recursive"];
+	        this.family = source["family"];
+	        this.parameter_count_billions = source["parameter_count_billions"];
+	        this.capabilities = source["capabilities"];
+	        this.enabled_capabilities = source["enabled_capabilities"];
+	        this.thinking_mode = source["thinking_mode"];
+	        this.native_context_size = source["native_context_size"];
+	        this.maximum_context_size = source["maximum_context_size"];
+	        this.default_context_size = source["default_context_size"];
+	        this.startup_timeout_seconds = source["startup_timeout_seconds"];
+	        this.resource_class = source["resource_class"];
+	        this.estimated_minimum_memory_bytes = source["estimated_minimum_memory_bytes"];
 	    }
 	}
 	export class RuntimeServiceActionRequest {
@@ -1625,7 +1540,52 @@ export namespace main {
 	        this.with_answer = source["with_answer"];
 	    }
 	}
+	export class SearchItem {
+	    chunk_id: string;
+	    doc_id?: string;
+	    source_path: string;
+	    relative_path?: string;
+	    heading_path: string[];
+	    project: string;
+	    kind?: string;
+	    tags: string[];
+	    sensitivity?: string;
+	    chunk_text: string;
+	    score: number;
+	    source_type?: string;
+	    source_id?: string;
+	    title?: string;
+	    url?: string;
+	    snippet?: string;
+	    trust_level?: string;
+	    injection_suspected?: boolean;
 
+	    static createFrom(source: any = {}) {
+	        return new SearchItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.chunk_id = source["chunk_id"];
+	        this.doc_id = source["doc_id"];
+	        this.source_path = source["source_path"];
+	        this.relative_path = source["relative_path"];
+	        this.heading_path = source["heading_path"];
+	        this.project = source["project"];
+	        this.kind = source["kind"];
+	        this.tags = source["tags"];
+	        this.sensitivity = source["sensitivity"];
+	        this.chunk_text = source["chunk_text"];
+	        this.score = source["score"];
+	        this.source_type = source["source_type"];
+	        this.source_id = source["source_id"];
+	        this.title = source["title"];
+	        this.url = source["url"];
+	        this.snippet = source["snippet"];
+	        this.trust_level = source["trust_level"];
+	        this.injection_suspected = source["injection_suspected"];
+	    }
+	}
 	export class SearchRequest {
 	    query: string;
 	    project?: string;
@@ -1758,7 +1718,26 @@ export namespace main {
 	        this.steps = source["steps"];
 	    }
 	}
+	export class WatchRequest {
+	    paths: string[];
+	    project?: string;
+	    tags?: string[];
+	    interval: number;
+	    recursive: boolean;
 
+	    static createFrom(source: any = {}) {
+	        return new WatchRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.paths = source["paths"];
+	        this.project = source["project"];
+	        this.tags = source["tags"];
+	        this.interval = source["interval"];
+	        this.recursive = source["recursive"];
+	    }
+	}
 	export class WebSearchPlanResponse {
 	    plan_id: string;
 	    decision: string;
@@ -1779,21 +1758,20 @@ export namespace main {
 	        this.expires_at = source["expires_at"];
 	    }
 	}
-
-	export class WorkflowStep {
-	    name: string;
+	export class WebSearchStatus {
 	    status: string;
-	    detail: string;
+	    detail?: string;
+	    source_count: number;
 
 	    static createFrom(source: any = {}) {
-	        return new WorkflowStep(source);
+	        return new WebSearchStatus(source);
 	    }
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
 	        this.status = source["status"];
 	        this.detail = source["detail"];
+	        this.source_count = source["source_count"];
 	    }
 	}
 	export class WorkflowRunResponse {
@@ -1834,5 +1812,20 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class WorkflowStep {
+	    name: string;
+	    status: string;
+	    detail: string;
 
+	    static createFrom(source: any = {}) {
+	        return new WorkflowStep(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.status = source["status"];
+	        this.detail = source["detail"];
+	    }
+	}
 }

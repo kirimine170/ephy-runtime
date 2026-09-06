@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
+
+from repository_fixture import copy_template_repository
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -43,11 +44,7 @@ class ValidateRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.repository = Path(self.temporary_directory.name) / "repository"
-        shutil.copytree(
-            REPOSITORY_ROOT,
-            self.repository,
-            ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
-        )
+        copy_template_repository(REPOSITORY_ROOT, self.repository)
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
