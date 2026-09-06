@@ -1,5 +1,6 @@
 .voice-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid #deddd6; }
 .voice-controls button { min-height: 36px; }
+.message-draft { opacity: 0.65; text-decoration: underline dotted; text-underline-offset: 3px; }
 .voice-controls [role="status"] { flex: 1; min-width: 120px; font-size: 13px; }
 .voice-controls button:focus-visible, .voice-developer button:focus-visible { outline: 2px solid #405f8d; outline-offset: 3px; }
 .voice-developer { margin: 8px 0; padding: 10px; border: 1px solid #deddd6; border-radius: 8px; }

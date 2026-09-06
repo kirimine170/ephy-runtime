@@ -1,4 +1,4 @@
-const TERMINAL = new Set(['COMPLETED', 'CANCELED', 'FAILED']);
+const TERMINAL = new Set(['COMPLETED', 'INCOMPLETE', 'CANCELED', 'FAILED']);
 const STATE_ORDER = ['IDLE', 'RECORDING', 'TRANSCRIBING', 'THINKING', 'SYNTHESIZING', 'PLAYING', 'CANCELING'];
 const STATUS = {
   IDLE: '音声入力を開始できます．',
@@ -10,6 +10,7 @@ const STATUS = {
   CANCELING: '音声対話を停止しています．',
   CANCELED: '音声対話を停止しました．',
   COMPLETED: '音声対話が完了しました．',
+  INCOMPLETE: '応答は未完了です．続きを生成するか，テキスト入力で続行できます．',
 };
 const FAILURES = {
   microphone_permission_denied: 'マイクの許可がありません．テキスト入力を利用できます．',
@@ -22,6 +23,8 @@ const FAILURES = {
   asr_empty_result: '音声を認識できませんでした．テキスト入力を利用できます．',
   asr_timeout: '音声認識が時間切れになりました．テキスト入力を利用できます．',
   llm_timeout: '応答の生成が時間切れになりました．テキスト入力を利用できます．',
+  generation_transport_eof: '応答の通信が途中で終了しました．テキスト入力で再試行できます．',
+  incomplete_response: '応答を完了できませんでした．テキスト入力で再試行できます．',
   tts_timeout: '音声の生成が時間切れになりました．テキスト入力を利用できます．',
   playback_timeout: '音声の再生が時間切れになりました．テキスト入力を利用できます．',
   playback_failed: '音声を再生できませんでした．テキスト入力を利用できます．',
@@ -132,7 +135,9 @@ export function mountVoiceInteraction({
   getRequest = () => ({}),
   onTranscript = () => {},
   onToken = () => {},
+  onOutput = () => {},
   onComplete = () => {},
+  onIncomplete = () => {},
   onFailure = () => {},
   onCancel = () => {},
   onBusy = () => {},
@@ -178,7 +183,7 @@ export function mountVoiceInteraction({
         : voiceStatusText(current?.snapshot);
     }
     if (fallback) {
-      fallback.hidden = current?.snapshot.state !== 'FAILED' || !current.snapshot.transcript;
+      fallback.hidden = !['FAILED', 'INCOMPLETE'].includes(current?.snapshot.state) || !current.snapshot.transcript;
       fallback.textContent = '認識した内容をテキスト入力へ戻す';
     }
   }
@@ -238,6 +243,7 @@ export function mountVoiceInteraction({
     render();
     onBusy(false);
     if (run.snapshot.state === 'COMPLETED') onComplete(run.snapshot);
+    else if (run.snapshot.state === 'INCOMPLETE') onIncomplete(run.snapshot);
     else if (run.snapshot.state === 'FAILED') onFailure(run.snapshot);
     else if (run.snapshot.state === 'CANCELED') onCancel(run.snapshot);
   }
@@ -246,7 +252,8 @@ export function mountVoiceInteraction({
     if (!active(run) || !snapshot || snapshot.operation_id !== run.snapshot.operation_id
       || (snapshot.session_id && snapshot.session_id !== run.snapshot.session_id)
       || (snapshot.turn_id && snapshot.turn_id !== run.snapshot.turn_id)
-      || (snapshot.trace_id && snapshot.trace_id !== run.snapshot.trace_id)) return;
+      || (snapshot.trace_id && snapshot.trace_id !== run.snapshot.trace_id)
+      || (snapshot.generation_revision || 1) !== (run.snapshot.generation_revision || 1)) return;
     // Ignore delayed bridge responses and queued states from before cancel．
     if (run.cancelRequested && !['CANCELING', 'CANCELED', 'FAILED'].includes(snapshot.state)) return;
     if (TERMINAL.has(snapshot.state)) {
@@ -274,7 +281,7 @@ export function mountVoiceInteraction({
     }
   }
 
-  function begin() {
+  function begin(expected = {}) {
     if (active() || disposed) return null;
     let ready;
     const run = {
@@ -286,6 +293,7 @@ export function mountVoiceInteraction({
       lastSequence: 0, playbackBytesReceived: 0, earlyEvents: [], earlyBytes: 0, earlyOverflow: false,
       identityReady: new Promise((resolve) => { ready = resolve; }),
       resolveIdentity: null,
+      expected,
     };
     run.resolveIdentity = ready;
     current = run;
@@ -303,6 +311,11 @@ export function mountVoiceInteraction({
     try {
       const snapshot = await pendingSnapshot;
       if (!snapshot?.operation_id) throw new Error('missing_operation');
+      if ((run.expected.operationID && run.expected.operationID !== snapshot.operation_id)
+        || (run.expected.revision && run.expected.revision !== (snapshot.generation_revision || 1))) {
+        throw new Error('stale_operation');
+      }
+      run.lastSequence = Number.isSafeInteger(snapshot.last_audio_sequence) ? snapshot.last_audio_sequence : 0;
       run.snapshot = {...snapshot, state: run.cancelRequested ? 'CANCELING' : snapshot.state};
       run.resolveIdentity(snapshot.operation_id);
       if (run.cancelRequested || disposed || run !== current) return false;
@@ -392,7 +405,7 @@ export function mountVoiceInteraction({
       const encoded = encodeBase64(bytes);
       bytes = null;
       await bridge.CommitInteraction(run.snapshot.operation_id, encoded);
-      return live(run) || run.snapshot.state === 'COMPLETED';
+      return live(run) || ['COMPLETED', 'INCOMPLETE'].includes(run.snapshot.state);
     } catch {
       await fail(run, 'invalid_audio');
       return false;
@@ -493,7 +506,7 @@ export function mountVoiceInteraction({
   function receive(event) {
     const run = current;
     if (!active(run) || !event || typeof event !== 'object'
-      || !['state', 'transcript', 'token', 'audio'].includes(event.kind)) return;
+      || !['state', 'transcript', 'token', 'output', 'audio'].includes(event.kind)) return;
     if (!run.snapshot.operation_id) {
       const bytes = (event.audio_base64?.length || 0) + (event.text?.length || 0);
       if (run.earlyEvents.length < 256 && run.earlyBytes + bytes <= MAX_EARLY_EVENT_BYTES) {
@@ -505,25 +518,39 @@ export function mountVoiceInteraction({
     if (event.operation_id !== run.snapshot.operation_id
       || (event.session_id && event.session_id !== run.snapshot.session_id)
       || (event.turn_id && event.turn_id !== run.snapshot.turn_id)
-      || (event.trace_id && event.trace_id !== run.snapshot.trace_id)) return;
+      || (event.trace_id && event.trace_id !== run.snapshot.trace_id)
+      || (event.generation_revision || 1) !== (run.snapshot.generation_revision || 1)) return;
     if (event.kind === 'state') applySnapshot(run, event.snapshot);
     if (!live(run)) return;
     if (event.kind === 'transcript') notifyTranscript(run, event.text);
     else if (event.kind === 'token' && typeof event.text === 'string') onToken(run.snapshot, event.text);
+    else if (event.kind === 'output') {
+      const snapshot = event.snapshot;
+      if (!snapshot || snapshot.operation_id !== run.snapshot.operation_id
+        || snapshot.session_id !== run.snapshot.session_id || snapshot.turn_id !== run.snapshot.turn_id
+        || snapshot.trace_id !== run.snapshot.trace_id
+        || (snapshot.generation_revision || 1) !== (run.snapshot.generation_revision || 1)) return;
+      // Output may arrive while a confirmed unit is playing．It does not move
+      // the playback state backwards，but replaces the confirmed document．
+      run.snapshot = {...run.snapshot, response_plan: snapshot.response_plan, generation: snapshot.generation};
+      onOutput(run.snapshot);
+    }
     else if (event.kind === 'audio') enqueue(run, event);
   }
 
-  async function adopt(snapshotOrPromise) {
-    const run = begin();
+  async function adopt(snapshotOrPromise, expected = {}) {
+    const run = begin(expected);
     if (!run) return false;
-    if (!await identify(run, snapshotOrPromise)) return false;
+    if (!await identify(run, snapshotOrPromise)) {
+      return !run.cancelRequested && ['COMPLETED', 'INCOMPLETE'].includes(run.snapshot.state);
+    }
     if (!await run.contextReady) { await fail(run, 'playback_failed'); return false; }
     return live(run);
   }
 
   const onRecord = () => { void (current?.recording ? stop() : start()); };
   const onCancelClick = () => { void cancel(); };
-  const onFallbackClick = () => { if (current?.snapshot.state === 'FAILED') onFallback(current.snapshot); };
+  const onFallbackClick = () => { if (['FAILED', 'INCOMPLETE'].includes(current?.snapshot.state)) onFallback(current.snapshot); };
   record?.addEventListener('click', onRecord);
   cancelButton?.addEventListener('click', onCancelClick);
   fallback?.addEventListener('click', onFallbackClick);

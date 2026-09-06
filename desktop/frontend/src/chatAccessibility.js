@@ -6,6 +6,10 @@ export function announceChatStream(root, state, message = '') {
     announcer.textContent = 'Assistant response in progress.';
   } else if (state === 'complete') {
     announcer.textContent = 'Assistant response complete.';
+  } else if (state === 'incomplete') {
+    announcer.textContent = '応答は未完了です．続きを生成できます．';
+  } else if (state === 'canceled') {
+    announcer.textContent = '応答を停止しました．';
   } else if (state === 'error') {
     announcer.textContent = detail ? `Assistant response failed: ${detail}` : 'Assistant response failed.';
   } else {
@@ -44,7 +48,7 @@ export function transitionChatEntryToFailure(entry, message = '') {
 
 export function mergeChatCompletionMetadata(entry, {
   meta = '',
-  answer = '',
+  answer,
   thinking = '',
   finishReason = '',
 } = {}) {
@@ -58,8 +62,10 @@ export function mergeChatCompletionMetadata(entry, {
   if (thinking && !String(completed.thinking || '').trim()) {
     completed.thinking = thinking;
   }
-  if (answer && !String(completed.text || '').trim()) {
-    completed.text = answer;
+  // A terminal answer is authoritative even when preview deltas were dropped．
+  // Legacy text continuation returns only its new segment，so retain its prefix．
+  if (typeof answer === 'string') {
+    completed.text = `${entry.completionPrefix || ''}${answer}`;
   }
   return completed;
 }

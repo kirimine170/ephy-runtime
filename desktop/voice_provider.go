@@ -236,7 +236,7 @@ func (p *NativeVoiceTTS) synthesize(ctx context.Context, text string) (audio []b
 	return audio, nil
 }
 
-func splitVoiceSentences(text string, limit int) []string {
+func splitVoiceSentences(text string, _ int) []string {
 	// Do not pass say's embedded speech commands through from model output．
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "[[", ""), "]]", "")
 	var chunks []string
@@ -249,7 +249,9 @@ func splitVoiceSentences(text string, limit int) []string {
 	}
 	for _, r := range text {
 		buffer = append(buffer, r)
-		if strings.ContainsRune("．。.!！?？\n", r) || len(buffer) >= limit {
+		// Input is a committed utterance. Never split a word merely to hit a
+		// character target; provider byte/duration limits still remain bounded.
+		if strings.ContainsRune("．。.!！?？\n", r) {
 			flush()
 		}
 	}

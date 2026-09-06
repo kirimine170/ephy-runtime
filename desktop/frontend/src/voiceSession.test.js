@@ -5,7 +5,7 @@ import {voiceSessionCallbacks} from './voiceSession.js';
 test('cancel finishing after new chat cannot insert old transcript or unlock new text request', () => {
   let session = 'old';
   const calls = [];
-  const handlers = Object.fromEntries(['onTranscript','onToken','onComplete','onCancel','onFailure','onFallback'].map(name => [name, () => calls.push(name)]));
+  const handlers = Object.fromEntries(['onTranscript','onToken','onOutput','onComplete','onIncomplete','onCancel','onFailure','onFallback'].map(name => [name, () => calls.push(name)]));
   const callbacks = voiceSessionCallbacks({getSessionID: () => session, ...handlers, onBusy: busy => calls.push(busy), onDetachedFinish: () => calls.push('refresh-current-state')});
   callbacks.onBusy(true);
   callbacks.onTranscript({session_id:'old'}, 'current transcript');

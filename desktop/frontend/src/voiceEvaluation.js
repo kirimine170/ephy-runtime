@@ -1,4 +1,4 @@
-const TERMINAL = new Set(['COMPLETED', 'CANCELED', 'FAILED']);
+const TERMINAL = new Set(['COMPLETED', 'INCOMPLETE', 'CANCELED', 'FAILED']);
 const MODES = ['auto', 'fast', 'work', 'code', 'rag'];
 const CHOICES = new Set(['A', 'B', 'tie', 'neither']);
 export const VOICE_FAILURE_TAGS = Object.freeze({
@@ -10,6 +10,7 @@ export const VOICE_FAILURE_TAGS = Object.freeze({
   tone_mismatch: '話し方が合わない',
   tts_pronunciation: '読み上げの発音',
   cancel_failure: 'キャンセルの不具合',
+  incomplete_response: '応答が途中で終了した',
   memory_misuse: '記憶の使い方',
   other: 'その他',
 });

@@ -67,7 +67,10 @@ func testVoiceWAV() []byte {
 func testVoiceChat(ctx context.Context, r ChatRequest, token func(string)) (*ChatResponse, error) {
 	reportInteractionModel(ctx, "test-provider", "test/model", "test-config")
 	token("private answer")
-	return &ChatResponse{Answer: "private answer"}, nil
+	return completedVoiceResponse("private answer"), nil
+}
+func completedVoiceResponse(text string) *ChatResponse {
+	return &ChatResponse{Answer: text, FinishReason: "stop", Generation: &GenerationMetadata{SchemaVersion: 2, FinishReason: "stop", ProviderFinishReason: "stop", TerminalSSE: true, DoneReceived: true, Complete: true}}
 }
 func awaitInteraction(t *testing.T, e *InteractionEngine, op, state string) InteractionSnapshot {
 	t.Helper()
@@ -637,7 +640,7 @@ func TestInteractionRouteIdentityPreservesRequestConfigurationAndIsStable(t *tes
 		// Repeated route facts must combine with the original request digest,
 		// never with the previously combined digest.
 		reportInteractionModel(ctx, "same-provider", "same/model", "same-route-config")
-		return &ChatResponse{Answer: "answer"}, nil
+		return completedVoiceResponse("answer"), nil
 	}
 	engine = NewInteractionEngine(testVoiceASR{}, testVoiceTTS{}, chat, func(event InteractionEvent) {
 		if event.Kind == "audio" {

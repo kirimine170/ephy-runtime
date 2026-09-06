@@ -50,12 +50,12 @@ func TestParseStreamChunkCapturesFinishReason(t *testing.T) {
 	}
 }
 
-func TestParseStreamErrorIncludesBackendModel(t *testing.T) {
+func TestParseStreamErrorRedactsBackendMessageAndModel(t *testing.T) {
 	err := parseStreamError(`{"error":"backend returned 503","model":"qwen3-30b-a3b"}`)
 	if err == nil {
 		t.Fatal("parseStreamError() error = nil, want error")
 	}
-	want := "qwen3-30b-a3b: backend returned 503"
+	want := "backend_unavailable"
 	if err.Error() != want {
 		t.Fatalf("parseStreamError() = %q, want %q", err.Error(), want)
 	}
@@ -63,7 +63,7 @@ func TestParseStreamErrorIncludesBackendModel(t *testing.T) {
 
 func TestParseStreamErrorHandlesMalformedPayload(t *testing.T) {
 	err := parseStreamError("connection closed")
-	if err == nil || err.Error() != "gateway stream failed: connection closed" {
+	if err == nil || err.Error() != "llm_transport_eof" {
 		t.Fatalf("parseStreamError() = %v", err)
 	}
 }

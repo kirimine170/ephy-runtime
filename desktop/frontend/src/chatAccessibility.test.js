@@ -127,3 +127,31 @@ test('late completion metadata merges without reopening the completed entry', ()
     },
   );
 });
+
+test('terminal full text replaces a nonempty truncated preview including after 128 deltas', () => {
+  const chunks = Array.from({length: 243}, (_, index) => `${index}春夏秋冬`);
+  const entry = {streaming: true, text: chunks.slice(0, 128).join('')};
+  const completed = transitionChatEntryToComplete(entry, {answer: chunks.join(''), finishReason: 'stop'});
+  assert.equal(completed.text, chunks.join(''));
+  assert.equal(mergeChatCompletionMetadata(completed, {answer: chunks.join('')}).text, completed.text);
+});
+
+test('authoritative empty answer removes an unconfirmed preview', () => {
+  assert.equal(transitionChatEntryToComplete({streaming: true, text: '桃'}, {answer: ''}).text, '');
+});
+
+test('text continuation preserves original prefix and replaces only the current preview segment', () => {
+  const entry = {streaming: true, text: '春です．夏は途', completionPrefix: '春です．'};
+  const completed = transitionChatEntryToComplete(entry, {answer: '夏は暑いです．', finishReason: 'stop'});
+  assert.equal(completed.text, '春です．夏は暑いです．');
+  assert.equal(mergeChatCompletionMetadata(completed, {answer: '夏は暑いです．'}).text, completed.text);
+});
+
+test('incomplete and canceled streams are announced without claiming successful completion', () => {
+  const node = {};
+  const root = {getElementById: () => node};
+  announceChatStream(root, 'incomplete');
+  assert.match(node.textContent, /未完了/);
+  announceChatStream(root, 'canceled');
+  assert.match(node.textContent, /停止/);
+});

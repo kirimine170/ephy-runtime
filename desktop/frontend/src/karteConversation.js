@@ -1,3 +1,5 @@
+import {isConversationHistoryEntry} from './conversationHistory.js';
+
 export const KARTE_KINDS = [
   'note',
   'meeting',
@@ -37,7 +39,7 @@ export function buildKarteConversationRequest({
   reviewedPlanSha256 = '',
 }) {
   const messages = (entries || [])
-    .filter((entry) => ['user', 'assistant'].includes(entry.role) && String(entry.text || '').trim())
+    .filter((entry) => isConversationHistoryEntry(entry) && String(entry.text || '').trim())
     .slice(-30)
     .map((entry) => ({role: entry.role, content: String(entry.text).trim()}));
   if (messages.length < 2 || messages.at(-1)?.role !== 'assistant') {

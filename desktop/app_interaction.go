@@ -18,6 +18,24 @@ import (
 
 // Messages is bounded prior history．Prompt is appended exactly once for both inputs．
 func conversationMessages(request ChatRequest) ([]GatewayMessage, error) {
+	if request.generationMessages != nil {
+		if len(request.generationMessages) == 0 || len(request.generationMessages) > 32 {
+			return nil, fmt.Errorf("invalid generation bounds")
+		}
+		messages := make([]GatewayMessage, 0, len(request.generationMessages))
+		size := 0
+		for _, message := range request.generationMessages {
+			if message.Role != "user" && message.Role != "assistant" {
+				return nil, fmt.Errorf("invalid generation history role")
+			}
+			size += len(message.Content)
+			if size > 64000 || len(message.Content) > 16000 {
+				return nil, fmt.Errorf("generation history too large")
+			}
+			messages = append(messages, message)
+		}
+		return messages, nil
+	}
 	if len(request.Messages) > 30 || len(request.Prompt) > 16000 || strings.TrimSpace(request.Prompt) == "" {
 		return nil, fmt.Errorf("invalid conversation bounds")
 	}
@@ -106,6 +124,9 @@ func (a *App) CommitInteraction(operationID string, audioBase64 string) error {
 }
 func (a *App) CancelInteraction(operationID string) (InteractionSnapshot, error) {
 	return a.interactionEngine().Cancel(operationID)
+}
+func (a *App) ContinueInteraction(operationID string) (InteractionSnapshot, error) {
+	return a.interactionEngine().Continue(operationID)
 }
 func (a *App) GetInteraction(operationID string) (InteractionSnapshot, error) {
 	return a.interactionEngine().Snapshot(operationID)
