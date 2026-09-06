@@ -303,6 +303,12 @@ def test_chat_endpoint_supports_streaming() -> None:
     assert response.headers["content-type"].startswith("text/event-stream")
     assert b"reasoning_content" in payload
     assert b"answer" in payload
+    route_line = payload.decode().split("event: route\ndata: ", 1)[1].split("\n", 1)[0]
+    import json
+    route = json.loads(route_line)
+    assert set(route) == {"provider", "model", "configuration_id"}
+    assert route["model"] == captured["model_config"].model
+    assert len(route["configuration_id"]) == 16
     sent_request = captured["request_payload"]
     assert sent_request.stream is True
     assert sent_request.messages[0].role == "system"

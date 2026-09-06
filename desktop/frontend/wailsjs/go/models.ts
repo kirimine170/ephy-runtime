@@ -82,7 +82,31 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class BlindInteractionComparison {
+	    comparison_id: string;
+	    source_operation_id: string;
+	    candidate_a: string;
+	    candidate_b: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BlindInteractionComparison(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.comparison_id = source["comparison_id"];
+	        this.source_operation_id = source["source_operation_id"];
+	        this.candidate_a = source["candidate_a"];
+	        this.candidate_b = source["candidate_b"];
+	    }
+	}
 	export class ChatRequest {
+	    messages?: GatewayMessage[];
+	    session_id?: string;
+	    session_mode?: string;
+	    model_id?: string;
+	    provider_id?: string;
+	    configuration_id?: string;
 	    mode: string;
 	    prompt: string;
 	    project?: string;
@@ -103,6 +127,12 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.messages = this.convertValues(source["messages"], GatewayMessage);
+	        this.session_id = source["session_id"];
+	        this.session_mode = source["session_mode"];
+	        this.model_id = source["model_id"];
+	        this.provider_id = source["provider_id"];
+	        this.configuration_id = source["configuration_id"];
 	        this.mode = source["mode"];
 	        this.prompt = source["prompt"];
 	        this.project = source["project"];
@@ -117,6 +147,24 @@ export namespace main {
 	        this.web_search = source["web_search"];
 	        this.web_search_plan_id = source["web_search_plan_id"];
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ChatResponse {
 	    answer: string;
@@ -372,6 +420,20 @@ export namespace main {
 	        this.path = source["path"];
 	    }
 	}
+	export class GatewayMessage {
+	    role: string;
+	    content: string;
+
+	    static createFrom(source: any = {}) {
+	        return new GatewayMessage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.content = source["content"];
+	    }
+	}
 	export class HealthResponse {
 	    status: string;
 	    service: string;
@@ -462,6 +524,216 @@ export namespace main {
 	        this.project = source["project"];
 	        this.recursive = source["recursive"];
 	        this.tags = source["tags"];
+	    }
+	}
+	export class InteractionCandidateIdentity {
+	    operation_id: string;
+	    provider_id: string;
+	    model_id: string;
+	    configuration_id: string;
+	    latency_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new InteractionCandidateIdentity(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.operation_id = source["operation_id"];
+	        this.provider_id = source["provider_id"];
+	        this.model_id = source["model_id"];
+	        this.configuration_id = source["configuration_id"];
+	        this.latency_ms = source["latency_ms"];
+	    }
+	}
+	export class InteractionComparisonRequest {
+	    request_id: string;
+	    source_operation_id: string;
+	    mode_a: string;
+	    mode_b: string;
+	    temperature_a: number;
+	    temperature_b: number;
+
+	    static createFrom(source: any = {}) {
+	        return new InteractionComparisonRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.request_id = source["request_id"];
+	        this.source_operation_id = source["source_operation_id"];
+	        this.mode_a = source["mode_a"];
+	        this.mode_b = source["mode_b"];
+	        this.temperature_a = source["temperature_a"];
+	        this.temperature_b = source["temperature_b"];
+	    }
+	}
+	export class InteractionEvaluationRecord {
+	    schema_version: number;
+	    id: string;
+	    timestamp: string;
+	    source_operation_id: string;
+	    trace_id: string;
+	    session_id: string;
+	    turn_id: string;
+	    comparison_id?: string;
+	    candidates?: InteractionCandidateIdentity[];
+	    choice: string;
+	    correction?: string;
+	    failure_tags: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new InteractionEvaluationRecord(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.id = source["id"];
+	        this.timestamp = source["timestamp"];
+	        this.source_operation_id = source["source_operation_id"];
+	        this.trace_id = source["trace_id"];
+	        this.session_id = source["session_id"];
+	        this.turn_id = source["turn_id"];
+	        this.comparison_id = source["comparison_id"];
+	        this.candidates = this.convertValues(source["candidates"], InteractionCandidateIdentity);
+	        this.choice = source["choice"];
+	        this.correction = source["correction"];
+	        this.failure_tags = source["failure_tags"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class InteractionEvaluationRequest {
+	    comparison_id: string;
+	    choice: string;
+	    correction: string;
+	    failure_tags: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new InteractionEvaluationRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.comparison_id = source["comparison_id"];
+	        this.choice = source["choice"];
+	        this.correction = source["correction"];
+	        this.failure_tags = source["failure_tags"];
+	    }
+	}
+	export class InteractionReplayRequest {
+	    source_operation_id: string;
+	    transcript?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new InteractionReplayRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source_operation_id = source["source_operation_id"];
+	        this.transcript = source["transcript"];
+	    }
+	}
+	export class InteractionSnapshot {
+	    trace_id: string;
+	    session_id: string;
+	    turn_id: string;
+	    operation_id: string;
+	    state: string;
+	    transcript?: string;
+	    response_plan?: ResponsePlan;
+	    error_code?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new InteractionSnapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.trace_id = source["trace_id"];
+	        this.session_id = source["session_id"];
+	        this.turn_id = source["turn_id"];
+	        this.operation_id = source["operation_id"];
+	        this.state = source["state"];
+	        this.transcript = source["transcript"];
+	        this.response_plan = this.convertValues(source["response_plan"], ResponsePlan);
+	        this.error_code = source["error_code"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class InteractionTraceEvent {
+	    schema_version: number;
+	    event_id: string;
+	    trace_id: string;
+	    session_id: string;
+	    turn_id: string;
+	    operation_id: string;
+	    name: string;
+	    source: string;
+	    timestamp: string;
+	    monotonic_ms: number;
+	    status: string;
+	    error_code?: string;
+	    provider_id: string;
+	    model_id: string;
+	    configuration_id: string;
+
+	    static createFrom(source: any = {}) {
+	        return new InteractionTraceEvent(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.event_id = source["event_id"];
+	        this.trace_id = source["trace_id"];
+	        this.session_id = source["session_id"];
+	        this.turn_id = source["turn_id"];
+	        this.operation_id = source["operation_id"];
+	        this.name = source["name"];
+	        this.source = source["source"];
+	        this.timestamp = source["timestamp"];
+	        this.monotonic_ms = source["monotonic_ms"];
+	        this.status = source["status"];
+	        this.error_code = source["error_code"];
+	        this.provider_id = source["provider_id"];
+	        this.model_id = source["model_id"];
+	        this.configuration_id = source["configuration_id"];
 	    }
 	}
 	export class KarteContextStatus {
@@ -1284,6 +1556,44 @@ export namespace main {
 	        this.configured_models = source["configured_models"];
 	    }
 	}
+	export class ResponsePlan {
+	    text: string;
+	    dialogue_act: string;
+	    affect: string;
+	    voice_hint: VoiceHint;
+	    interruptible: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ResponsePlan(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.dialogue_act = source["dialogue_act"];
+	        this.affect = source["affect"];
+	        this.voice_hint = this.convertValues(source["voice_hint"], VoiceHint);
+	        this.interruptible = source["interruptible"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class RoutePlanRequest {
 	    mode: string;
 	    prompt: string;
@@ -1717,6 +2027,70 @@ export namespace main {
 	        this.status = source["status"];
 	        this.steps = source["steps"];
 	    }
+	}
+	export class TraceValidation {
+	    valid: boolean;
+	    missing: string[];
+	    latencies_ms: Record<string, number>;
+
+	    static createFrom(source: any = {}) {
+	        return new TraceValidation(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.valid = source["valid"];
+	        this.missing = source["missing"];
+	        this.latencies_ms = source["latencies_ms"];
+	    }
+	}
+	export class VoiceHint {
+	    pace: number;
+	    volume: number;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceHint(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pace = source["pace"];
+	        this.volume = source["volume"];
+	    }
+	}
+	export class VoiceTurnRequest {
+	    session_id: string;
+	    input_kind?: string;
+	    chat: ChatRequest;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceTurnRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session_id = source["session_id"];
+	        this.input_kind = source["input_kind"];
+	        this.chat = this.convertValues(source["chat"], ChatRequest);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class WatchRequest {
 	    paths: string[];

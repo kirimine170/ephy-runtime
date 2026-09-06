@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import inspect
 import json
 
@@ -290,6 +291,14 @@ def build_router() -> APIRouter:
                 effective_payload = prompt_manager.apply_web_unavailable(effective_payload, "returned no usable results")
             if payload.stream:
                 async def generate_chat_stream():
+                    # Public routing provenance only，never grounded prompts or source bodies．
+                    configuration_id = hashlib.sha256(json.dumps(
+                        decision.selected_model.model_dump(mode="json"), sort_keys=True,
+                    ).encode()).hexdigest()[:16]
+                    route_event = {"provider": decision.selected_model.provider,
+                                   "model": decision.selected_model.model,
+                                   "configuration_id": configuration_id}
+                    yield f"event: route\ndata: {json.dumps(route_event)}\n\n".encode("utf-8")
                     if web_search_status:
                         yield f"event: web_search_status\ndata: {json.dumps(web_search_status, ensure_ascii=False)}\n\n".encode("utf-8")
                     if karte_context_status:
