@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"os"
 	"os/exec"
@@ -12,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -44,6 +44,7 @@ func voiceLocale() string {
 
 // NativeVoiceASR transcribes a complete mono PCM16 WAV using the local Speech helper．
 type NativeVoiceASR struct {
+	readiness  voiceReadinessCache
 	executable string
 	locale     string
 	osName     string
@@ -63,40 +64,87 @@ func (p *NativeVoiceASR) Identity() (string, string, string) {
 }
 
 func (p *NativeVoiceASR) Ready(ctx context.Context) error {
+	_, err := p.Readiness(ctx)
+	return err
+}
+
+// Readiness is a non-prompting preflight．Successful states expire after five
+// seconds，or one second while permission is undecided．Failures are never cached．
+func (p *NativeVoiceASR) Readiness(ctx context.Context) (VoiceReadiness, error) {
+	ctx, cancelReadiness := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelReadiness()
+	unavailable := func(err error) (VoiceReadiness, error) {
+		code := "asr_failed"
+		if errors.Is(err, context.Canceled) {
+			code = "asr_canceled"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			code = "asr_timeout"
+		} else if err != nil {
+			code = err.Error()
+		}
+		return VoiceReadiness{State: "unavailable", ErrorCode: code}, err
+	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return unavailable(ctx.Err())
 	}
 	if p.osName != "darwin" {
-		return errors.New("asr_unavailable")
+		p.readiness.invalidate()
+		return unavailable(errors.New("asr_unavailable"))
 	}
 	if !voiceLocalePattern.MatchString(p.locale) || !filepath.IsAbs(p.executable) {
-		return errors.New("invalid_voice_config")
+		p.readiness.invalidate()
+		return unavailable(errors.New("invalid_voice_config"))
 	}
-	info, err := os.Stat(p.executable)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
-		return errors.New("asr_unavailable")
+	currentKey := func() (voiceReadinessKey, error) {
+		info, err := os.Stat(p.executable)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+			return voiceReadinessKey{}, errors.New("asr_unavailable")
+		}
+		return voiceReadinessKey{configuration: p.executable + "\x00" + p.locale + "\x00" + p.osName, executable: info}, nil
 	}
-	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, stderr, err := p.run(checkCtx, p.executable, []string{"--check", "--locale", p.locale}, nil)
-	return asrProcessError(checkCtx, stderr, err)
+	result, err := p.readiness.get(ctx, currentKey, 5*time.Second, func(ctx context.Context) (VoiceReadiness, error) {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		stdout, stderr, err := p.run(checkCtx, p.executable, []string{"--check", "--locale", p.locale}, nil)
+		if err := asrProcessError(checkCtx, stderr, err); err != nil {
+			return unavailable(err)
+		}
+		switch strings.TrimSpace(string(stdout)) {
+		case "ready":
+			return VoiceReadiness{State: "ready", CanStart: true}, nil
+		case "permission_required":
+			return VoiceReadiness{State: "permission_required", CanStart: true}, nil
+		default:
+			return unavailable(errors.New("asr_failed"))
+		}
+	})
+	if err != nil {
+		return unavailable(err)
+	}
+	return result, nil
 }
 
 func (p *NativeVoiceASR) Transcribe(ctx context.Context, audio []byte) (string, error) {
 	if !validVoiceWAV(audio, 60) {
 		return "", errors.New("invalid_audio")
 	}
-	if err := p.Ready(ctx); err != nil {
+	readiness, err := p.Readiness(ctx)
+	if err != nil {
 		return "", err
+	}
+	if readiness.State == "permission_required" {
+		defer p.readiness.invalidate()
 	}
 	processCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	stdout, stderr, err := p.run(processCtx, p.executable, []string{"--locale", p.locale}, audio)
 	if err = asrProcessError(processCtx, stderr, err); err != nil {
+		p.readiness.invalidate()
 		return "", err
 	}
 	transcript := strings.TrimSpace(string(stdout))
 	if transcript == "" || !utf8.ValidString(transcript) || len(transcript) > 64*1024 {
+		p.readiness.invalidate()
 		return "", errors.New("asr_empty_transcript")
 	}
 	return transcript, nil
@@ -119,6 +167,7 @@ func asrProcessError(ctx context.Context, stderr []byte, err error) error {
 
 // NativeVoiceTTS emits independently playable WAV chunks synthesized by installed macOS voices．
 type NativeVoiceTTS struct {
+	readiness  voiceReadinessCache
 	executable string
 	voice      string
 	locale     string
@@ -140,31 +189,42 @@ func (p *NativeVoiceTTS) Identity() (string, string, string) {
 }
 
 func (p *NativeVoiceTTS) Ready(ctx context.Context) error {
+	ctx, cancelReadiness := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelReadiness()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	if p.osName != "darwin" {
+		p.readiness.invalidate()
 		return errors.New("tts_unavailable")
 	}
 	if !voiceNamePattern.MatchString(p.voice) || !voiceLocalePattern.MatchString(p.locale) {
+		p.readiness.invalidate()
 		return errors.New("invalid_voice_config")
 	}
-	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	stdout, _, err := p.run(checkCtx, p.executable, []string{"-v", "?"}, nil)
-	if checkCtx.Err() != nil {
-		return checkCtx.Err()
+	currentKey := func() (voiceReadinessKey, error) {
+		info, _ := os.Stat(p.executable)
+		return voiceReadinessKey{configuration: p.executable + "\x00" + p.voice + "\x00" + p.locale + "\x00" + p.osName, executable: info}, nil
 	}
-	if err != nil {
-		return errors.New("tts_unavailable")
-	}
-	for _, line := range strings.Split(string(stdout), "\n") {
-		match := installedVoicePattern.FindStringSubmatch(line)
-		if len(match) == 3 && strings.TrimSpace(match[1]) == p.voice && strings.ReplaceAll(match[2], "_", "-") == p.locale {
-			return nil
+	_, err := p.readiness.get(ctx, currentKey, 30*time.Second, func(ctx context.Context) (VoiceReadiness, error) {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		stdout, _, err := p.run(checkCtx, p.executable, []string{"-v", "?"}, nil)
+		if checkCtx.Err() != nil {
+			return VoiceReadiness{}, checkCtx.Err()
 		}
-	}
-	return errors.New("tts_unavailable")
+		if err != nil {
+			return VoiceReadiness{}, errors.New("tts_unavailable")
+		}
+		for _, line := range strings.Split(string(stdout), "\n") {
+			match := installedVoicePattern.FindStringSubmatch(line)
+			if len(match) == 3 && strings.TrimSpace(match[1]) == p.voice && strings.ReplaceAll(match[2], "_", "-") == p.locale {
+				return VoiceReadiness{State: "ready", CanStart: true}, nil
+			}
+		}
+		return VoiceReadiness{}, errors.New("tts_unavailable")
+	})
+	return err
 }
 
 func (p *NativeVoiceTTS) Stream(ctx context.Context, text string, emit func([]byte) error) error {
@@ -176,13 +236,16 @@ func (p *NativeVoiceTTS) Stream(ctx context.Context, text string, emit func([]by
 	}
 	for _, chunk := range splitVoiceSentences(text, 180) {
 		if ctx.Err() != nil {
+			p.readiness.invalidate()
 			return ctx.Err()
 		}
 		audio, err := p.synthesize(ctx, chunk)
 		if err != nil {
+			p.readiness.invalidate()
 			return err
 		}
 		if ctx.Err() != nil {
+			p.readiness.invalidate()
 			return ctx.Err()
 		}
 		if err := emit(audio); err != nil {
@@ -236,66 +299,36 @@ func (p *NativeVoiceTTS) synthesize(ctx context.Context, text string) (audio []b
 	return audio, nil
 }
 
-func splitVoiceSentences(text string, _ int) []string {
+func splitVoiceSentences(text string, maxRunes int) []string {
 	// Do not pass say's embedded speech commands through from model output．
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "[[", ""), "]]", "")
+	if maxRunes <= 0 {
+		maxRunes = 180
+	}
+	runes := []rune(text)
 	var chunks []string
-	var buffer []rune
-	flush := func() {
-		if chunk := strings.TrimSpace(string(buffer)); chunk != "" {
+	for len(runes) > 0 {
+		limit := min(maxRunes, len(runes))
+		boundary, softBoundary := 0, 0
+		for index, r := range runes[:limit] {
+			if strings.ContainsRune("．。.!！?？\n", r) {
+				boundary = index + 1
+				break
+			}
+			if strings.ContainsRune("，、,;；:：", r) || unicode.IsSpace(r) {
+				softBoundary = index + 1
+			}
+		}
+		if boundary == 0 {
+			boundary = limit
+			if len(runes) > limit && softBoundary > 0 {
+				boundary = softBoundary
+			}
+		}
+		if chunk := strings.TrimSpace(string(runes[:boundary])); chunk != "" {
 			chunks = append(chunks, chunk)
 		}
-		buffer = nil
+		runes = runes[boundary:]
 	}
-	for _, r := range text {
-		buffer = append(buffer, r)
-		// Input is a committed utterance. Never split a word merely to hit a
-		// character target; provider byte/duration limits still remain bounded.
-		if strings.ContainsRune("．。.!！?？\n", r) {
-			flush()
-		}
-	}
-	flush()
 	return chunks
-}
-
-func validVoiceWAV(audio []byte, maxSeconds int) bool {
-	if len(audio) < 44 || len(audio) > 8*1024*1024 || string(audio[:4]) != "RIFF" || string(audio[8:12]) != "WAVE" || uint64(binary.LittleEndian.Uint32(audio[4:8]))+8 != uint64(len(audio)) {
-		return false
-	}
-	var sampleRate uint32
-	var dataBytes int
-	hasFormat, hasData := false, false
-	for offset := 12; offset < len(audio); {
-		if offset+8 > len(audio) {
-			return false
-		}
-		size := int(binary.LittleEndian.Uint32(audio[offset+4 : offset+8]))
-		start := offset + 8
-		if size > len(audio)-start {
-			return false
-		}
-		switch string(audio[offset : offset+4]) {
-		case "fmt ":
-			if hasFormat || size < 16 {
-				return false
-			}
-			format := audio[start : start+size]
-			sampleRate = binary.LittleEndian.Uint32(format[4:8])
-			if binary.LittleEndian.Uint16(format[:2]) != 1 || binary.LittleEndian.Uint16(format[2:4]) != 1 || binary.LittleEndian.Uint16(format[14:16]) != 16 || binary.LittleEndian.Uint16(format[12:14]) != 2 || sampleRate < 8000 || sampleRate > 48000 || binary.LittleEndian.Uint32(format[8:12]) != sampleRate*2 {
-				return false
-			}
-			hasFormat = true
-		case "data":
-			if hasData || size == 0 || size%2 != 0 {
-				return false
-			}
-			dataBytes, hasData = size, true
-		}
-		offset = start + size + size%2
-		if offset > len(audio) {
-			return false
-		}
-	}
-	return hasFormat && hasData && uint64(dataBytes) <= uint64(sampleRate)*2*uint64(maxSeconds)
 }

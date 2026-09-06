@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -110,6 +111,22 @@ func (a *App) StartInteraction(request VoiceTurnRequest) (InteractionSnapshot, e
 	digest := sha256.Sum256(config)
 	request.Chat.ConfigurationID = hex.EncodeToString(digest[:8])
 	return a.interactionEngine().Start(request)
+}
+
+// Readiness creates no interaction turn and requests no microphone access．
+func (a *App) GetInteractionASRReadiness() VoiceReadiness {
+	ctx := a.currentContext()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	engine := a.interactionEngine()
+	engine.mu.Lock()
+	provider, closed := engine.asr, engine.closed
+	engine.mu.Unlock()
+	if closed {
+		return blockedVoiceReadiness("asr_unavailable")
+	}
+	return readInteractionASRReadiness(ctx, provider, 5*time.Second)
 }
 
 func (a *App) CommitInteraction(operationID string, audioBase64 string) error {

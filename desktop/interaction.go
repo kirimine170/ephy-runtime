@@ -69,8 +69,14 @@ type InteractionEvent struct {
 	Trace              *InteractionTraceEvent `json:"trace,omitempty"`
 	GenerationRevision int                    `json:"generation_revision"`
 }
+
+// Playback is a finite start/ACK margin，added to the validated WAV duration．
 type InteractionTimeouts struct{ ASR, LLM, TTS, Playback time.Duration }
-type playbackChunk struct{ started, stopped bool }
+type playbackChunk struct {
+	started, stopped     bool
+	duration             time.Duration
+	waitingAt, startedAt time.Time
+}
 type interactionTurn struct {
 	snapshot               InteractionSnapshot
 	request                VoiceTurnRequest
@@ -82,6 +88,7 @@ type interactionTurn struct {
 	producerDone           bool
 	generationDone         bool
 	playbackTimer          *time.Timer
+	playbackDeadline       time.Time
 	playbackGeneration     uint64
 	tokenCount, audioBytes int
 	source                 string
@@ -549,17 +556,18 @@ func (e *InteractionEngine) emitGenerationAudio(t *interactionTurn, revision int
 	if !e.generationLiveLocked(t, revision, ctx) {
 		return context.Canceled
 	}
-	if len(chunk) < 12 || string(chunk[:4]) != "RIFF" || string(chunk[8:12]) != "WAVE" {
+	duration, valid := voiceWAVDuration(chunk, 60)
+	if !valid {
 		return errors.New("tts_invalid_audio")
 	}
-	if len(chunk) > 2<<20 || t.audioBytes+len(chunk) > 16<<20 || len(t.chunks) >= 64 {
+	if t.audioBytes+len(chunk) > 16<<20 || len(t.chunks) >= 64 {
 		return errors.New("tts_audio_limit")
 	}
 	if len(t.chunks) == 0 {
 		e.traceLocked(t, "tts_first_chunk", "")
 	}
 	seq := len(t.chunks) + 1
-	t.chunks[seq] = &playbackChunk{}
+	t.chunks[seq] = &playbackChunk{duration: duration}
 	t.snapshot.LastAudioSequence = seq
 	t.audioBytes += len(chunk)
 	event := e.eventLocked(t, "audio")
@@ -658,31 +666,52 @@ func (e *InteractionEngine) stageFailure(t *interactionTurn, stage string, err e
 func (e *InteractionEngine) playbackDeadlineLocked(t *interactionTurn) {
 	t.playbackGeneration++
 	generation := t.playbackGeneration
-	pending := false
-	for _, c := range t.chunks {
-		if !c.stopped {
-			pending = true
-			break
-		}
-	}
 	if t.playbackTimer != nil {
 		t.playbackTimer.Stop()
 		t.playbackTimer = nil
 	}
-	if !pending {
+	t.playbackDeadline = nextPlaybackDeadline(t.chunks, time.Now(), e.Timeouts.Playback)
+	if t.playbackDeadline.IsZero() {
 		return
 	}
-	timeout := e.Timeouts.Playback
-	if timeout <= 0 {
-		timeout = time.Millisecond
-	}
-	t.playbackTimer = time.AfterFunc(timeout, func() {
+	t.playbackTimer = time.AfterFunc(time.Until(t.playbackDeadline), func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		if e.liveLocked(t) && t.playbackGeneration == generation {
 			e.failLocked(t, "playback_timeout")
 		}
 	})
+}
+
+// The earliest outstanding chunk owns the deadline．Later production and ACKs
+// cannot keep resetting a stalled chunk's clock．Queued chunks get their start
+// margin when the preceding chunk stops，and a started chunk gets duration +
+// margin measured from its first start ACK．No wall-clock sleep is needed to
+// verify these bounds in tests．
+func nextPlaybackDeadline(chunks map[int]*playbackChunk, now time.Time, margin time.Duration) time.Time {
+	if margin <= 0 {
+		margin = time.Millisecond
+	}
+	if margin > 30*time.Second {
+		margin = 30 * time.Second
+	}
+	var next *playbackChunk
+	sequence := 0
+	for seq, chunk := range chunks {
+		if !chunk.stopped && (next == nil || seq < sequence) {
+			next, sequence = chunk, seq
+		}
+	}
+	if next == nil {
+		return time.Time{}
+	}
+	if next.started {
+		return next.startedAt.Add(next.duration + margin)
+	}
+	if next.waitingAt.IsZero() {
+		next.waitingAt = now
+	}
+	return next.waitingAt.Add(margin)
 }
 func (e *InteractionEngine) Playback(op string, seq int, phase string) error {
 	e.mu.Lock()
@@ -707,6 +736,7 @@ func (e *InteractionEngine) Playback(op string, seq int, phase string) error {
 			return errors.New("invalid_interaction_transition")
 		}
 		c.started = true
+		c.startedAt = time.Now()
 		if t.snapshot.State == "SYNTHESIZING" {
 			_ = e.transitionLocked(t, "PLAYING")
 		}
@@ -774,6 +804,7 @@ func (e *InteractionEngine) finishLocked(t *interactionTurn, state, name, code s
 		t.playbackTimer.Stop()
 		t.playbackTimer = nil
 	}
+	t.playbackDeadline = time.Time{}
 	if e.active == t.snapshot.OperationID {
 		e.active = ""
 	}

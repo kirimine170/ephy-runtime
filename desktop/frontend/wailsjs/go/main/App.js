@@ -122,6 +122,10 @@ export function GetInteraction(arg1) {
   return window['go']['main']['App']['GetInteraction'](arg1);
 }
 
+export function GetInteractionASRReadiness() {
+  return window['go']['main']['App']['GetInteractionASRReadiness']();
+}
+
 export function GetInteractionTrace(arg1) {
   return window['go']['main']['App']['GetInteractionTrace'](arg1);
 }

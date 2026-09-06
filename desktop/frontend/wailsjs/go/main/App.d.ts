@@ -62,6 +62,8 @@ export function GetIndexSource(arg1:main.IndexSourceRequest):Promise<Record<stri
 
 export function GetInteraction(arg1:string):Promise<main.InteractionSnapshot>;
 
+export function GetInteractionASRReadiness():Promise<main.VoiceReadiness>;
+
 export function GetInteractionTrace(arg1:string):Promise<Array<main.InteractionTraceEvent>>;
 
 export function GetKarteProposalStatus(arg1:string):Promise<main.KarteConversationStatusResponse>;
