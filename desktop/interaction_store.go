@@ -30,6 +30,7 @@ type InteractionTraceEvent struct {
 	ConfigurationID    string              `json:"configuration_id"`
 	Generation         *GenerationMetadata `json:"generation,omitempty"`
 	GenerationRevision int                 `json:"generation_revision,omitempty"`
+	ASR                *ASRMetadata        `json:"asr,omitempty"`
 }
 type TraceValidation struct {
 	Valid       bool             `json:"valid"`
@@ -68,7 +69,7 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 			validation.Missing = append(validation.Missing, name)
 		}
 	}
-	for label, pair := range map[string][2]string{"asr": {"asr_started", "asr_final"}, "llm_ttft": {"llm_requested", "llm_first_token"}, "llm": {"llm_requested", "llm_completed"}, "tts_ttfc": {"tts_requested", "tts_first_chunk"}, "tts": {"tts_requested", "tts_completed"}, "first_audio": {"endpoint_commit", "audio_play_started"}, "turn": {"user_speech_start", "turn_completed"}} {
+	for label, pair := range map[string][2]string{"asr": {"asr_started", "asr_final"}, "asr_first_partial": {"asr_started", "asr_first_partial"}, "asr_first_stable": {"asr_started", "asr_first_stable"}, "asr_finalization": {"endpoint_commit", "asr_final"}, "llm_ttft": {"llm_requested", "llm_first_token"}, "llm": {"llm_requested", "llm_completed"}, "tts_ttfc": {"tts_requested", "tts_first_chunk"}, "tts": {"tts_requested", "tts_completed"}, "first_audio": {"endpoint_commit", "audio_play_started"}, "turn": {"user_speech_start", "turn_completed"}} {
 		start, okStart := first[pair[0]]
 		end, okEnd := first[pair[1]]
 		if okStart && okEnd {

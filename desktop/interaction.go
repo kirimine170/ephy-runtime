@@ -68,6 +68,7 @@ type InteractionEvent struct {
 	Sequence           int                    `json:"sequence,omitempty"`
 	Trace              *InteractionTraceEvent `json:"trace,omitempty"`
 	GenerationRevision int                    `json:"generation_revision"`
+	ASR                *ASRUpdate             `json:"asr,omitempty"`
 }
 
 // Playback is a finite start/ACK margin，added to the validated WAV duration．
@@ -93,19 +94,21 @@ type interactionTurn struct {
 	tokenCount, audioBytes int
 	source                 string
 	requestConfigurationID string
+	asr                    *interactionASRSession
 }
 type InteractionEngine struct {
-	mu     sync.Mutex
-	asr    VoiceASR
-	tts    VoiceTTS
-	chat   func(context.Context, ChatRequest, func(string)) (*ChatResponse, error)
-	emit   func(InteractionEvent)
-	turns  map[string]*interactionTurn
-	active string
-	closed bool
-	events chan InteractionEvent
-	done   chan struct{}
-	store  *interactionTraceStore
+	mu      sync.Mutex
+	asr     VoiceASR
+	tts     VoiceTTS
+	chat    func(context.Context, ChatRequest, func(string)) (*ChatResponse, error)
+	emit    func(InteractionEvent)
+	turns   map[string]*interactionTurn
+	active  string
+	closed  bool
+	events  chan InteractionEvent
+	done    chan struct{}
+	asrWake chan struct{}
+	store   *interactionTraceStore
 	// Configure before starting the first operation.
 	Timeouts InteractionTimeouts
 }
@@ -119,6 +122,7 @@ const maxInteractionAge = 7 * 24 * time.Hour
 
 func NewInteractionEngine(asr VoiceASR, tts VoiceTTS, chat func(context.Context, ChatRequest, func(string)) (*ChatResponse, error), emit func(InteractionEvent), storeDir string) *InteractionEngine {
 	e := &InteractionEngine{asr: asr, tts: tts, chat: chat, emit: emit, turns: map[string]*interactionTurn{}, events: make(chan InteractionEvent, 1024), done: make(chan struct{}), store: newInteractionTraceStore(storeDir), Timeouts: InteractionTimeouts{30 * time.Second, 90 * time.Second, 60 * time.Second, 30 * time.Second}}
+	e.asrWake = make(chan struct{}, 1)
 	go e.dispatch()
 	return e
 }
@@ -137,6 +141,8 @@ func (e *InteractionEngine) dispatch() {
 		select {
 		case <-e.done:
 			return
+		case <-e.asrWake:
+			e.dispatchASR()
 		case event := <-e.events:
 			e.mu.Lock()
 			turn := e.turns[event.OperationID]
@@ -271,7 +277,7 @@ func (e *InteractionEngine) Commit(op string, audio []byte, transcript string) e
 		e.mu.Unlock()
 		return errors.New("operation_not_found")
 	}
-	if t.snapshot.State != "RECORDING" {
+	if t.snapshot.State != "RECORDING" || t.asr != nil {
 		e.mu.Unlock()
 		return errors.New("invalid_interaction_transition")
 	}
@@ -344,6 +350,12 @@ func (e *InteractionEngine) run(t *interactionTurn, audio []byte, transcript str
 		e.stageFailure(t, "asr", err)
 		return
 	}
+	e.acceptTranscript(t, result)
+}
+
+// Both transcript replay and a verified streaming final enter Conversation here．
+// Interim ASR hypotheses never mutate ChatRequest，snapshot.Transcript or history．
+func (e *InteractionEngine) acceptTranscript(t *interactionTurn, result string) {
 	result = strings.TrimSpace(result)
 	if result == "" || len(result) > 16<<10 {
 		e.stageFailure(t, "asr", errors.New("asr_empty_result"))
@@ -654,7 +666,7 @@ func (e *InteractionEngine) stageFailure(t *interactionTurn, stage string, err e
 		}
 		// Never forward or persist provider error text. Only this finite set of
 		// known stable adapter codes can cross the boundary.
-		for _, allowed := range []string{"asr_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_empty_transcript", "asr_timeout", "asr_on_device_unavailable", "asr_empty_result", "tts_unavailable", "tts_invalid_audio", "tts_audio_limit", "tts_cleanup_failed", "invalid_speech_text", "llm_empty_result", "llm_transport_eof", "llm_timeout", "llm_canceled", "llm_unknown_finish", "llm_tool_calls", "invalid_audio", "invalid_voice_config"} {
+		for _, allowed := range []string{"asr_stream_invalid", "asr_stream_eof", "asr_canceled", "asr_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_empty_transcript", "asr_timeout", "asr_on_device_unavailable", "asr_empty_result", "tts_unavailable", "tts_invalid_audio", "tts_audio_limit", "tts_cleanup_failed", "invalid_speech_text", "llm_empty_result", "llm_transport_eof", "llm_timeout", "llm_canceled", "llm_unknown_finish", "llm_tool_calls", "invalid_audio", "invalid_voice_config"} {
 			if err.Error() == allowed {
 				code = allowed
 				break
@@ -800,6 +812,11 @@ func (e *InteractionEngine) finishLocked(t *interactionTurn, state, name, code s
 	e.queueLocked(event)
 	_ = e.transitionLocked(t, state)
 	t.cancel()
+	if t.asr != nil {
+		t.asr.cancel()
+		t.asr.pending, t.asr.final = nil, nil
+		t.asr.stablePrefix = ""
+	}
 	if t.playbackTimer != nil {
 		t.playbackTimer.Stop()
 		t.playbackTimer = nil
@@ -836,7 +853,7 @@ func (e *InteractionEngine) Cancel(op string) (InteractionSnapshot, error) {
 	return cloneInteractionSnapshot(t.snapshot), nil
 }
 func (e *InteractionEngine) Fail(op, code string) error {
-	allowed := map[string]bool{"microphone_unavailable": true, "microphone_permission_denied": true, "microphone_failed": true, "invalid_audio": true, "playback_failed": true, "interrupted": true}
+	allowed := map[string]bool{"microphone_unavailable": true, "microphone_permission_denied": true, "microphone_failed": true, "invalid_audio": true, "playback_failed": true, "interrupted": true, "asr_failed": true, "asr_backpressure": true, "asr_protocol_error": true, "asr_timeout": true, "asr_canceled": true, "asr_unavailable": true, "asr_on_device_unavailable": true, "asr_permission_denied": true, "asr_permission_restricted": true, "asr_stream_invalid": true, "asr_stream_eof": true, "asr_empty_transcript": true, "asr_empty_result": true, "invalid_voice_config": true}
 	if !allowed[code] {
 		return errors.New("invalid_failure_code")
 	}
@@ -953,7 +970,7 @@ func (e *InteractionEngine) recordTraceLocked(t *interactionTurn, name, code str
 		}
 		t.events = append(t.events[:remove], t.events[remove+1:]...)
 	}
-	provider, model, config := "desktop", "interaction", "c01-v2"
+	provider, model, config := "desktop", "interaction", "c02-v3"
 	switch {
 	case strings.HasPrefix(name, "asr_"):
 		provider, model, config = stableVoiceIdentity(e.asr, "asr-adapter", "configured", "default")
@@ -972,7 +989,10 @@ func (e *InteractionEngine) recordTraceLocked(t *interactionTurn, name, code str
 		}
 	}
 	s := t.snapshot
-	trace := InteractionTraceEvent{SchemaVersion: 2, EventID: interactionID("event_"), TraceID: s.TraceID, SessionID: s.SessionID, TurnID: s.TurnID, OperationID: s.OperationID, Name: name, Source: t.source, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), MonotonicMS: time.Since(t.created).Milliseconds(), Status: s.State, ErrorCode: code, ProviderID: provider, ModelID: model, ConfigurationID: config, Generation: cloneGenerationMetadata(s.Generation), GenerationRevision: s.GenerationRevision}
+	trace := InteractionTraceEvent{SchemaVersion: 3, EventID: interactionID("event_"), TraceID: s.TraceID, SessionID: s.SessionID, TurnID: s.TurnID, OperationID: s.OperationID, Name: name, Source: t.source, Timestamp: time.Now().UTC().Format(time.RFC3339Nano), MonotonicMS: time.Since(t.created).Milliseconds(), Status: s.State, ErrorCode: code, ProviderID: provider, ModelID: model, ConfigurationID: config, Generation: cloneGenerationMetadata(s.Generation), GenerationRevision: s.GenerationRevision}
+	if t.asr != nil && (strings.HasPrefix(name, "asr_") || strings.HasPrefix(name, "turn_") || strings.HasPrefix(name, "cancel_")) {
+		trace.ASR = cloneASRMetadata(&t.asr.metadata)
+	}
 	if name == "turn_completed" {
 		trace.Status = "COMPLETED"
 	}

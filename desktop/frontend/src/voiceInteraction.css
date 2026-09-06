@@ -1,7 +1,11 @@
 .voice-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid #deddd6; }
 .voice-controls button { min-height: 36px; }
+.voice-live-transcript[hidden] { display: none; }
+.voice-transcript-stable { font-weight: 600; }
+.voice-transcript-revisable { opacity: 0.7; text-decoration: underline dotted; text-underline-offset: 3px; }
 .message-draft { opacity: 0.65; text-decoration: underline dotted; text-underline-offset: 3px; }
 .voice-controls [role="status"] { flex: 1; min-width: 120px; font-size: 13px; }
+.voice-controls .voice-live-transcript { flex: 1 0 100%; box-sizing: border-box; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; padding: 8px 10px; border-left: 3px solid #7b8794; }
 .voice-controls button:focus-visible, .voice-developer button:focus-visible { outline: 2px solid #405f8d; outline-offset: 3px; }
 .voice-developer { margin: 8px 0; padding: 10px; border: 1px solid #deddd6; border-radius: 8px; }
 .voice-developer[hidden] { display: none; }

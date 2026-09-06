@@ -1,5 +1,53 @@
 export namespace main {
 
+	export class ASRMetadata {
+	    provider?: string;
+	    model_revision?: string;
+	    revision_count: number;
+	    character_count: number;
+	    first_audio_ms?: number;
+	    first_partial_ms?: number;
+	    first_stable_ms?: number;
+	    final_ms?: number;
+	    finalization_ms?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ASRMetadata(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.model_revision = source["model_revision"];
+	        this.revision_count = source["revision_count"];
+	        this.character_count = source["character_count"];
+	        this.first_audio_ms = source["first_audio_ms"];
+	        this.first_partial_ms = source["first_partial_ms"];
+	        this.first_stable_ms = source["first_stable_ms"];
+	        this.final_ms = source["final_ms"];
+	        this.finalization_ms = source["finalization_ms"];
+	    }
+	}
+	export class ASRSessionRequest {
+	    operation_id: string;
+	    session_id: string;
+	    turn_id: string;
+	    segment_id: string;
+	    sample_rate: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ASRSessionRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.operation_id = source["operation_id"];
+	        this.session_id = source["session_id"];
+	        this.turn_id = source["turn_id"];
+	        this.segment_id = source["segment_id"];
+	        this.sample_rate = source["sample_rate"];
+	    }
+	}
 	export class ApplyLocalModelRequest {
 	    role: string;
 	    model_id: string;
@@ -810,6 +858,7 @@ export namespace main {
 	    configuration_id: string;
 	    generation?: GenerationMetadata;
 	    generation_revision?: number;
+	    asr?: ASRMetadata;
 
 	    static createFrom(source: any = {}) {
 	        return new InteractionTraceEvent(source);
@@ -834,6 +883,7 @@ export namespace main {
 	        this.configuration_id = source["configuration_id"];
 	        this.generation = this.convertValues(source["generation"], GenerationMetadata);
 	        this.generation_revision = source["generation_revision"];
+	        this.asr = this.convertValues(source["asr"], ASRMetadata);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

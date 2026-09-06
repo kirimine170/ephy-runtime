@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {encodePCM16Wav, mountVoiceInteraction, voiceStatusText} from './voiceInteraction.js';
+import {createPCM16StreamEncoder, encodePCM16Wav, mountVoiceInteraction, voiceStatusText} from './voiceInteraction.js';
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
@@ -13,6 +13,11 @@ const snapshot = (id, state = 'RECORDING', extra = {}) => ({
   operation_id: `op-${id}`, session_id: 'session', turn_id: `turn-${id}`, trace_id: `trace-${id}`, state, ...extra,
 });
 const wav = () => Buffer.from(encodePCM16Wav([new Float32Array([0, 0.5, -0.5])], 16000)).toString('base64');
+const asrSession = (id, sampleRate = 16000) => ({operation_id: `op-${id}`, session_id: 'session', turn_id: `turn-${id}`, segment_id: `segment-${id}`, sample_rate: sampleRate});
+const asrUpdate = (id, revision, transcript, extra = {}) => ({
+  ...asrSession(id), revision, phase: 'partial', transcript, stable_prefix: '', provider: 'test-asr',
+  model_revision: 'test-1', monotonic_ms: revision * 10, ...extra,
+});
 
 function button() {
   const handlers = new Map();
@@ -68,14 +73,20 @@ class FakeContext {
 function harness(options = {}) {
   let listener;
   let identity = 0;
-  const nodes = Object.fromEntries(['voice-record', 'voice-cancel', 'voice-status', 'voice-fallback'].map((id) => [id, button()]));
-  const calls = {start: [], readiness: [], commit: [], cancel: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
+  const nodes = Object.fromEntries(['voice-record', 'voice-cancel', 'voice-status', 'voice-fallback', 'voice-live-transcript', 'voice-transcript-stable', 'voice-transcript-revisable'].map((id) => [id, button()]));
+  const calls = {start: [], readiness: [], begin: [], append: [], end: [], commit: [], cancel: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
   const contexts = [];
   const streams = [];
   const timeouts = new Map();
   const bridge = {
     async GetInteractionASRReadiness() { calls.readiness.push(true); return {state: 'ready', can_start: true}; },
     async StartInteraction(request) { calls.start.push(request); calls.request = request; return snapshot(++identity); },
+    async BeginInteractionASR(operationID, sampleRate) {
+      calls.begin.push([operationID, sampleRate]);
+      return {operation_id: operationID, session_id: 'session', turn_id: `turn-${operationID.slice(3)}`, segment_id: `segment-${operationID.slice(3)}`, sample_rate: sampleRate};
+    },
+    async AppendInteractionAudio(...args) { calls.append.push(args); },
+    async EndInteractionASR(...args) { calls.end.push(args); },
     async CommitInteraction(...args) { calls.commit.push(args); },
     async CancelInteraction(op) {
       calls.cancel.push(op);
@@ -113,6 +124,7 @@ function harness(options = {}) {
     event(id, kind, extra = {}) { listener?.({...snapshot(id), kind, ...extra}); },
     state(id, state, extra = {}) { listener?.({...snapshot(id), kind: 'state', snapshot: snapshot(id, state, extra)}); },
     audio(id, sequence) { listener?.({...snapshot(id), kind: 'audio', sequence, audio_base64: wav()}); },
+    asr(id, revision, transcript, extra = {}) { listener?.({...snapshot(id), kind: 'asr_update', asr: asrUpdate(id, revision, transcript, extra)}); },
   };
 }
 
@@ -134,18 +146,22 @@ test('PCM16 encoding writes mono WAV header，clips samples and rejects empty or
   assert.throws(() => encodePCM16Wav([new Float32Array(1)], 0));
 });
 
-test('manual stop captures once，stops every track，clears callback/timer and commits only WAV', async () => {
+test('capture sends raw PCM before stop，then drains once and ends without committing a WAV', async () => {
   const h = harness();
   assert.equal(await h.controller.start(), true);
   const context = h.contexts[0];
   context.capture();
+  await tick();
+  assert.equal(h.calls.append.length, 1);
+  assert.equal(h.calls.end.length, 0);
   assert.equal(await h.controller.stop(), true);
   assert.equal(await h.controller.stop(), false);
-  assert.equal(h.calls.commit.length, 1);
-  assert.equal(h.calls.commit[0][0], 'op-1');
-  const bytes = Buffer.from(h.calls.commit[0][1], 'base64');
-  assert.equal(bytes.toString('ascii', 0, 4), 'RIFF');
-  assert.equal(bytes.length, 50);
+  assert.equal(h.calls.commit.length, 0);
+  assert.deepEqual(h.calls.end, [['op-1']]);
+  assert.deepEqual(h.calls.append[0].slice(0, 2), ['op-1', 1]);
+  const bytes = Buffer.from(h.calls.append[0][2], 'base64');
+  assert.equal(bytes.length, 6);
+  assert.deepEqual([bytes.readInt16LE(0), bytes.readInt16LE(2), bytes.readInt16LE(4)], [0, 16384, -16384]);
   assert.ok(h.streams[0].tracks.every((track) => track.stopped));
   assert.equal(context.processor.onaudioprocess, null);
   assert.equal(context.processor.disconnected, true);
@@ -177,16 +193,17 @@ test('fractional downsampling preserves duration and a constant signal', () => {
   }
 });
 
-test('higher actual AudioContext rate produces compatible WAV on capture commit', async () => {
+test('higher actual AudioContext rate streams compatible PCM to a 48 kHz ASR session', async () => {
   const context = new FakeContext();
   context.sampleRate = 96000;
   const h = harness({createAudioContext: () => context});
   await h.controller.start();
   context.capture([0, 0.5, -0.5, 0]);
   await h.controller.stop();
-  const bytes = Buffer.from(h.calls.commit[0][1], 'base64');
-  assert.equal(bytes.readUInt32LE(24), 48000);
-  assert.equal(bytes.readUInt32LE(40), 4);
+  const bytes = Buffer.from(h.calls.append[0][2], 'base64');
+  assert.deepEqual(h.calls.begin, [['op-1', 48000]]);
+  assert.equal(bytes.length, 4);
+  assert.equal(h.calls.commit.length, 0);
   assert.ok(h.streams[0].tracks.every((track) => track.stopped));
   await h.controller.cancel();
 });
@@ -325,7 +342,7 @@ test('audio queue plays sequentially，acknowledges natural completion and suppr
   assert.equal(h.contexts[0].closed, true);
 });
 
-test('recording timeout commits at 60 seconds and releases microphone resources', async () => {
+test('recording timeout ends streaming ASR at 60 seconds and releases microphone resources', async () => {
   const h = harness();
   await h.controller.start();
   h.contexts[0].capture();
@@ -333,7 +350,7 @@ test('recording timeout commits at 60 seconds and releases microphone resources'
   assert.equal(timer.milliseconds, 60_000);
   timer.callback();
   await tick();
-  assert.equal(h.calls.commit.length, 1);
+  assert.equal(h.calls.end.length, 1);
   assert.ok(h.streams[0].tracks.every((track) => track.stopped));
   assert.equal(h.timeouts.size, 0);
   await h.controller.cancel();
@@ -364,10 +381,15 @@ test('next chunk waits for the previous playback stop acknowledgement', async ()
 test('sample count bounds recording even if the timer has not fired', async () => {
   const h = harness();
   await h.controller.start();
-  h.contexts[0].capture(new Float32Array(16000 * 61));
+  for (let seconds = 0; seconds < 59; seconds += 1) {
+    h.contexts[0].capture(new Float32Array(16000));
+    await tick();
+  }
+  h.contexts[0].capture(new Float32Array(16000 * 2));
   await tick();
-  assert.equal(h.calls.commit.length, 1);
-  assert.equal(Buffer.from(h.calls.commit[0][1], 'base64').length, 44 + 16000 * 60 * 2);
+  assert.equal(h.calls.end.length, 1);
+  assert.equal(h.calls.append.reduce((total, call) => total + Buffer.from(call[2], 'base64').length, 0), 16000 * 60 * 2);
+  assert.equal(h.calls.commit.length, 0);
   assert.ok(h.streams[0].tracks.every((track) => track.stopped));
   await h.controller.cancel();
 });
@@ -551,6 +573,8 @@ test('all lifecycle states have fixed status messages with a text fallback on fa
 test('INCOMPLETE releases microphone and playback，preserves fixed status and text fallback without completion', async () => {
   const h = harness();
   await h.controller.start();
+  h.contexts[0].capture();
+  await h.controller.stop();
   h.state(1, 'INCOMPLETE', {transcript: '四季を説明して', response_plan: {text: '春には花が咲きます．'}, generation: {finish_reason: 'length', complete: false}});
   assert.equal(h.controller.isActive(), false);
   assert.equal(h.calls.complete.length, 0);
@@ -669,11 +693,12 @@ test('unavailable denied restricted and malformed readiness never open a microph
   }
 });
 
-test('permission-required readiness permits explicit recording without claiming Speech authorization', async () => {
+test('permission-required readiness opens the ASR session before recording', async () => {
   const h = harness({bridge: {GetInteractionASRReadiness: async () => ({state: 'permission_required', can_start: true})}});
   assert.equal(await h.controller.start(), true);
   assert.equal(h.streams.length, 1);
-  assert.match(h.nodes['voice-status'].textContent, /送信時に音声認識の許可/);
+  assert.equal(h.calls.begin.length, 1);
+  assert.match(h.nodes['voice-status'].textContent, /録音中/);
   await h.controller.cancel();
 });
 
@@ -737,3 +762,471 @@ test('playback accepts a complete 60-second 48-kHz mono PCM16 WAV within the pro
   assert.deepEqual(h.calls.playback[0], ['op-1', 1, 'started']);
   await h.controller.cancel();
 });
+
+test('stream encoder preserves fractional carry for irregular callbacks and emits raw PCM incrementally', () => {
+  for (const rate of [8000, 16000, 44100, 48000, 88200, 96000, 192000]) {
+    const signal = Float32Array.from({length: 1013}, (_, i) => Math.sin(i / 11) * 1.2);
+    signal[17] = NaN;
+    const encoder = createPCM16StreamEncoder(rate);
+    const chunks = [];
+    for (let offset = 0; offset < signal.length; offset += 7) {
+      chunks.push(Buffer.from(encoder.push(signal.subarray(offset, offset + 7))));
+    }
+    assert.ok(chunks.some(chunk => chunk.length > 0));
+    chunks.push(Buffer.from(encoder.finish()));
+    assert.deepEqual(Buffer.concat(chunks), Buffer.from(encodePCM16Wav([signal], rate)).subarray(44));
+    assert.equal(encoder.finish().byteLength, 0);
+    assert.throws(() => encoder.push(signal), /encoder_closed/);
+  }
+  assert.throws(() => createPCM16StreamEncoder(4000));
+  assert.throws(() => createPCM16StreamEncoder(48000, 96000));
+  const canceled = createPCM16StreamEncoder(96000);
+  assert.equal(canceled.push(new Float32Array([1])).byteLength, 0);
+  canceled.reset();
+  assert.equal(canceled.finish().byteLength, 0);
+});
+
+test('ASR session startup precedes microphone permission and failures never use the legacy WAV bridge', async () => {
+  const open = deferred();
+  const h = harness({bridge: {BeginInteractionASR: () => open.promise}});
+  const starting = h.controller.start();
+  await tick();
+  assert.equal(h.calls.start.length, 1);
+  assert.equal(h.streams.length, 0);
+  assert.match(h.nodes['voice-status'].textContent, /音声認識を開始/);
+  open.reject(new Error('private provider path'));
+  assert.equal(await starting, false);
+  assert.equal(h.streams.length, 0);
+  assert.equal(h.calls.commit.length, 0);
+  assert.deepEqual(h.calls.fail, [['op-1', 'asr_unavailable']]);
+  assert.equal(h.controller.isActive(), false);
+  assert.doesNotMatch(h.nodes['voice-status'].textContent, /private/);
+  const missing = harness({bridge: {BeginInteractionASR: undefined}});
+  assert.equal(await missing.controller.start(), false);
+  assert.equal(missing.streams.length, 0);
+  assert.equal(missing.calls.commit.length, 0);
+});
+
+test('all returned ASR session identities and the negotiated sample rate must match before opening the microphone', async () => {
+  for (const mismatch of [
+    {operation_id: 'other'}, {session_id: 'other'}, {turn_id: 'other'}, {segment_id: ''}, {sample_rate: 48000},
+  ]) {
+    const h = harness({bridge: {BeginInteractionASR: async () => ({...asrSession(1), ...mismatch})}});
+    assert.equal(await h.controller.start(), false);
+    assert.equal(h.streams.length, 0);
+    assert.deepEqual(h.calls.fail, [['op-1', 'asr_protocol_error']]);
+  }
+});
+
+test('missing microphone API fails without starting an ASR session or changing text chat', async () => {
+  const h = harness({mediaDevices: {}});
+  assert.equal(await h.controller.start(), false);
+  assert.equal(h.calls.begin.length, 0);
+  assert.equal(h.calls.commit.length, 0);
+  assert.deepEqual(h.calls.busy, [[true], [false]]);
+  assert.equal(h.controller.lastSnapshot.error_code, 'microphone_unavailable');
+});
+
+test('cancel and session switch during ASR open discard the late session before microphone access', async () => {
+  for (const mode of ['cancel', 'session']) {
+    const open = deferred();
+    let sessionID = 'session';
+    const h = harness({getSessionID: () => sessionID, bridge: {BeginInteractionASR: () => open.promise}});
+    const starting = h.controller.start();
+    await tick();
+    if (mode === 'cancel') await h.controller.cancel();
+    else sessionID = 'new-session';
+    open.resolve(asrSession(1));
+    assert.equal(await starting, false);
+    await tick();
+    assert.equal(h.streams.length, 0);
+    assert.deepEqual(h.calls.cancel, ['op-1']);
+    assert.equal(h.calls.end.length, 0);
+    assert.equal(h.calls.transcript.length, 0);
+    assert.equal(h.controller.isActive(), false);
+  }
+});
+
+test('PCM appends are sequential，bounded to 64 KiB and drained before End', async () => {
+  const first = deferred();
+  const appends = [];
+  let inFlight = 0;
+  let peak = 0;
+  const context = new FakeContext();
+  context.sampleRate = 48000;
+  const h = harness({createAudioContext: () => context, bridge: {
+    async AppendInteractionAudio(...args) {
+      appends.push(args);
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      if (args[1] === 1) await first.promise;
+      inFlight -= 1;
+    },
+  }});
+  await h.controller.start();
+  context.capture(new Float32Array(48000));
+  await tick();
+  assert.equal(appends.length, 1);
+  const stopped = h.controller.stop();
+  assert.equal(h.calls.end.length, 0);
+  assert.ok(h.streams[0].tracks.every(track => track.stopped));
+  first.resolve();
+  assert.equal(await stopped, true);
+  assert.equal(peak, 1);
+  assert.deepEqual(appends.map(call => call[1]), [1, 2]);
+  assert.deepEqual(appends.map(call => Buffer.from(call[2], 'base64').length), [65536, 30464]);
+  assert.deepEqual(h.calls.end, [['op-1']]);
+  assert.equal(h.calls.commit.length, 0);
+  await h.controller.cancel();
+});
+
+test('backpressure includes the in-flight append and stops recording without retaining hypotheses or sending queued audio', async () => {
+  const append = deferred();
+  const h = harness({bridge: {AppendInteractionAudio: () => append.promise}});
+  await h.controller.start();
+  h.asr(1, 1, 'private hypothesis');
+  h.contexts[0].capture(new Float32Array(8000));
+  h.contexts[0].capture(new Float32Array(8000));
+  assert.equal(h.calls.failure.length, 0);
+  h.contexts[0].capture([0]);
+  await tick();
+  assert.deepEqual(h.calls.fail, [['op-1', 'asr_backpressure']]);
+  assert.ok(h.streams[0].tracks.every(track => track.stopped));
+  assert.equal(h.contexts[0].processor.onaudioprocess, null);
+  assert.equal(h.nodes['voice-live-transcript'].hidden, true);
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, '');
+  assert.equal(h.controller.lastSnapshot.transcript, undefined);
+  assert.equal(h.calls.transcript.length, 0);
+  assert.equal(h.nodes['voice-record'].disabled, false);
+  append.resolve();
+  await tick();
+  assert.equal(h.calls.end.length, 0);
+});
+
+test('append failure is a fixed error with immediate microphone cleanup and no whole-recording retry', async () => {
+  const h = harness({bridge: {AppendInteractionAudio: async () => { throw new Error('private diagnostic'); }}});
+  await h.controller.start();
+  h.contexts[0].capture();
+  await tick();
+  assert.deepEqual(h.calls.fail, [['op-1', 'asr_failed']]);
+  assert.ok(h.streams[0].tracks.every(track => track.stopped));
+  assert.equal(h.calls.commit.length, 0);
+  assert.equal(h.calls.end.length, 0);
+  assert.doesNotMatch(h.nodes['voice-status'].textContent, /private/);
+});
+
+test('partial revisions replace one live segment，stable prefix is distinct and neither enters Conversation', async () => {
+  const h = harness();
+  await h.controller.start();
+  h.asr(1, 1, '日本のし');
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, '日本のし');
+  h.asr(1, 2, '日本の四季');
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, '日本の四季');
+  h.asr(1, 3, '日本の四季について', {phase: 'stable', stable_prefix: '日本の四季'});
+  assert.equal(h.nodes['voice-transcript-stable'].textContent, '日本の四季');
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, 'について');
+  assert.equal(h.nodes['voice-live-transcript'].hidden, false);
+  assert.equal(h.calls.transcript.length, 0);
+  assert.equal(h.controller.lastSnapshot.transcript, undefined);
+  assert.equal(h.calls.token.length, 0);
+  h.asr(1, 4, '日本の四季<img src=x>', {stable_prefix: '日本の四季'});
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, '<img src=x>');
+  assert.equal(h.nodes['voice-transcript-revisable'].innerHTML, undefined);
+  await h.controller.cancel();
+});
+
+test('ASR updates reject wrong identities，non-increasing revisions and backwards or invalid monotonic times', async () => {
+  const h = harness();
+  await h.controller.start();
+  h.asr(1, 3, 'accepted');
+  for (const change of [
+    {operation_id: 'other'}, {session_id: 'other'}, {turn_id: 'other'}, {segment_id: 'other'},
+    {revision: 2}, {revision: 3}, {revision: 0}, {revision: 2049}, {revision: 3.5},
+    {monotonic_ms: 29}, {monotonic_ms: -1}, {monotonic_ms: NaN}, {monotonic_ms: 1.5}, {phase: 'unknown'},
+  ]) h.asr(1, 4, 'rejected', change);
+  h.event(1, 'asr_update', {session_id: 'other', asr: asrUpdate(1, 4, 'rejected')});
+  h.event(1, 'asr_update', {turn_id: undefined, asr: asrUpdate(1, 4, 'rejected')});
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, 'accepted');
+  h.asr(1, 4, 'next', {monotonic_ms: 30});
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, 'next');
+  assert.equal(h.calls.transcript.length, 0);
+  await h.controller.cancel();
+});
+
+test('early final stops recording and ends only after pending PCM，then one canonical final enters history', async () => {
+  const append = deferred();
+  const h = harness({bridge: {AppendInteractionAudio: () => append.promise}});
+  await h.controller.start();
+  h.contexts[0].capture();
+  h.asr(1, 1, '日本の四季について', {phase: 'final', stable_prefix: '日本の四季について'});
+  assert.ok(h.streams[0].tracks.every(track => track.stopped));
+  assert.equal(h.calls.end.length, 0);
+  assert.equal(h.calls.transcript.length, 0);
+  assert.equal(h.controller.lastSnapshot.transcript, undefined);
+  assert.equal(h.nodes['voice-transcript-stable'].textContent, '日本の四季について');
+  h.event(1, 'transcript', {text: 'premature'});
+  h.state(1, 'TRANSCRIBING', {transcript: 'premature'});
+  assert.equal(h.calls.transcript.length, 0);
+  assert.equal(h.controller.lastSnapshot.transcript, undefined);
+  append.resolve();
+  await tick();
+  assert.deepEqual(h.calls.end, [['op-1']]);
+  assert.equal(h.calls.transcript.length, 0);
+  h.event(1, 'transcript', {text: '日本の四季について'});
+  h.event(1, 'transcript', {text: '日本の四季について'});
+  h.asr(1, 2, 'late hypothesis');
+  assert.deepEqual(h.calls.transcript.map(call => call[1]), ['日本の四季について']);
+  assert.equal(h.controller.lastSnapshot.transcript, '日本の四季について');
+  assert.equal(h.nodes['voice-live-transcript'].hidden, true);
+  assert.equal(h.calls.commit.length, 0);
+  await h.controller.cancel();
+});
+
+test('final delivered only after manual End remains display-only until the canonical transcript', async () => {
+  const end = deferred();
+  const h = harness({bridge: {EndInteractionASR: () => end.promise}});
+  await h.controller.start();
+  h.contexts[0].capture();
+  const stopping = h.controller.stop();
+  await tick();
+  h.asr(1, 1, 'final only', {phase: 'final', stable_prefix: 'final only'});
+  assert.equal(h.calls.transcript.length, 0);
+  h.event(1, 'transcript', {text: 'final only'});
+  assert.equal(h.calls.transcript.length, 1);
+  end.resolve();
+  assert.equal(await stopping, true);
+  await h.controller.cancel();
+});
+
+test('ASR events emitted during Open are buffered only until the matching segment is known', async () => {
+  const open = deferred();
+  const h = harness({bridge: {BeginInteractionASR: () => open.promise}});
+  const starting = h.controller.start();
+  await tick();
+  h.asr(1, 1, 'wrong segment', {segment_id: 'wrong'});
+  h.asr(1, 1, 'early partial');
+  assert.equal(h.nodes['voice-live-transcript'].hidden, true);
+  open.resolve(asrSession(1));
+  assert.equal(await starting, true);
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, 'early partial');
+  assert.equal(h.calls.transcript.length, 0);
+  await h.controller.cancel();
+});
+
+test('cancel during an append or End releases resources immediately and late callbacks cannot enter a new turn', async () => {
+  for (const stage of ['append', 'end']) {
+    const pending = deferred();
+    let intercepted = false;
+    const method = stage === 'append' ? 'AppendInteractionAudio' : 'EndInteractionASR';
+    const h = harness({bridge: {[method]: () => {
+      if (!intercepted) { intercepted = true; return pending.promise; }
+      return Promise.resolve();
+    }}});
+    await h.controller.start();
+    h.contexts[0].capture();
+    const stopping = h.controller.stop();
+    await tick();
+    await h.controller.cancel();
+    assert.equal(h.contexts[0].closed, true);
+    assert.ok(h.streams[0].tracks.every(track => track.stopped));
+    assert.equal(await h.controller.start(), true);
+    pending.resolve();
+    assert.equal(await stopping, false);
+    h.asr(1, 5, 'old final', {phase: 'final', stable_prefix: 'old final'});
+    h.event(1, 'transcript', {text: 'old canonical'});
+    assert.equal(h.controller.lastSnapshot.operation_id, 'op-2');
+    assert.equal(h.calls.transcript.length, 0);
+    assert.equal(h.calls.commit.length, 0);
+    assert.equal(h.nodes['voice-live-transcript'].hidden, true);
+    assert.deepEqual(h.calls.cancel, ['op-1']);
+    await h.controller.cancel();
+  }
+});
+
+test('session switch while recording cancels capture before sending more PCM or accepting hypotheses', async () => {
+  let sessionID = 'session';
+  const h = harness({getSessionID: () => sessionID});
+  await h.controller.start();
+  sessionID = 'new-session';
+  h.contexts[0].capture();
+  h.asr(1, 1, 'old hypothesis');
+  await tick();
+  assert.deepEqual(h.calls.cancel, ['op-1']);
+  assert.equal(h.calls.append.length, 0);
+  assert.equal(h.calls.transcript.length, 0);
+  assert.ok(h.streams[0].tracks.every(track => track.stopped));
+});
+
+test('failure timeout and cancellation updates clear private hypotheses and restore text input availability', async () => {
+  for (const phase of ['failure', 'timeout', 'canceled']) {
+    const h = harness();
+    await h.controller.start();
+    h.asr(1, 1, 'private partial');
+    h.asr(1, 2, '', {phase, error_code: 'private provider diagnostic'});
+    await tick();
+    assert.equal(h.controller.isActive(), false);
+    assert.equal(h.calls.transcript.length, 0);
+    assert.equal(h.controller.lastSnapshot.transcript, undefined);
+    assert.equal(h.nodes['voice-transcript-revisable'].textContent, '');
+    assert.equal(h.nodes['voice-record'].disabled, false);
+    assert.doesNotMatch(h.nodes['voice-status'].textContent, /private/);
+    if (phase === 'canceled') assert.deepEqual(h.calls.cancel, ['op-1']);
+    else assert.deepEqual(h.calls.fail, [['op-1', phase === 'timeout' ? 'asr_timeout' : 'asr_failed']]);
+  }
+});
+
+test('invalid stable prefixes and oversized hypotheses fail with a fixed protocol code', async () => {
+  for (const update of [
+    {phase: 'partial', transcript: 'text', stable_prefix: 'different'},
+    {phase: 'final', transcript: 'text', stable_prefix: ''},
+    {phase: 'partial', transcript: 'x'.repeat(16001)},
+  ]) {
+    const h = harness();
+    await h.controller.start();
+    h.asr(1, 1, '', update);
+    await tick();
+    assert.deepEqual(h.calls.fail, [['op-1', 'asr_protocol_error']]);
+    assert.equal(h.calls.transcript.length, 0);
+    assert.ok(h.streams[0].tracks.every(track => track.stopped));
+  }
+});
+
+test('provider-guaranteed stable text cannot shrink or change on a later partial revision', async () => {
+  for (const next of [
+    {transcript: '確定した文章の続き', stable_prefix: '確定'},
+    {transcript: '変更した文章', stable_prefix: '変更した文章'},
+    {transcript: '確定した文章の続き', stable_prefix: ''},
+  ]) {
+    const h = harness();
+    await h.controller.start();
+    h.asr(1, 1, '確定した文章の', {phase: 'stable', stable_prefix: '確定した文章'});
+    h.asr(1, 2, '', next);
+    await tick();
+    assert.deepEqual(h.calls.fail, [['op-1', 'asr_protocol_error']]);
+    assert.equal(h.calls.transcript.length, 0);
+  }
+});
+
+test('a coalesced final arriving after the canonical transcript cannot reopen the live view', async () => {
+  const h = harness();
+  await h.controller.start();
+  h.contexts[0].capture();
+  await h.controller.stop();
+  h.event(1, 'transcript', {text: '確定'});
+  h.asr(1, 1, '確定', {phase: 'final', stable_prefix: '確定'});
+  assert.equal(h.nodes['voice-live-transcript'].hidden, true);
+  assert.equal(h.calls.transcript.length, 1);
+  assert.equal(h.calls.end.length, 1);
+  await h.controller.cancel();
+});
+
+test('synchronous provider final during Append waits for that append and calls End once', async () => {
+  const append = deferred();
+  let h;
+  let ends = 0;
+  h = harness({bridge: {
+    AppendInteractionAudio() {
+      h.asr(1, 1, '同期final', {phase: 'final', stable_prefix: '同期final'});
+      return append.promise;
+    },
+    EndInteractionASR() {
+      ends += 1;
+      h.asr(1, 1, '同期final', {phase: 'final', stable_prefix: '同期final'});
+      h.event(1, 'transcript', {text: '同期final'});
+      return Promise.resolve();
+    },
+  }});
+  await h.controller.start();
+  h.contexts[0].capture();
+  await tick();
+  assert.equal(ends, 0);
+  assert.equal(h.calls.transcript.length, 0);
+  append.resolve();
+  await tick();
+  assert.equal(ends, 1);
+  assert.deepEqual(h.calls.transcript.map(call => call[1]), ['同期final']);
+  assert.ok(h.streams[0].tracks.every(track => track.stopped));
+  await h.controller.cancel();
+});
+
+test('a final while microphone permission is pending closes the late stream without attaching capture', async () => {
+  const permission = deferred();
+  const h = harness({mediaDevices: {getUserMedia: () => permission.promise}});
+  const starting = h.controller.start();
+  await tick();
+  h.asr(1, 1, '早期final', {phase: 'final', stable_prefix: '早期final'});
+  const late = stream();
+  permission.resolve(late);
+  assert.equal(await starting, false);
+  await tick();
+  assert.ok(late.tracks.every(track => track.stopped));
+  assert.equal(h.contexts[0].processor, undefined);
+  assert.equal(h.calls.transcript.length, 0);
+  assert.equal(h.calls.end.length, 1);
+  await h.controller.cancel();
+});
+
+test('premature canonical callbacks during Open do not seal or persist an unconfirmed ASR segment', async () => {
+  const open = deferred();
+  const h = harness({bridge: {BeginInteractionASR: () => open.promise}});
+  const starting = h.controller.start();
+  await tick();
+  h.event(1, 'transcript', {text: 'premature'});
+  open.resolve(asrSession(1));
+  await starting;
+  h.asr(1, 1, 'visible partial');
+  assert.equal(h.calls.transcript.length, 0);
+  assert.equal(h.controller.lastSnapshot.transcript, undefined);
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, 'visible partial');
+  await h.controller.cancel();
+});
+
+for (const [stage, method] of [['begin', 'BeginInteractionASR'], ['append', 'AppendInteractionAudio'], ['end', 'EndInteractionASR']]) {
+  test(`${stage} preserves exact ASR bridge codes when rejection precedes the terminal state event`, async () => {
+    for (const code of [
+      'asr_failed', 'asr_backpressure', 'asr_protocol_error', 'asr_timeout', 'asr_canceled', 'asr_unavailable',
+      'asr_on_device_unavailable', 'asr_permission_denied', 'asr_permission_restricted', 'asr_stream_invalid',
+      'asr_stream_eof', 'asr_empty_transcript', 'asr_empty_result', 'invalid_audio', 'invalid_voice_config',
+    ]) {
+      for (const rejection of [code, new Error(code)]) {
+        const h = harness({bridge: {[method]: async () => { throw rejection; }}});
+        if (stage === 'begin') assert.equal(await h.controller.start(), false);
+        else {
+          assert.equal(await h.controller.start(), true);
+          h.contexts[0].capture();
+          if (stage === 'end') assert.equal(await h.controller.stop(), false);
+          await tick();
+        }
+        assert.equal(h.controller.lastSnapshot.error_code, code);
+        assert.deepEqual(h.calls.fail, [['op-1', code]]);
+        assert.equal(h.calls.failure.length, 1);
+        assert.equal(h.calls.transcript.length, 0);
+        assert.equal(h.controller.isActive(), false);
+        assert.ok(h.streams.every(item => item.tracks.every(track => track.stopped)));
+        h.state(1, 'FAILED', {error_code: code});
+        assert.equal(h.calls.failure.length, 1);
+      }
+    }
+  });
+
+  test(`${stage} never extracts an ASR code from arbitrary bridge diagnostics`, async () => {
+    for (const rejection of [
+      'asr_timeout: private path', new Error('asr_permission_denied private transcript'),
+      ' asr_timeout', 'asr_timeout\n', {code: 'asr_timeout'}, null,
+    ]) {
+      const h = harness({bridge: {[method]: async () => { throw rejection; }}});
+      if (stage === 'begin') await h.controller.start();
+      else {
+        await h.controller.start();
+        h.contexts[0].capture();
+        if (stage === 'end') await h.controller.stop();
+        await tick();
+      }
+      const fallback = stage === 'begin' ? 'asr_unavailable' : 'asr_failed';
+      assert.equal(h.controller.lastSnapshot.error_code, fallback);
+      assert.deepEqual(h.calls.fail, [['op-1', fallback]]);
+      assert.doesNotMatch(h.nodes['voice-status'].textContent, /private|path|transcript/);
+      assert.equal(h.calls.transcript.length, 0);
+    }
+  });
+}
