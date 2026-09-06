@@ -1230,3 +1230,25 @@ for (const [stage, method] of [['begin', 'BeginInteractionASR'], ['append', 'App
     }
   });
 }
+
+test('voice profile setup failures retain fixed codes without opening ASR or a microphone', async () => {
+  for (const code of ['voice_profile_unavailable', 'invalid_voice_profile', 'unsupported_voice_control']) {
+    for (const rejection of [code, new Error(code)]) {
+      const h = harness({bridge: {StartInteraction: async () => { throw rejection; }}});
+      assert.equal(await h.controller.start(), false);
+      assert.equal(h.controller.lastSnapshot.error_code, code);
+      assert.equal(h.calls.begin.length, 0);
+      assert.equal(h.streams.length, 0);
+      assert.equal(h.calls.fail.length, 0);
+      assert.equal(h.calls.transcript.length, 0);
+      assert.equal(h.controller.isActive(), false);
+      assert.match(h.nodes['voice-status'].textContent, /声/);
+      assert.match(h.nodes['voice-status'].textContent, /テキスト入力/);
+      assert.deepEqual(h.calls.busy, [[true], [false]]);
+    }
+  }
+  const h = harness({bridge: {StartInteraction: async () => { throw new Error('unsupported_voice_control PRIVATE provider diagnostic'); }}});
+  await h.controller.start();
+  assert.equal(h.controller.lastSnapshot.error_code, 'microphone_unavailable');
+  assert.doesNotMatch(h.nodes['voice-status'].textContent, /PRIVATE|provider|diagnostic/);
+});

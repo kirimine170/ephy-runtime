@@ -2182,6 +2182,62 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class SpeechOptions {
+	    voice_profile_id: string;
+	    style?: SpeechStyle;
+
+	    static createFrom(source: any = {}) {
+	        return new SpeechOptions(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.voice_profile_id = source["voice_profile_id"];
+	        this.style = this.convertValues(source["style"], SpeechStyle);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SpeechStyle {
+	    affect: string;
+	    intensity: number;
+	    pace: number;
+	    pitch_hint: number;
+	    volume: number;
+	    pause_style: string;
+	    interruptible: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new SpeechStyle(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.affect = source["affect"];
+	        this.intensity = source["intensity"];
+	        this.pace = source["pace"];
+	        this.pitch_hint = source["pitch_hint"];
+	        this.volume = source["volume"];
+	        this.pause_style = source["pause_style"];
+	        this.interruptible = source["interruptible"];
+	    }
+	}
 	export class StackActionResponse {
 	    status: string;
 	    steps: Record<string, any>;
@@ -2212,6 +2268,62 @@ export namespace main {
 	        this.latencies_ms = source["latencies_ms"];
 	    }
 	}
+	export class VoiceCapabilities {
+	    controls: Record<string, VoiceControl>;
+	    streaming: boolean;
+	    streaming_mode: string;
+	    interruptible: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceCapabilities(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.controls = this.convertValues(source["controls"], VoiceControl, true);
+	        this.streaming = source["streaming"];
+	        this.streaming_mode = source["streaming_mode"];
+	        this.interruptible = source["interruptible"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VoiceControl {
+	    type: string;
+	    min: number;
+	    max: number;
+	    step?: number;
+	    values?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceControl(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.min = source["min"];
+	        this.max = source["max"];
+	        this.step = source["step"];
+	        this.values = source["values"];
+	    }
+	}
 	export class VoiceHint {
 	    pace: number;
 	    volume: number;
@@ -2225,6 +2337,90 @@ export namespace main {
 	        this.pace = source["pace"];
 	        this.volume = source["volume"];
 	    }
+	}
+	export class VoiceProfile {
+	    voice_profile_id: string;
+	    display_name: string;
+	    provider: string;
+	    model_revision: string;
+	    language: string;
+	    clone_prompt_digest: string;
+	    provenance_id: string;
+	    default_style: SpeechStyle;
+	    capabilities: VoiceCapabilities;
+	    available: boolean;
+	    error_code?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceProfile(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.voice_profile_id = source["voice_profile_id"];
+	        this.display_name = source["display_name"];
+	        this.provider = source["provider"];
+	        this.model_revision = source["model_revision"];
+	        this.language = source["language"];
+	        this.clone_prompt_digest = source["clone_prompt_digest"];
+	        this.provenance_id = source["provenance_id"];
+	        this.default_style = this.convertValues(source["default_style"], SpeechStyle);
+	        this.capabilities = this.convertValues(source["capabilities"], VoiceCapabilities);
+	        this.available = source["available"];
+	        this.error_code = source["error_code"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VoiceProfileCatalog {
+	    default_profile_id: string;
+	    profiles: VoiceProfile[];
+	    error_code?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceProfileCatalog(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.default_profile_id = source["default_profile_id"];
+	        this.profiles = this.convertValues(source["profiles"], VoiceProfile);
+	        this.error_code = source["error_code"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class VoiceReadiness {
 	    state: string;
@@ -2247,6 +2443,7 @@ export namespace main {
 	    input_kind?: string;
 	    chat: ChatRequest;
 	    generation_limits: GenerationLimits;
+	    speech: SpeechOptions;
 
 	    static createFrom(source: any = {}) {
 	        return new VoiceTurnRequest(source);
@@ -2258,6 +2455,7 @@ export namespace main {
 	        this.input_kind = source["input_kind"];
 	        this.chat = this.convertValues(source["chat"], ChatRequest);
 	        this.generation_limits = this.convertValues(source["generation_limits"], GenerationLimits);
+	        this.speech = this.convertValues(source["speech"], SpeechOptions);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

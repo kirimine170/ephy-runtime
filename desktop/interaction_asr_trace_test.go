@@ -161,6 +161,14 @@ func TestInteractionASRTraceSurvivesRevisionFloodAndMaximumGeneration(t *testing
 		}
 		return interactionGenerationLength(text+"未確定", 64), nil
 	})
+	// C0.3 uses the same maximal trace workload through a pinned profile and SpeechRequest．
+	legacyTTS := h.engine.tts
+	h.engine.tts = &syntheticSpeechProvider{profile: customTestProfile(), stream: func(ctx context.Context, request SpeechRequest, emit func([]byte) error) error {
+		if request.VoiceProfileID != "synthetic-voice" || request.SpeechStyle != defaultSpeechStyle() {
+			return errors.New("invalid_voice_profile")
+		}
+		return legacyTTS.Stream(ctx, request.SpeechText, emit)
+	}}
 	start, session := beginASRTrace(t, h, partials)
 	session.final = session.update(partials+1, "final", finalText)
 	// Providers may finalize before the user's endpoint, then repeat that final

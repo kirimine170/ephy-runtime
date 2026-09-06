@@ -84,13 +84,30 @@ func (a *App) interactionEngine() *InteractionEngine {
 		if root == "" {
 			root = detectWorkspaceRoot()
 		}
-		a.interaction = NewInteractionEngine(NewNativeVoiceASR(root), NewNativeVoiceTTS(), a.chatWithContext, func(event InteractionEvent) {
+		a.interaction = NewInteractionEngine(NewNativeVoiceASR(root), NewVoiceTTSRegistry(), a.chatWithContext, func(event InteractionEvent) {
 			if ctx := a.currentContext(); ctx != nil {
 				runtime.EventsEmit(ctx, "interaction-event", event)
 			}
 		}, filepath.Join(root, "data", "runtime", "interaction"))
 	}
 	return a.interaction
+}
+
+// The catalog exposes public profile metadata，never reference paths or clone material．
+func (a *App) GetVoiceProfiles() VoiceProfileCatalog {
+	ctx := a.currentContext()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	engine := a.interactionEngine()
+	if registry, ok := engine.tts.(*VoiceTTSRegistry); ok {
+		return registry.Profiles(ctx)
+	}
+	if provider, ok := engine.tts.(VoiceSpeechProvider); ok {
+		p := provider.Profile()
+		return VoiceProfileCatalog{DefaultProfileID: p.VoiceProfileID, Profiles: []VoiceProfile{p}}
+	}
+	return VoiceProfileCatalog{Profiles: []VoiceProfile{}, ErrorCode: "voice_profile_unavailable"}
 }
 
 func (a *App) StartInteraction(request VoiceTurnRequest) (InteractionSnapshot, error) {
