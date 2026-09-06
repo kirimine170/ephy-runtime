@@ -1,4 +1,10 @@
 import './style.css';
+import './voiceInteraction.css';
+import {mountVoiceInteraction} from './voiceInteraction';
+import {conversationHistory} from './conversationHistory';
+import {voiceSessionCallbacks} from './voiceSession';
+import {mountVoiceEvaluation} from './voiceEvaluation';
+import * as interactionBridge from '../wailsjs/go/main/App';
 import './app.css';
 import {
   buildDropResultMessage,
@@ -157,6 +163,8 @@ let preferenceSaving = false;
 let preferencePrefetchPromise = null;
 let preferenceLastVote = null;
 let preferenceCorrectionVoteId = '';
+let voiceController = null;
+let voiceEvaluation = null;
 let chatThreadEntries = [];
 let chatConversationId = createKarteConversationId();
 let chatOccurredAt = formatLocalISOString();
@@ -969,6 +977,21 @@ app.innerHTML = `
             </div>
             <div id="chat-output" class="conversation-thread" role="region" aria-label="Conversation"></div>
             <div id="chat-stream-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+            <div id="voice-controls" class="voice-controls" role="group" aria-label="音声会話">
+              <button id="voice-record" class="ghost-btn" type="button">録音開始</button>
+              <button id="voice-cancel" class="ghost-btn" type="button" disabled>Ephyの発話停止</button>
+              <span id="voice-status" role="status" aria-live="polite">待機中</span>
+              <button id="voice-fallback" class="ghost-btn" type="button" hidden>文字入力で続ける</button>
+              <button id="voice-feedback" class="ghost-btn" type="button" disabled>違和感を記録</button>
+            </div>
+            <details id="voice-developer" class="voice-developer" data-developer-only hidden>
+              <summary>音声の検証</summary>
+              <div class="actions"><button id="voice-trace-refresh" class="ghost-btn" type="button">traceとlatencyを表示</button></div>
+              <pre id="voice-trace" class="output-block compact" aria-label="音声trace"></pre>
+              <label class="field"><span>再実行する発話</span><textarea id="voice-replay-transcript" class="text-area" maxlength="16000"></textarea></label>
+              <div class="actions"><button id="voice-replay" class="ghost-btn" type="button">同じ履歴から再実行</button></div>
+              <div id="voice-evaluation"></div>
+            </details>
             <div class="chat-composer">
               <div id="chat-drop-status" class="chat-drop-status helper-text"></div>
               <label class="field composer-field">
@@ -1509,6 +1532,7 @@ app.innerHTML = `
 
 function applyWorkspaceDeveloperMode(enabled) {
   developerModeEnabled = applyDeveloperModeVisibility(document, enabled);
+  voiceEvaluation?.refresh();
   if (!developerModeEnabled && ['runtime', 'router', 'eval'].includes(activePanelTab)) {
     activateTab('settings');
   }
@@ -2013,6 +2037,8 @@ function buildContinuationPrompt(entry) {
 
 function setChatSendState(inFlight) {
   chatSendInFlight = inFlight;
+  const voiceRecord = document.getElementById('voice-record');
+  if (voiceRecord && !voiceController?.isActive()) voiceRecord.disabled = inFlight;
   const sendButton = document.getElementById('send-chat');
   const promptInput = document.getElementById('chat-prompt');
   const thread = document.getElementById('chat-output');
@@ -2029,8 +2055,10 @@ function setChatSendState(inFlight) {
 }
 
 function startNewChat() {
+  void voiceController?.cancel();
   chatThreadEntries = [];
   chatConversationId = createKarteConversationId();
+  voiceEvaluation?.refresh();
   chatOccurredAt = formatLocalISOString();
   latestChatSources = [];
   activeChatSourceIndex = 0;
@@ -7591,6 +7619,7 @@ async function runChatFromForm() {
   if (!webSearch) {
     return {ok: false, detail: 'Web search cancelled.'};
   }
+  const history = conversationHistory(chatThreadEntries);
   const requestId = createChatRequestId();
   beginStreamingChat({
     requestId,
@@ -7641,6 +7670,8 @@ async function runChatFromForm() {
     const response = await RunChatAction({
       mode,
       prompt,
+      messages: history,
+      session_id: chatConversationId,
       ...grounding,
       ...webSearch,
       temperature: 0.2,
@@ -11090,4 +11121,69 @@ document.getElementById('overview-preset-runtime-hint').addEventListener('click'
       renderRuntimeMessage('runtime-stack-output', String(error));
     }
   }
+});
+
+
+// Voice uses the existing thread and Chat gateway，with bounded metadata-only diagnostics．
+voiceController = mountVoiceInteraction({
+  root: document,
+  bridge: interactionBridge,
+  subscribe: callback => window.runtime?.EventsOnMultiple ? EventsOn('interaction-event', callback) : () => {},
+  getRequest: () => ({
+    session_id: chatConversationId,
+    chat: {mode: document.getElementById('chat-mode').value, prompt: '',
+      messages: conversationHistory(chatThreadEntries), ...buildChatGroundingPayload(),
+      temperature: 0.2, max_tokens: 512, stream: true, web_search: false},
+  }),
+  ...voiceSessionCallbacks({
+  getSessionID: () => chatConversationId,
+  onDetachedFinish: () => setChatSendState(chatSendInFlight),
+  onTranscript(snapshot, text) {
+    voiceEvaluation?.refresh();
+    beginStreamingChat({requestId: snapshot.operation_id, prompt: text, modeLabel: '音声'});
+    document.getElementById('voice-replay-transcript').value = text;
+  },
+  onToken(snapshot, text) { applyChatStreamDelta({requestId: snapshot.operation_id, channel: 'answer', delta: text}); },
+  onComplete(snapshot) {
+    finalizeStreamingChat({requestId: snapshot.operation_id, answer: snapshot.response_plan?.text || '', meta: '音声 · 完了', finishReason: 'stop'});
+    document.getElementById('voice-feedback').disabled = false;
+    voiceEvaluation?.refresh();
+  },
+  onCancel(snapshot) {
+    finalizeStreamingChat({requestId: snapshot.operation_id, answer: snapshot.response_plan?.text || '', meta: '音声 · 停止', finishReason: 'stop'});
+    document.getElementById('voice-feedback').disabled = !snapshot.operation_id;
+    voiceEvaluation?.refresh();
+  },
+  onFailure(snapshot) {
+    finalizeStreamingChat({requestId: snapshot.operation_id, answer: snapshot.response_plan?.text || '', meta: snapshot.state === 'CANCELED' ? '音声 · 停止' : '音声 · 文字入力で続行できます', finishReason: 'stop'});
+    document.getElementById('voice-feedback').disabled = !snapshot.operation_id;
+    voiceEvaluation?.refresh();
+  },
+  onFallback(snapshot) {
+    document.getElementById('chat-prompt').value = snapshot?.transcript || '';
+    document.getElementById('chat-prompt').focus();
+  },
+  onBusy: busy => {
+    setChatSendState(busy);
+    document.getElementById('voice-feedback').disabled = true;
+    voiceEvaluation?.refresh();
+  },
+  }),
+});
+document.getElementById('voice-trace-refresh').addEventListener('click', async () => {
+  if (!developerModeEnabled || !voiceController.lastSnapshot?.operation_id || voiceController.lastSnapshot.session_id !== chatConversationId) return;
+  const op = voiceController.lastSnapshot.operation_id;
+  const session = chatConversationId;
+  try {
+    const [events, validation] = await Promise.all([interactionBridge.GetInteractionTrace(op), interactionBridge.ValidateInteractionTrace(op)]);
+    if (!developerModeEnabled || session !== chatConversationId || op !== voiceController.lastSnapshot?.operation_id) return;
+    document.getElementById('voice-trace').textContent = JSON.stringify({validation, events}, null, 2);
+  } catch (_) { document.getElementById('voice-trace').textContent = 'traceを取得できません．'; }
+});
+voiceEvaluation = mountVoiceEvaluation({
+  root: document,
+  bridge: interactionBridge,
+  controller: voiceController,
+  getSessionID: () => chatConversationId,
+  isDeveloper: () => developerModeEnabled,
 });

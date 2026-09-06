@@ -1,0 +1,16 @@
+.voice-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid #deddd6; }
+.voice-controls button { min-height: 36px; }
+.voice-controls [role="status"] { flex: 1; min-width: 120px; font-size: 13px; }
+.voice-controls button:focus-visible, .voice-developer button:focus-visible { outline: 2px solid #405f8d; outline-offset: 3px; }
+.voice-developer { margin: 8px 0; padding: 10px; border: 1px solid #deddd6; border-radius: 8px; }
+.voice-developer[hidden] { display: none; }
+.voice-developer[open] { max-height: 55vh; overflow: auto; overscroll-behavior: contain; }
+.voice-developer pre { max-height: 220px; overflow: auto; white-space: pre-wrap; }
+.voice-comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.voice-candidate { white-space: pre-wrap; max-height: 240px; overflow: auto; }
+#voice-evaluation fieldset { margin: 12px 0; padding: 12px; border: 1px solid #deddd6; border-radius: 8px; }
+#voice-evaluation select, #voice-evaluation input[type="number"] { padding: 8px; border: 1px solid #deddd6; border-radius: 6px; background: white; color: #172634; }
+#voice-evaluation fieldset > label:has(input[type="checkbox"]) { display: inline-flex; align-items: center; gap: 4px; margin: 5px 10px 5px 0; }
+.voice-comparison section { min-width: 0; padding: 10px; border: 1px solid #deddd6; border-radius: 8px; }
+.voice-comparison h4 { margin: 0 0 8px; }
+@media (max-width: 700px) { .voice-comparison { grid-template-columns: 1fr; } }

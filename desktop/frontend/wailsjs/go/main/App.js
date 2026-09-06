@@ -18,6 +18,14 @@ export function CancelBatchWorkflow() {
   return window['go']['main']['App']['CancelBatchWorkflow']();
 }
 
+export function CancelInteraction(arg1) {
+  return window['go']['main']['App']['CancelInteraction'](arg1);
+}
+
+export function CancelInteractionComparison(arg1) {
+  return window['go']['main']['App']['CancelInteractionComparison'](arg1);
+}
+
 export function Chat(arg1) {
   return window['go']['main']['App']['Chat'](arg1);
 }
@@ -32,6 +40,10 @@ export function ClearBatchWorkflowState() {
 
 export function ClearExecutionHistory() {
   return window['go']['main']['App']['ClearExecutionHistory']();
+}
+
+export function CommitInteraction(arg1, arg2) {
+  return window['go']['main']['App']['CommitInteraction'](arg1, arg2);
 }
 
 export function CreatePreferenceSession(arg1) {
@@ -58,12 +70,24 @@ export function Eval(arg1) {
   return window['go']['main']['App']['Eval'](arg1);
 }
 
+export function ExportInteractionEvaluations(arg1) {
+  return window['go']['main']['App']['ExportInteractionEvaluations'](arg1);
+}
+
 export function ExportPreferenceSession(arg1, arg2) {
   return window['go']['main']['App']['ExportPreferenceSession'](arg1, arg2);
 }
 
 export function ExportResult(arg1) {
   return window['go']['main']['App']['ExportResult'](arg1);
+}
+
+export function FailInteraction(arg1, arg2) {
+  return window['go']['main']['App']['FailInteraction'](arg1, arg2);
+}
+
+export function GenerateInteractionComparison(arg1) {
+  return window['go']['main']['App']['GenerateInteractionComparison'](arg1);
 }
 
 export function GeneratePreferencePairs(arg1, arg2) {
@@ -88,6 +112,14 @@ export function GetGatewayURL() {
 
 export function GetIndexSource(arg1) {
   return window['go']['main']['App']['GetIndexSource'](arg1);
+}
+
+export function GetInteraction(arg1) {
+  return window['go']['main']['App']['GetInteraction'](arg1);
+}
+
+export function GetInteractionTrace(arg1) {
+  return window['go']['main']['App']['GetInteractionTrace'](arg1);
 }
 
 export function GetKarteProposalStatus(arg1) {
@@ -132,6 +164,10 @@ export function ImportLocalModel(arg1) {
 
 export function Ingest(arg1) {
   return window['go']['main']['App']['Ingest'](arg1);
+}
+
+export function InteractionPlayback(arg1, arg2, arg3) {
+  return window['go']['main']['App']['InteractionPlayback'](arg1, arg2, arg3);
 }
 
 export function ListExportedResults() {
@@ -186,8 +222,16 @@ export function RecordExecution(arg1) {
   return window['go']['main']['App']['RecordExecution'](arg1);
 }
 
+export function RecordInteractionFeedback(arg1) {
+  return window['go']['main']['App']['RecordInteractionFeedback'](arg1);
+}
+
 export function ReloadGatewayConfig() {
   return window['go']['main']['App']['ReloadGatewayConfig']();
+}
+
+export function ReplayInteraction(arg1) {
+  return window['go']['main']['App']['ReplayInteraction'](arg1);
 }
 
 export function RoutePlan(arg1) {
@@ -276,6 +320,10 @@ export function RunRuntimeSmoke(arg1) {
 
 export function RunRuntimeStackAction(arg1) {
   return window['go']['main']['App']['RunRuntimeStackAction'](arg1);
+}
+
+export function SaveInteractionEvaluation(arg1) {
+  return window['go']['main']['App']['SaveInteractionEvaluation'](arg1);
 }
 
 export function SaveLocalConfigFile(arg1) {
@@ -382,6 +430,10 @@ export function StartGateway() {
   return window['go']['main']['App']['StartGateway']();
 }
 
+export function StartInteraction(arg1) {
+  return window['go']['main']['App']['StartInteraction'](arg1);
+}
+
 export function StartQdrant() {
   return window['go']['main']['App']['StartQdrant']();
 }
@@ -432,6 +484,10 @@ export function StopWatch() {
 
 export function StopWork() {
   return window['go']['main']['App']['StopWork']();
+}
+
+export function ValidateInteractionTrace(arg1) {
+  return window['go']['main']['App']['ValidateInteractionTrace'](arg1);
 }
 
 export function ValidateProjectPreset(arg1) {
