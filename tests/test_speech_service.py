@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from copy import deepcopy
 import json
 from pathlib import Path
 import socket
@@ -9,7 +10,7 @@ import httpx
 import pytest
 
 from apps.speech.qwen import MODEL_REVISION, waveform_to_wav
-from apps.speech.schemas import SpeechError, SpeechRequest
+from apps.speech.schemas import DEFAULT_STYLE, QWEN_CAPABILITIES, SpeechError, SpeechRequest, public_profile
 from apps.speech.service import ProcessWorker, SpeechService, create_app
 
 
@@ -118,6 +119,92 @@ def test_catalog_and_http_validation_keep_private_data_out():
 def test_default_catalog_is_offline_without_importing_or_loading_model():
     catalog = SpeechService().catalog()
     assert catalog == {"default_profile_id": "", "profiles": [], "error_code": "tts_unavailable"}
+
+
+@pytest.mark.parametrize("volume", [0, 0.5, 1])
+def test_catalog_preserves_supported_profile_default_volume(volume):
+    speech = SpeechService({"default_profile_id": "voice-1", "profiles": [
+        {**PROFILE, "default_style": {"volume": volume}},
+    ]}, worker=FakeWorker(), available=True)
+    assert speech.catalog()["profiles"][0]["default_style"] == {**DEFAULT_STYLE, "volume": volume}
+
+
+@pytest.mark.parametrize("controls,expected_volume", [({}, 0.5), ({"volume": 1.0}, 1.0), ({"volume": 0}, 0)])
+def test_http_omitted_controls_use_profile_defaults_and_explicit_values_win(controls, expected_volume):
+    async def run():
+        worker = FakeWorker()
+        speech = SpeechService({"default_profile_id": "voice-1", "profiles": [
+            {**PROFILE, "default_style": {"volume": 0.5}},
+        ]}, worker=worker, available=True)
+        body = {**request().model_dump(exclude_unset=True), **controls}
+        assert ("volume" in body) == ("volume" in controls)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service=speech)), base_url="http://127.0.0.1") as client:
+            response = await client.post("/v1/speech", json=body)
+        assert response.status_code == 200
+        assert [json.loads(line)["type"] for line in response.text.splitlines()] == ["audio", "completed"]
+        assert len(worker.calls) == 1 and worker.calls[0].volume == expected_volume
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("style", [
+    {"affect": "angry"}, {"pace": 2.0}, {"intensity": 0.5}, {"pitch_hint": 1.0},
+    {"pause_style": "long"}, {"interruptible": False}, {"volume": -1}, {"volume": 1.1},
+    {"volume": True}, {"volume": float("nan")}, {"volume": float("inf")},
+    {"volume": "0.5"}, {"unknown": "PRIVATE"}, {"speech_text": "PRIVATE"}, None, [],
+])
+def test_profile_rejects_unsupported_or_invalid_defaults_without_private_details(style):
+    with pytest.raises(SpeechError) as error:
+        public_profile({**PROFILE, "default_style": style}, available=True)
+    assert str(error.value) == "unsupported_voice_control"
+
+
+@pytest.mark.parametrize("capabilities", [
+    {**QWEN_CAPABILITIES, "controls": {**QWEN_CAPABILITIES["controls"], "affect": {"type": "enum", "values": ["angry"]}}},
+    {**QWEN_CAPABILITIES, "streaming_mode": "codec"},
+    {**QWEN_CAPABILITIES, "streaming": 1},
+    {**QWEN_CAPABILITIES, "controls": {"volume": {"type": "number", "min": 0, "max": True, "step": 0.05}}},
+    {**QWEN_CAPABILITIES, "unknown": "PRIVATE"}, {}, None,
+])
+def test_profile_rejects_capabilities_that_the_provider_does_not_implement(capabilities):
+    with pytest.raises(SpeechError) as error:
+        public_profile({**PROFILE, "capabilities": capabilities}, available=True)
+    assert str(error.value) == "unsupported_voice_control"
+
+
+@pytest.mark.parametrize("claims", [
+    {"available": True}, {"available": False}, {"error_code": "tts_unavailable"},
+    {"error_code": "PRIVATE"}, {"unknown": "PRIVATE"},
+])
+def test_profile_configuration_cannot_claim_service_availability_or_unknown_fields(claims):
+    with pytest.raises(SpeechError) as error:
+        public_profile({**PROFILE, **claims}, available=True)
+    assert str(error.value) == "invalid_speech_text"
+
+
+def test_profile_capabilities_and_defaults_are_independent_copies():
+    expected_caps, expected_style = deepcopy(QWEN_CAPABILITIES), deepcopy(DEFAULT_STYLE)
+    config = {**PROFILE, "default_style": {**DEFAULT_STYLE, "volume": 0.5}, "capabilities": deepcopy(QWEN_CAPABILITIES)}
+    # JSON integer bounds express the same numeric range as float bounds．
+    config["capabilities"]["controls"]["volume"].update(min=0, max=1)
+    original = deepcopy(config)
+    first = public_profile(config, available=True)
+    second = public_profile(PROFILE, available=False)
+    assert first["default_style"]["volume"] == 0.5 and first["available"] is True and "error_code" not in first
+    assert second["available"] is False and second["error_code"] == "tts_unavailable"
+    first["default_style"]["volume"] = 0.2
+    first["capabilities"]["controls"]["volume"]["max"] = 100
+    first["capabilities"]["controls"]["affect"] = {"type": "enum", "values": ["angry"]}
+    assert config == original
+    assert second["default_style"] == DEFAULT_STYLE == expected_style
+    assert second["capabilities"] == QWEN_CAPABILITIES == expected_caps
+    assert public_profile(PROFILE, available=True)["capabilities"] == expected_caps
+
+
+@pytest.mark.parametrize("profile", [{}, {**PROFILE, "clone_prompt_digest": None}])
+def test_malformed_profile_identity_returns_only_a_fixed_error(profile):
+    with pytest.raises(SpeechError) as error:
+        public_profile(profile, available=True)
+    assert str(error.value) == "invalid_speech_text"
 
 
 def fake_worker_command(tmp_path: Path, mode="valid"):

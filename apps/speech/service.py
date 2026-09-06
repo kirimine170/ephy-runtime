@@ -185,6 +185,9 @@ class SpeechService:
 
         try:
             profile = self.profile(request)
+            # Resolve omitted controls from the selected profile without replacing
+            # explicitly supplied values，including an explicit volume of 1.0．
+            request = parse_speech_request({**profile["default_style"], **request.model_dump(exclude_unset=True)})
             job = asyncio.create_task(self.worker.synthesize(request, profile))
             deadline = asyncio.get_running_loop().time() + self.request_timeout
             while not job.done():

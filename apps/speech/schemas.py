@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import math
 import re
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -45,14 +46,9 @@ def parse_speech_request(value: Any) -> SpeechRequest:
         raise SpeechError("invalid_speech_text") from None
 
 
-class SpeechRequest(BaseModel):
+class SpeechStyle(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    request_id: str = Field(pattern=ID_PATTERN)
-    voice_profile_id: str = Field(pattern=ID_PATTERN)
-    model_revision: str = Field(pattern=ID_PATTERN)
-    clone_prompt_digest: str = Field(pattern=DIGEST_PATTERN)
-    speech_text: str = Field(min_length=1, max_length=180)
     affect: str = "neutral"
     intensity: float = 1.0
     pace: float = 1.0
@@ -60,6 +56,24 @@ class SpeechRequest(BaseModel):
     volume: float = Field(default=1.0, ge=0.0, le=1.0)
     pause_style: str = "natural"
     interruptible: bool = True
+
+    @model_validator(mode="after")
+    def supported_style(self) -> SpeechStyle:
+        if not all(math.isfinite(v) for v in (self.intensity, self.pace, self.pitch_hint, self.volume)):
+            raise ValueError("invalid_speech_text")
+        if (self.affect, self.intensity, self.pace, self.pitch_hint, self.pause_style, self.interruptible) != (
+            "neutral", 1.0, 1.0, 0.0, "natural", True
+        ):
+            raise ValueError("unsupported_voice_control")
+        return self
+
+
+class SpeechRequest(SpeechStyle):
+    request_id: str = Field(pattern=ID_PATTERN)
+    voice_profile_id: str = Field(pattern=ID_PATTERN)
+    model_revision: str = Field(pattern=ID_PATTERN)
+    clone_prompt_digest: str = Field(pattern=DIGEST_PATTERN)
+    speech_text: str = Field(min_length=1, max_length=180)
 
     @field_validator("speech_text")
     @classmethod
@@ -70,40 +84,47 @@ class SpeechRequest(BaseModel):
             raise ValueError("invalid_speech_text")
         return value
 
-    @model_validator(mode="after")
-    def supported_style(self) -> SpeechRequest:
-        if not all(math.isfinite(v) for v in (self.intensity, self.pace, self.pitch_hint, self.volume)):
-            raise ValueError("invalid_speech_text")
-        if (self.affect, self.intensity, self.pace, self.pitch_hint, self.pause_style, self.interruptible) != (
-            "neutral", 1.0, 1.0, 0.0, "natural", True
-        ):
-            raise ValueError("unsupported_voice_control")
-        return self
 
-
-DEFAULT_STYLE: dict[str, Any] = {
-    "affect": "neutral", "intensity": 1.0, "pace": 1.0, "pitch_hint": 0.0,
-    "volume": 1.0, "pause_style": "natural", "interruptible": True,
-}
+DEFAULT_STYLE: dict[str, Any] = SpeechStyle().model_dump()
 QWEN_CAPABILITIES: dict[str, Any] = {
     "controls": {"volume": {"type": "number", "min": 0.0, "max": 1.0, "step": 0.05}},
     "streaming": True, "streaming_mode": "phrase", "interruptible": True,
 }
 
 
+def _matches_capabilities(value: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        return (isinstance(value, dict) and value.keys() == expected.keys()
+                and all(_matches_capabilities(value[key], item) for key, item in expected.items()))
+    if isinstance(expected, float):
+        # JSON numbers may be integral，but booleans must not impersonate numbers．
+        return type(value) in (int, float) and value == expected
+    return type(value) is type(expected) and value == expected
+
+
 def public_profile(value: dict[str, Any], *, available: bool) -> dict[str, Any]:
     fields = ("voice_profile_id", "display_name", "provider", "model_revision", "language", "clone_prompt_digest", "provenance_id")
-    if set(value) - set(fields) - {"default_style", "capabilities", "available", "error_code"}:
+    # Availability and error codes are service facts，never configuration claims．
+    if (not isinstance(value, dict) or type(available) is not bool
+            or not set(fields) <= set(value)
+            or set(value) - set(fields) - {"default_style", "capabilities"}):
         raise SpeechError("invalid_speech_text")
     result = {key: value[key] for key in fields}
     for key in ("voice_profile_id", "provider", "model_revision", "language", "provenance_id"):
         if not isinstance(result[key], str) or not re.fullmatch(ID_PATTERN, result[key]):
             raise SpeechError("invalid_speech_text")
-    if result["provider"] != "qwen3-tts" or not re.fullmatch(DIGEST_PATTERN, result["clone_prompt_digest"]):
+    if (result["provider"] != "qwen3-tts" or not isinstance(result["clone_prompt_digest"], str)
+            or not re.fullmatch(DIGEST_PATTERN, result["clone_prompt_digest"])):
         raise SpeechError("invalid_speech_text")
     if not isinstance(result["display_name"], str) or not 1 <= len(result["display_name"]) <= 80:
         raise SpeechError("invalid_speech_text")
-    result.update(default_style=dict(DEFAULT_STYLE), capabilities=QWEN_CAPABILITIES, available=available)
+    try:
+        style = SpeechStyle.model_validate(value.get("default_style", {})).model_dump()
+    except ValidationError:
+        raise SpeechError("unsupported_voice_control") from None
+    if "capabilities" in value and not _matches_capabilities(value["capabilities"], QWEN_CAPABILITIES):
+        raise SpeechError("unsupported_voice_control")
+    result.update(default_style=style, capabilities=deepcopy(QWEN_CAPABILITIES), available=available)
     if not available:
         result["error_code"] = "tts_unavailable"
     return result
