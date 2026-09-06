@@ -133,7 +133,7 @@ start_bundled_karte_runtime() {
 
   KARTE_DATA_DIR="${KARTE_DATA_DIR:-${runtime_root}/data/runtime/karte-data}"
   mkdir -p "${KARTE_DATA_DIR}/content" "${runtime_root}/data/runtime/pids" "${runtime_root}/data/runtime/logs"
-  KARTE_DATA_DIR="$(cd "${KARTE_DATA_DIR}" && pwd -P)"
+  KARTE_DATA_DIR="$(CDPATH= builtin cd -- "${KARTE_DATA_DIR}" >/dev/null && builtin pwd -P)"
   export KARTE_DATA_DIR
   pid_file="${runtime_root}/data/runtime/pids/karte.pid"
   log_file="${runtime_root}/data/runtime/logs/karte.log"
