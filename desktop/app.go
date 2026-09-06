@@ -24,11 +24,18 @@ import (
 )
 
 type App struct {
-	ctx                  context.Context
-	ctxMu                sync.RWMutex
-	baseURL              string
-	httpClient           *http.Client
-	preferenceHTTPClient *http.Client
+	interactionEvalMu      sync.Mutex
+	interactionComparisons map[string]*interactionComparison
+	comparisonCancels      map[string]context.CancelFunc
+	comparisonCanceled     map[string]time.Time
+	comparisonClosed       bool
+	interactionMu          sync.Mutex
+	interaction            *InteractionEngine
+	ctx                    context.Context
+	ctxMu                  sync.RWMutex
+	baseURL                string
+	httpClient             *http.Client
+	preferenceHTTPClient   *http.Client
 
 	mu                 sync.Mutex
 	modelLifecycleMu   sync.Mutex
@@ -78,19 +85,26 @@ type ModelItem struct {
 }
 
 type ChatRequest struct {
-	Mode        string   `json:"mode"`
-	Prompt      string   `json:"prompt"`
-	Project     string   `json:"project,omitempty"`
-	SourcePath  string   `json:"source_path,omitempty"`
-	SourceScope string   `json:"source_scope,omitempty"`
-	TopK        int      `json:"top_k,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Temperature float64  `json:"temperature"`
-	MaxTokens   int      `json:"max_tokens"`
-	RequestID   string   `json:"request_id,omitempty"`
-	Stream      bool     `json:"stream,omitempty"`
-	WebSearch   bool     `json:"web_search,omitempty"`
-	WebPlanID   string   `json:"web_search_plan_id,omitempty"`
+	temperatureExplicit bool
+	Messages            []GatewayMessage `json:"messages,omitempty"`
+	SessionID           string           `json:"session_id,omitempty"`
+	SessionMode         string           `json:"session_mode,omitempty"`
+	ModelID             string           `json:"model_id,omitempty"`
+	ProviderID          string           `json:"provider_id,omitempty"`
+	ConfigurationID     string           `json:"configuration_id,omitempty"`
+	Mode                string           `json:"mode"`
+	Prompt              string           `json:"prompt"`
+	Project             string           `json:"project,omitempty"`
+	SourcePath          string           `json:"source_path,omitempty"`
+	SourceScope         string           `json:"source_scope,omitempty"`
+	TopK                int              `json:"top_k,omitempty"`
+	Tags                []string         `json:"tags,omitempty"`
+	Temperature         float64          `json:"temperature"`
+	MaxTokens           int              `json:"max_tokens"`
+	RequestID           string           `json:"request_id,omitempty"`
+	Stream              bool             `json:"stream,omitempty"`
+	WebSearch           bool             `json:"web_search,omitempty"`
+	WebPlanID           string           `json:"web_search_plan_id,omitempty"`
 }
 
 type GatewayChatRequest struct {
@@ -108,6 +122,8 @@ type GatewayMessage struct {
 }
 
 type GatewayMetadata struct {
+	SessionID   string   `json:"session_id,omitempty"`
+	SessionMode string   `json:"session_mode,omitempty"`
 	Mode        string   `json:"mode"`
 	Project     string   `json:"project,omitempty"`
 	SourcePath  string   `json:"source_path,omitempty"`
@@ -786,17 +802,31 @@ func (a *App) GetKarteProposalStatus(candidateID string) (*KarteConversationStat
 }
 
 func (a *App) Chat(request ChatRequest) (*ChatResponse, error) {
+	ctx := a.currentContext()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.chatWithContext(ctx, request, nil)
+}
+
+// Text and voice share payload，history，persona，router，Karte and SSE handling．
+func (a *App) chatWithContext(ctx context.Context, request ChatRequest, onToken func(string)) (*ChatResponse, error) {
+	messages, err := conversationMessages(request)
+	if err != nil {
+		return nil, err
+	}
+
 	mode := request.Mode
 	if strings.TrimSpace(mode) == "" {
 		mode = "auto"
 	}
 
 	payload := GatewayChatRequest{
-		Model: "auto",
-		Messages: []GatewayMessage{
-			{Role: "user", Content: request.Prompt},
-		},
+		Model:    "auto",
+		Messages: messages,
 		Metadata: GatewayMetadata{
+			SessionID:   request.SessionID,
+			SessionMode: request.SessionMode,
 			Mode:        mode,
 			Project:     request.Project,
 			SourcePath:  request.SourcePath,
@@ -807,7 +837,7 @@ func (a *App) Chat(request ChatRequest) (*ChatResponse, error) {
 			WebPlanID:   request.WebPlanID,
 		},
 	}
-	if request.Temperature > 0 {
+	if request.Temperature > 0 || request.temperatureExplicit {
 		payload.Temperature = &request.Temperature
 	}
 	if request.MaxTokens > 0 {
@@ -815,11 +845,11 @@ func (a *App) Chat(request ChatRequest) (*ChatResponse, error) {
 	}
 	if request.Stream {
 		payload.Stream = true
-		return a.chatStream(payload, request.RequestID)
+		return a.chatStreamContext(ctx, payload, request.RequestID, onToken)
 	}
 
 	var raw map[string]any
-	if err := a.postJSON("/v1/chat/completions", payload, &raw); err != nil {
+	if err := a.postJSONContext(ctx, "/v1/chat/completions", payload, &raw); err != nil {
 		return nil, err
 	}
 
@@ -966,6 +996,22 @@ func (a *App) Query(request QueryRequest) (*QueryResponse, error) {
 }
 
 func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatResponse, error) {
+	return a.chatStreamContext(context.Background(), payload, requestID, nil)
+}
+
+func (a *App) chatStreamContext(ctx context.Context, payload GatewayChatRequest, requestID string, onToken func(string)) (*ChatResponse, error) {
+	emit := func(event ChatStreamEvent) {
+		if ctx.Err() != nil {
+			return
+		}
+		if onToken != nil {
+			if event.Kind == "delta" && event.Channel == "answer" {
+				onToken(event.Delta)
+			}
+			return
+		}
+		a.emitChatStreamEvent(event)
+	}
 	var answerBuilder strings.Builder
 	var thinkingBuilder strings.Builder
 	sources := []SearchItem{}
@@ -973,8 +1019,20 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 	var webSearchStatus *WebSearchStatus
 	var karteContextStatus *KarteContextStatus
 
-	err := a.streamGatewayResponse("/v1/chat/completions", payload, func(eventType string, data string) error {
+	err := a.streamGatewayResponseContext(ctx, "/v1/chat/completions", payload, func(eventType string, data string) error {
 		if data == "[DONE]" {
+			return nil
+		}
+		if eventType == "route" {
+			var route struct {
+				Provider        string `json:"provider"`
+				Model           string `json:"model"`
+				ConfigurationID string `json:"configuration_id"`
+			}
+			if err := json.Unmarshal([]byte(data), &route); err != nil {
+				return fmt.Errorf("invalid route event")
+			}
+			reportInteractionModel(ctx, route.Provider, route.Model, route.ConfigurationID)
 			return nil
 		}
 		if eventType == "error" {
@@ -986,7 +1044,7 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 				return nil
 			}
 			webSearchStatus = &status
-			a.emitChatStreamEvent(ChatStreamEvent{
+			emit(ChatStreamEvent{
 				RequestID:       requestID,
 				Kind:            "web_search_status",
 				WebSearchStatus: &status,
@@ -999,7 +1057,7 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 				return nil
 			}
 			karteContextStatus = &status
-			a.emitChatStreamEvent(ChatStreamEvent{
+			emit(ChatStreamEvent{
 				RequestID:          requestID,
 				Kind:               "karte_context_status",
 				KarteContextStatus: &status,
@@ -1014,7 +1072,7 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 				return nil
 			}
 			sources = payload.Sources
-			a.emitChatStreamEvent(ChatStreamEvent{
+			emit(ChatStreamEvent{
 				RequestID: requestID,
 				Kind:      "sources",
 				Sources:   sources,
@@ -1027,7 +1085,7 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 		}
 		if chunk.Thinking != "" {
 			thinkingBuilder.WriteString(chunk.Thinking)
-			a.emitChatStreamEvent(ChatStreamEvent{
+			emit(ChatStreamEvent{
 				RequestID: requestID,
 				Kind:      "delta",
 				Channel:   "thinking",
@@ -1036,7 +1094,7 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 		}
 		if chunk.Answer != "" {
 			answerBuilder.WriteString(chunk.Answer)
-			a.emitChatStreamEvent(ChatStreamEvent{
+			emit(ChatStreamEvent{
 				RequestID: requestID,
 				Kind:      "delta",
 				Channel:   "answer",
@@ -1049,7 +1107,7 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 		return nil
 	})
 	if err != nil {
-		a.emitChatStreamEvent(ChatStreamEvent{RequestID: requestID, Kind: "error", Error: err.Error()})
+		emit(ChatStreamEvent{RequestID: requestID, Kind: "error", Error: err.Error()})
 		return nil, err
 	}
 
@@ -1067,7 +1125,7 @@ func (a *App) chatStream(payload GatewayChatRequest, requestID string) (*ChatRes
 		WebSearchStatus:    webSearchStatus,
 		KarteContextStatus: karteContextStatus,
 	}
-	a.emitChatStreamEvent(ChatStreamEvent{
+	emit(ChatStreamEvent{
 		RequestID:    requestID,
 		Kind:         "done",
 		Thinking:     response.Thinking,
@@ -5431,12 +5489,16 @@ func (a *App) postJSONWithClient(client *http.Client, path string, payload any, 
 }
 
 func (a *App) streamGatewayResponse(path string, payload any, onEvent func(eventType string, data string) error) error {
+	return a.streamGatewayResponseContext(context.Background(), path, payload, onEvent)
+}
+
+func (a *App) streamGatewayResponseContext(ctx context.Context, path string, payload any, onEvent func(eventType string, data string) error) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 
-	request, err := http.NewRequest(http.MethodPost, a.baseURL+path, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -5450,7 +5512,7 @@ func (a *App) streamGatewayResponse(path string, payload any, onEvent func(event
 	defer response.Body.Close()
 
 	if response.StatusCode >= http.StatusBadRequest {
-		data, _ := io.ReadAll(response.Body)
+		data, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 		trimmed := strings.TrimSpace(string(data))
 		if trimmed == "" {
 			return fmt.Errorf("gateway returned %s", response.Status)
@@ -5467,6 +5529,9 @@ func (a *App) streamGatewayResponse(path string, payload any, onEvent func(event
 		if len(dataLines) == 0 {
 			eventType = ""
 			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		data := strings.Join(dataLines, "\n")
 		err := onEvent(eventType, data)

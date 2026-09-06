@@ -11,6 +11,17 @@ import (
 
 // Only process groups created by this Desktop instance are stopped．No port/PID-file discovery．
 func (a *App) shutdown(_ context.Context) {
+	a.interactionEvalMu.Lock()
+	a.comparisonClosed = true
+	for _, cancel := range a.comparisonCancels {
+		cancel()
+	}
+	a.interactionEvalMu.Unlock()
+	a.interactionMu.Lock()
+	if a.interaction != nil {
+		a.interaction.Close()
+	}
+	a.interactionMu.Unlock()
 	a.mu.Lock()
 	a.closing = true
 	for _, cmd := range []*exec.Cmd{a.fastCmd, a.workCmd, a.codeCmd, a.embeddingCmd, a.watchCmd, a.gatewayCmd} {

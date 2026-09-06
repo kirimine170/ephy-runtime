@@ -10,6 +10,10 @@ export function BrowseIndex(arg1:main.IndexBrowseRequest):Promise<Record<string,
 
 export function CancelBatchWorkflow():Promise<main.BatchWorkflowState>;
 
+export function CancelInteraction(arg1:string):Promise<main.InteractionSnapshot>;
+
+export function CancelInteractionComparison(arg1:string):Promise<void>;
+
 export function Chat(arg1:main.ChatRequest):Promise<main.ChatResponse>;
 
 export function ClearBatchPresetSelection():Promise<Array<string>>;
@@ -17,6 +21,8 @@ export function ClearBatchPresetSelection():Promise<Array<string>>;
 export function ClearBatchWorkflowState():Promise<main.BatchWorkflowState>;
 
 export function ClearExecutionHistory():Promise<Array<main.ExecutionHistoryItem>>;
+
+export function CommitInteraction(arg1:string,arg2:string):Promise<void>;
 
 export function CreatePreferenceSession(arg1:main.PreferenceSessionRequest):Promise<Record<string, any>>;
 
@@ -30,9 +36,15 @@ export function Embeddings(arg1:main.EmbeddingRequest):Promise<Record<string, an
 
 export function Eval(arg1:main.EvalRequest):Promise<main.EvalResponse>;
 
+export function ExportInteractionEvaluations(arg1:string):Promise<main.ExportResultResponse>;
+
 export function ExportPreferenceSession(arg1:string,arg2:main.PreferenceExportRequest):Promise<Record<string, any>>;
 
 export function ExportResult(arg1:main.ExportResultRequest):Promise<main.ExportResultResponse>;
+
+export function FailInteraction(arg1:string,arg2:string):Promise<void>;
+
+export function GenerateInteractionComparison(arg1:main.InteractionComparisonRequest):Promise<main.BlindInteractionComparison>;
 
 export function GeneratePreferencePairs(arg1:string,arg2:main.PreferenceGenerateRequest):Promise<Record<string, any>>;
 
@@ -45,6 +57,10 @@ export function GetExecutionHistory():Promise<Array<main.ExecutionHistoryItem>>;
 export function GetGatewayURL():Promise<string>;
 
 export function GetIndexSource(arg1:main.IndexSourceRequest):Promise<Record<string, any>>;
+
+export function GetInteraction(arg1:string):Promise<main.InteractionSnapshot>;
+
+export function GetInteractionTrace(arg1:string):Promise<Array<main.InteractionTraceEvent>>;
 
 export function GetKarteProposalStatus(arg1:string):Promise<main.KarteConversationStatusResponse>;
 
@@ -67,6 +83,8 @@ export function Health():Promise<main.HealthResponse>;
 export function ImportLocalModel(arg1:main.ImportLocalModelRequest):Promise<main.LocalModelCatalog>;
 
 export function Ingest(arg1:main.IngestRequest):Promise<Record<string, any>>;
+
+export function InteractionPlayback(arg1:string,arg2:number,arg3:string):Promise<void>;
 
 export function ListExportedResults():Promise<Array<main.ExportedFileItem>>;
 
@@ -94,7 +112,11 @@ export function ReadExportedResult(arg1:main.ExportedFileRequest):Promise<main.E
 
 export function RecordExecution(arg1:main.ExecutionHistoryItem):Promise<Array<main.ExecutionHistoryItem>>;
 
+export function RecordInteractionFeedback(arg1:string):Promise<main.InteractionEvaluationRecord>;
+
 export function ReloadGatewayConfig():Promise<main.ReloadConfigResponse>;
+
+export function ReplayInteraction(arg1:main.InteractionReplayRequest):Promise<main.InteractionSnapshot>;
 
 export function RoutePlan(arg1:main.RoutePlanRequest):Promise<main.RoutePlanResponse>;
 
@@ -139,6 +161,8 @@ export function RunRuntimeServiceAction(arg1:main.RuntimeServiceActionRequest):P
 export function RunRuntimeSmoke(arg1:main.SmokeRequest):Promise<main.WorkflowRunResponse>;
 
 export function RunRuntimeStackAction(arg1:main.RuntimeStackActionRequest):Promise<main.WorkflowRunResponse>;
+
+export function SaveInteractionEvaluation(arg1:main.InteractionEvaluationRequest):Promise<main.InteractionEvaluationRecord>;
 
 export function SaveLocalConfigFile(arg1:main.SaveLocalConfigRequest):Promise<Array<main.LocalConfigFile>>;
 
@@ -192,6 +216,8 @@ export function StartFast():Promise<main.RuntimeStatus>;
 
 export function StartGateway():Promise<main.RuntimeStatus>;
 
+export function StartInteraction(arg1:main.VoiceTurnRequest):Promise<main.InteractionSnapshot>;
+
 export function StartQdrant():Promise<main.RuntimeStatus>;
 
 export function StartRecommendedStack():Promise<main.StackActionResponse>;
@@ -217,6 +243,8 @@ export function StopRecommendedStack():Promise<main.StackActionResponse>;
 export function StopWatch():Promise<main.RuntimeStatus>;
 
 export function StopWork():Promise<main.RuntimeStatus>;
+
+export function ValidateInteractionTrace(arg1:string):Promise<main.TraceValidation>;
 
 export function ValidateProjectPreset(arg1:main.ProjectPreset):Promise<main.PresetValidationResponse>;
 
