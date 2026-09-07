@@ -535,6 +535,7 @@ func TestNativeASRSessionCancelTimeoutAndCallbackFailureAreBounded(t *testing.T)
 			request := nativeStreamRequest()
 			callbackEntered := make(chan struct{})
 			release := make(chan struct{})
+			allowCallbackFailure := make(chan struct{})
 			go f.receive(func(frame map[string]json.RawMessage) {
 				if frameKind(frame) == "audio" && strings.HasPrefix(mode, "callback") {
 					f.emit(nativeStreamUpdate(request, 1, "partial", "春"))
@@ -545,6 +546,7 @@ func TestNativeASRSessionCancelTimeoutAndCallbackFailureAreBounded(t *testing.T)
 					return
 				}
 				close(callbackEntered)
+				<-allowCallbackFailure
 				if mode == "callback panic" {
 					panic("PRIVATE callback diagnostic")
 				}
@@ -565,6 +567,7 @@ func TestNativeASRSessionCancelTimeoutAndCallbackFailureAreBounded(t *testing.T)
 					t.Fatal(err)
 				}
 				<-callbackEntered
+				close(allowCallbackFailure)
 			}
 			_, err = session.Finish(context.Background())
 			if mode == "callback blocked" {
@@ -575,6 +578,118 @@ func TestNativeASRSessionCancelTimeoutAndCallbackFailureAreBounded(t *testing.T)
 			}
 			if f.stops.Load() == 0 {
 				t.Fatal("helper process was not stopped")
+			}
+		})
+	}
+}
+
+func TestNativeASRSessionCallbackFailureDoesNotBlockNextSession(t *testing.T) {
+	for _, mode := range []string{"timeout", "cancel", "panic", "failure blocked", "final blocked"} {
+		t.Run(mode, func(t *testing.T) {
+			old := newNativeStreamFixture()
+			p, _, _ := nativeSessionTestProvider(t, old)
+			p.streamLimits.callback = 50 * time.Millisecond
+			entered, release, exited := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			defer close(release)
+			request := nativeStreamRequest()
+			go old.receive(func(frame map[string]json.RawMessage) {
+				if frameKind(frame) != "audio" {
+					return
+				}
+				update := nativeStreamUpdate(request, 1, "partial", "old synthetic")
+				if mode == "failure blocked" {
+					update.Phase, update.Transcript, update.ErrorCode = "failure", "", "asr_failed"
+				}
+				if mode == "final blocked" {
+					update = nativeStreamUpdate(request, 1, "final", "old synthetic")
+				}
+				old.emit(update)
+				if mode == "final blocked" {
+					old.finish(nil)
+				}
+			})
+			var calls atomic.Int32
+			session, err := p.OpenSession(context.Background(), request, func(update ASRUpdate) {
+				if mode == "panic" && update.Phase == "failure" {
+					return
+				}
+				if calls.Add(1) != 1 {
+					return
+				}
+				close(entered)
+				defer close(exited)
+				if mode == "panic" {
+					panic("PRIVATE synthetic callback")
+				}
+				<-release
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Append may legitimately observe an already sealed callback failure．
+			appendErr := session.Append(context.Background(), 1, []byte{0, 0})
+			if appendErr != nil && appendErr.Error() != "asr_failed" {
+				t.Fatal(appendErr)
+			}
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("old callback not entered")
+			}
+			if mode == "cancel" {
+				session.Cancel()
+			}
+			select {
+			case <-session.(*nativeASRSession).done:
+			case <-time.After(time.Second):
+				t.Fatal("old session not bounded")
+			}
+			_, err = session.Finish(context.Background())
+			want := "asr_timeout"
+			if mode == "cancel" {
+				want = "asr_canceled"
+			}
+			if mode == "panic" || mode == "failure blocked" {
+				want = "asr_failed"
+			}
+			if err == nil || err.Error() != want {
+				t.Fatalf("terminal reason: %v，want %s", err, want)
+			}
+			next := newNativeStreamFixture()
+			defer next.process.stop()
+			p.streamStart = func(context.Context, string, []string) (*nativeASRProcess, error) { return next.process, nil }
+			request.OperationID, request.TurnID, request.SegmentID = "operation-2", "turn-2", "segment-2"
+			go next.receive(func(frame map[string]json.RawMessage) {
+				if frameKind(frame) == "finish" {
+					next.emit(nativeStreamUpdate(request, 1, "final", "new synthetic"))
+					next.finish(nil)
+				}
+			})
+			var finalCalls atomic.Int32
+			healthy, err := p.OpenSession(context.Background(), request, func(update ASRUpdate) {
+				if update.Phase == "final" {
+					finalCalls.Add(1)
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer healthy.Cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			final, err := healthy.Finish(ctx)
+			if err != nil || final.Transcript != "new synthetic" || finalCalls.Load() != 1 {
+				t.Fatalf("old callback blocked next session: %v", err)
+			}
+			if calls.Load() != 1 {
+				t.Fatal("callbacks overlapped within the old session")
+			}
+			if mode != "panic" {
+				select {
+				case <-exited:
+					t.Fatal("old callback unexpectedly released")
+				default:
+				}
 			}
 		})
 	}

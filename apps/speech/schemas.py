@@ -18,7 +18,7 @@ ERROR_CODES = frozenset({
     "tts_unavailable", "invalid_speech_text", "unsupported_voice_control",
     "voice_profile_changed", "tts_invalid_audio", "tts_incomplete", "tts_failed",
     "tts_timeout", "tts_canceled", "tts_busy", "tts_model_revision_mismatch",
-    "tts_asset_invalid", "tts_stream_eof",
+    "tts_asset_invalid", "tts_stream_eof", "invalid_voice_config",
 })
 
 

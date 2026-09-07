@@ -76,6 +76,9 @@ type nativeASRSession struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	callback      func(ASRUpdate)
+	callbackGate  chan struct{}
+	parentCtx     context.Context
+	canceled      bool
 	writeGate     chan struct{}
 	done          chan struct{}
 	limits        nativeASRStreamLimits
@@ -108,7 +111,6 @@ func (p *NativeVoiceASR) OpenSession(ctx context.Context, request ASRSessionRequ
 	if _, err := p.Readiness(ctx); err != nil {
 		return nil, err
 	}
-	p.streamCallbackOnce.Do(func() { p.streamCallbackGate = make(chan struct{}, 1) })
 	limits := nativeASRStreamLimits{
 		prepare:  boundedASRDuration(p.streamLimits.prepare, 30*time.Second),
 		capture:  boundedASRDuration(p.streamLimits.capture, 60*time.Second),
@@ -131,7 +133,7 @@ func (p *NativeVoiceASR) OpenSession(ctx context.Context, request ASRSessionRequ
 		return nil, fixed
 	}
 	s := &nativeASRSession{request: request, provider: p, process: process, ctx: sessionCtx, cancel: cancel,
-		callback: onUpdate, writeGate: make(chan struct{}, 1), done: make(chan struct{}), limits: limits,
+		callback: onUpdate, parentCtx: ctx, callbackGate: make(chan struct{}, 1), writeGate: make(chan struct{}, 1), done: make(chan struct{}), limits: limits,
 		started: time.Now(), modelRevision: "apple-opaque:" + p.locale}
 	go s.readUpdates()
 	go func() {
@@ -324,22 +326,27 @@ func (s *nativeASRSession) Finish(ctx context.Context) (ASRUpdate, error) {
 	}
 }
 
-func (s *nativeASRSession) Cancel() { s.fail(errors.New("asr_canceled")) }
+func (s *nativeASRSession) Cancel() {
+	s.mu.Lock()
+	s.canceled = true
+	s.mu.Unlock()
+	s.fail(errors.New("asr_canceled"))
+}
 
 func (s *nativeASRSession) call(update ASRUpdate) error {
 	ctx, cancel := context.WithTimeout(s.ctx, s.limits.callback)
 	defer cancel()
 	select {
-	case s.provider.streamCallbackGate <- struct{}{}:
+	case s.callbackGate <- struct{}{}:
 	case <-ctx.Done():
 		return nativeASRError(ctx, ctx.Err(), "asr_timeout")
 	}
 	result := make(chan bool, 1)
 	go func() {
 		ok := false
-		defer func() { _ = recover(); <-s.provider.streamCallbackGate; result <- ok }()
+		defer func() { _ = recover(); <-s.callbackGate; result <- ok }()
 		s.mu.Lock()
-		terminal := s.terminal
+		terminal := s.terminal || s.ctx.Err() != nil
 		s.mu.Unlock()
 		if terminal {
 			ok = true
@@ -478,7 +485,8 @@ func (s *nativeASRSession) readUpdates() {
 		failure = errors.New("asr_stream_eof")
 	}
 	if failure != nil {
-		s.process.stop()
+		// Seal the original callback/protocol error before teardown closes stdin．
+		s.fail(failure)
 	}
 	waitErr := s.process.wait()
 	select {
@@ -560,18 +568,28 @@ func (s *nativeASRSession) fail(err error) {
 		Revision: min(s.lastRevision+1, maxASRRevisions), Phase: phase, Provider: "macos-speech", ModelRevision: s.modelRevision,
 		MonotonicMS: max(s.lastMS, time.Since(s.started).Milliseconds()), ErrorCode: err.Error()}
 	s.provider.readiness.invalidate()
-	close(s.done)
 	s.mu.Unlock()
 	s.process.stop()
-	// Failure notification is bounded independently of the now-canceled process．
+	close(s.done)
+	// A stuck callback may retain only this session's gate．Explicit cancel
+	// and parent cancellation have no deferred notification into the consumer．
+	notify := err.Error() != "asr_canceled" && s.ctx.Err() == nil
+	s.cancel()
+	if !notify {
+		return
+	}
 	go func() {
 		select {
-		case s.provider.streamCallbackGate <- struct{}{}:
+		case s.callbackGate <- struct{}{}:
 		default:
 			return
 		}
-		defer func() { _ = recover(); <-s.provider.streamCallbackGate }()
-		s.callback(update)
+		defer func() { _ = recover(); <-s.callbackGate }()
+		s.mu.Lock()
+		canceled := s.canceled || s.parentCtx.Err() != nil
+		s.mu.Unlock()
+		if !canceled {
+			s.callback(update)
+		}
 	}()
-	s.cancel()
 }

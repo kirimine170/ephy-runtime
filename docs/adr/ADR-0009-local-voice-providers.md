@@ -49,3 +49,13 @@ provider identityは`macos-speech`／locale／`on-device`と，`macos-say`／voi
 ## Date
 
 2026-09-06．
+
+## C0.3.1 stabilization／2026-09-07
+
+ASR live callbackの直列化gateはprovider共有からsession専用へ変更した．callbackのpanic・timeoutを固定errorとしてprocess停止前に確定し，旧callbackが停止したままでも後続sessionは独立して進行する．明示cancelと親context cancelの後に非同期failure通知を開始しない．すでに実行中の任意のGo callbackを強制終了することはできないため，受信側のoperation／session／turn／segmentとgeneration revisionの照合を維持する．旧callbackが復帰しても旧turnのpartial・final・audio・failureを新turnへ採用しない．
+
+Speech serviceのdefault profileをcombined catalogと省略時の選択へ反映する．構成済みserviceのcatalog未確認時，defaultや選択中profileの利用不能・消失時には暗黙の別voice選択を行わず，text fallbackと明示的なvoice再選択を残す．active operationのprepared profileとcontinuation契約は維持する．
+
+独立TTS inference serviceの全HTTP routeは`EPHY_TTS_BEARER_TOKEN`による認証を必須とする．secretを設定していないserviceは起動せず，未認証requestは401，browser Originと非loopback Hostは403で拒否する．bindは`127.0.0.1`を維持し，Runtimeの接続はloopback IPのHTTPだけとし，proxyとredirectを使用しない．secretはUI・trace・logへ出さず，inference子processへも継承しない．同一OS user／管理者からのsecret読取りを防ぐOS隔離ではない．private fileの生成，両processへのsecret設定，確認手順は[`custom-voice-tts.md`](../custom-voice-tts.md)を参照する．
+
+Go公開APIのsignature，Wails bridgeと公開DTOは変更していない．ASR live partial，final-only commit，GenerationProgress，continuation，ResponsePlan，private asset storeの契約を維持する．Irodori TTSとC0.4は対象外である．

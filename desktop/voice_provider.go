@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -47,15 +46,13 @@ func voiceLocale() string {
 
 // NativeVoiceASR supports incremental PCM sessions and legacy complete-WAV transcription．
 type NativeVoiceASR struct {
-	streamStart        nativeASRStreamStart
-	streamLimits       nativeASRStreamLimits
-	streamCallbackOnce sync.Once
-	streamCallbackGate chan struct{}
-	readiness          voiceReadinessCache
-	executable         string
-	locale             string
-	osName             string
-	run                voiceProcessRunner
+	streamStart  nativeASRStreamStart
+	streamLimits nativeASRStreamLimits
+	readiness    voiceReadinessCache
+	executable   string
+	locale       string
+	osName       string
+	run          voiceProcessRunner
 }
 
 func NewNativeVoiceASR(root string) *NativeVoiceASR {

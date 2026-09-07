@@ -163,19 +163,17 @@ test('readSettings returns a detached style and frozen controls cannot change an
   h.controller.dispose();
 });
 
-test('catalog loading during Start defers new defaults until the operation is idle', async () => {
+test('initial catalog must resolve before Start and busy catalog updates remain deferred', async () => {
   const pending = deferred();
   const h = harness({bridge: {GetVoiceProfiles: () => pending.promise}});
+  assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
   h.controller.setBusy(true);
-  const captured = h.controller.readSettings();
   pending.resolve(catalog(profile()));
   await h.controller.ready;
-  assert.equal(h.controller.readSettings().voice_profile_id, 'macos-kyoko');
+  assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
   assert.equal(h.select.disabled, true);
   h.controller.setBusy(false);
   assert.equal(h.controller.readSettings().voice_profile_id, 'personal-voice');
-  assert.equal(captured.voice_profile_id, 'macos-kyoko');
-  assert.deepEqual(captured.style, neutral());
   h.controller.dispose();
 });
 
@@ -194,15 +192,15 @@ test('out-of-order catalog replies cannot replace a newer profile list', async (
   h.controller.dispose();
 });
 
-test('catalog failure restores the explicit native fallback without disabling or modifying text chat', async () => {
+test('catalog failure requires an explicit voice choice without disabling or modifying text chat', async () => {
   for (const result of ['reject', {error_code: 'PRIVATE diagnostic', profiles: []}, {profiles: 'PRIVATE invalid'}]) {
     const h = harness({bridge: {GetVoiceProfiles: async () => {
       if (result === 'reject') throw new Error('PRIVATE provider path');
       return result;
     }}});
     await h.controller.ready;
-    assert.equal(h.controller.readSettings().voice_profile_id, 'macos-kyoko');
-    assert.match(h.status.textContent, /Kyoko/);
+    assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
+    assert.match(h.status.textContent, /テキスト入力/);
     assert.doesNotMatch(h.status.textContent, /PRIVATE|path/);
     assert.equal(h.node('chat-prompt').disabled, false);
     assert.equal(h.node('send-chat').disabled, false);
@@ -218,11 +216,11 @@ test('known catalog failure retains unavailable profiles as disabled options bes
     await h.controller.ready;
     assert.equal(h.select.children.find(option => option.value === 'missing-voice')?.disabled, true);
     assert.equal(h.select.children.find(option => option.value === 'macos-kyoko')?.disabled, false);
-    assert.equal(h.controller.readSettings().voice_profile_id, 'macos-kyoko');
-    assert.match(h.status.textContent, /一部の声を利用できません/);
+    assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
+    assert.match(h.status.textContent, /選択した声を利用できません/);
     assert.doesNotMatch(h.status.textContent, /tts_|voice_profile|PRIVATE/);
     h.select.change('missing-voice');
-    assert.equal(h.controller.readSettings().voice_profile_id, 'macos-kyoko');
+    assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
     assert.equal(h.node('chat-prompt').disabled, false);
     assert.equal(h.node('send-chat').disabled, false);
     h.controller.dispose();
@@ -241,8 +239,8 @@ test('known catalog warning preserves an available selected profile while unknow
   assert.equal(h.select.children.find(option => option.value === 'offline')?.disabled, true);
   result = {...result, error_code: 'PRIVATE provider path'};
   await h.controller.refresh();
-  assert.equal(h.controller.readSettings().voice_profile_id, 'macos-kyoko');
-  assert.equal(h.select.children.length, 1);
+  assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
+  assert.equal(h.select.children.length, 2);
   assert.doesNotMatch(h.status.textContent, /PRIVATE|path/);
   h.controller.dispose();
 });
@@ -281,8 +279,8 @@ test('malformed profiles and excessive catalogs retain the bounded native fallba
   ]) {
     const h = harness({bridge: {GetVoiceProfiles: async () => result}});
     await h.controller.ready;
-    assert.equal(h.controller.readSettings().voice_profile_id, 'macos-kyoko');
-    assert.equal(h.select.children.length, 1);
+    assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
+    assert.equal(h.select.children.length, 2);
     h.controller.dispose();
   }
 });
@@ -296,7 +294,7 @@ test('dispose disables controls and discards late catalog callbacks', async () =
   assert.equal(h.select.disabled, true);
   pending.resolve(catalog(profile()));
   assert.equal(await h.controller.ready, false);
-  assert.equal(h.controller.readSettings().voice_profile_id, 'macos-kyoko');
+  assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
   assert.equal(await h.controller.refresh(), false);
 });
 
@@ -356,4 +354,43 @@ test('voice Start captures profile and delivery once while ASR partial and cance
   await voice.dispose();
   h.controller.dispose();
   await tick();
+});
+
+
+test('missing or offline default and selected profiles never switch voice implicitly', async () => {
+  for (const missing of [false, true]) {
+    let result = catalog(profile());
+    const h = harness({bridge: {GetVoiceProfiles: async () => result}});
+    await h.controller.ready;
+    result = {default_profile_id: 'macos-kyoko', profiles: missing ? [] : [profile('personal-voice', {available: false})]};
+    await h.controller.refresh();
+    assert.equal(h.select.value, 'personal-voice');
+    assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
+    assert.match(h.status.textContent, /テキスト入力/);
+    assert.equal(h.node('send-chat').disabled, false);
+    h.select.change('macos-kyoko');
+    assert.equal(h.controller.readSettings().voice_profile_id, 'macos-kyoko');
+    h.controller.dispose();
+  }
+  const h = harness({bridge: {GetVoiceProfiles: async () => ({default_profile_id: 'missing-default', profiles: [profile()]})}});
+  await h.controller.ready;
+  assert.equal(h.select.value, 'missing-default');
+  assert.throws(() => h.controller.readSettings(), /voice_profile_unavailable/);
+  h.controller.dispose();
+});
+
+test('unavailable voice Start reports voice error before microphone or ASR access', async () => {
+  const h = harness({bridge: {GetVoiceProfiles: async () => catalog(profile('offline', {available: false}))}});
+  await h.controller.ready;
+  let calls = 0;
+  const voice = mountVoiceInteraction({root: h.root,
+    bridge: {GetInteractionASRReadiness: () => { calls++; }},
+    getRequest: () => ({speech: h.controller.readSettings()}),
+    mediaDevices: {getUserMedia: () => { calls++; }},
+    subscribe: () => {}, timers: {setTimeout: () => 1, clearTimeout() {}},
+  });
+  assert.equal(await voice.start(), false);
+  assert.equal(calls, 0);
+  await voice.dispose();
+  h.controller.dispose();
 });

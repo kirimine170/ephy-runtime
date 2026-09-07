@@ -6,6 +6,10 @@ import asyncio
 import base64
 import importlib.util
 import io
+import hmac
+import ipaddress
+import os
+import re
 import json
 from pathlib import Path
 import sys
@@ -80,6 +84,7 @@ class ProcessWorker:
             *self.command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, cwd=str(Path(__file__).resolve().parents[2]),
             limit=MAX_WORKER_FRAME_BYTES,
+            env={key: value for key, value in os.environ.items() if key != "EPHY_TTS_BEARER_TOKEN"},
         )
         await self._write({"type": "configure", "config": self.config})
         if await self._line() != {"type": "ready"}:
@@ -213,7 +218,12 @@ class SpeechService:
             await abort()
 
 
-def create_app(config: dict[str, Any] | None = None, *, service: SpeechService | None = None) -> FastAPI:
+def create_app(config: dict[str, Any] | None = None, *, service: SpeechService | None = None,
+               bearer_token: str | None = None) -> FastAPI:
+    token = os.environ.get("EPHY_TTS_BEARER_TOKEN", "") if bearer_token is None else bearer_token
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
+        raise SpeechError("invalid_voice_config")
+    expected = ("Bearer " + token).encode("ascii")
     speech = service or SpeechService(config)
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -223,6 +233,26 @@ def create_app(config: dict[str, Any] | None = None, *, service: SpeechService |
             await speech.worker.stop()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.speech = speech
+
+    @app.middleware("http")
+    async def authenticate(connection: Request, call_next):
+        # Loopback binding is not authentication．Reject browser origins and DNS
+        # rebinding hosts，including on metadata routes，before reading any body．
+        try:
+            loopback = ipaddress.ip_address(connection.url.hostname or "").is_loopback
+        except ValueError:
+            loopback = False
+        headers = {"Cache-Control": "no-store", "WWW-Authenticate": "Bearer"}
+        authorization = connection.headers.getlist("authorization")
+        if (len(authorization) != 1 or
+                not hmac.compare_digest(authorization[0].encode("utf-8"), expected)):
+            return JSONResponse({"error_code": "tts_unauthorized"}, status_code=401, headers=headers)
+        if not loopback or "origin" in connection.headers or len(connection.headers.getlist("host")) != 1:
+            return JSONResponse({"error_code": "tts_forbidden"}, status_code=403,
+                                headers={"Cache-Control": "no-store"})
+        response = await call_next(connection)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
