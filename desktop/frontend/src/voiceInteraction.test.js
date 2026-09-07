@@ -1032,8 +1032,13 @@ test('cancel during an append or End releases resources immediately and late cal
     assert.equal(await h.controller.start(), true);
     pending.resolve();
     assert.equal(await stopping, false);
+    h.asr(1, 4, 'old partial');
     h.asr(1, 5, 'old final', {phase: 'final', stable_prefix: 'old final'});
     h.event(1, 'transcript', {text: 'old canonical'});
+    h.asr(1, 6, '', {phase: 'failure', error_code: 'asr_failed'});
+    h.state(1, 'FAILED', {error_code: 'asr_failed'});
+    h.audio(1, 1);
+    await tick();
     assert.equal(h.controller.lastSnapshot.operation_id, 'op-2');
     assert.equal(h.calls.transcript.length, 0);
     assert.equal(h.calls.commit.length, 0);

@@ -171,14 +171,16 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false} = {}) {
   function applyCatalog(catalog) {
     const previous = currentProfile();
     profiles = catalog.profiles;
-    const retained = (catalogApplied || selectionTouched) && profiles.find(profile => profile.voice_profile_id === selected && profile.available);
-    const next = retained || profiles.find(profile => profile.voice_profile_id === catalog.default_profile_id && profile.available)
-      || profiles.find(profile => profile.voice_profile_id === 'macos-kyoko' && profile.available) || profiles.find(profile => profile.available);
-    selected = next?.voice_profile_id || '';
+    const desired = (selectionTouched || (catalogApplied && selected)) ? selected : catalog.default_profile_id;
+    const next = profiles.find(profile => profile.voice_profile_id === desired);
+    const retained = previous && next?.available && previous.voice_profile_id === next.voice_profile_id;
+    selected = typeof desired === 'string' && PROFILE_ID.test(desired) ? desired : '';
     catalogApplied = true;
-    // Preserve edits only while the selected profile's contract is unchanged．
-    if (!previous || !retained || JSON.stringify(previous) !== JSON.stringify(retained)) style = {...(next?.default_style || STYLE_DEFAULTS)};
-    setMessage(catalog.message || (!next ? '利用できる声がありません．テキスト入力を利用できます．' : ''));
+    // Keep an unavailable selection visible until the user explicitly changes it．
+    if (!next) profiles.push({voice_profile_id: selected, display_name: '選択した声', available: false,
+      default_style: {...STYLE_DEFAULTS}, capabilities: {controls: {}}});
+    if (!retained || JSON.stringify(previous) !== JSON.stringify(next)) style = {...(next?.default_style || STYLE_DEFAULTS)};
+    setMessage(!next?.available ? '選択した声を利用できません．声を選び直すか，テキスト入力を利用できます．' : catalog.message || '');
     render();
   }
   async function refresh() {
@@ -204,7 +206,7 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false} = {}) {
           message: result.error_code ? '一部の声を利用できません．利用できる声またはテキスト入力を選んでください．' : ''};
       }
     } catch {
-      catalog = {default_profile_id: 'macos-kyoko', profiles: [nativeFallback()], message: '声の一覧を取得できません．標準の Kyoko とテキスト入力を利用できます．'};
+      catalog = {default_profile_id: '', profiles: [nativeFallback()], message: '声の一覧を取得できません．声を選び直すか，テキスト入力を利用できます．'};
     }
     if (disposed || version !== epoch) return false;
     loading = false;
@@ -239,7 +241,10 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false} = {}) {
   const ready = refresh();
   return {
     ready, refresh, setBusy,
-    readSettings() { return {voice_profile_id: selected || 'macos-kyoko', style: {...style}}; },
+    readSettings() {
+      if ((!catalogApplied && !selectionTouched && typeof bridge?.GetVoiceProfiles === 'function') || !currentProfile()) throw new Error('voice_profile_unavailable');
+      return {voice_profile_id: selected, style: {...style}};
+    },
     dispose() {
       disposed = true;
       epoch += 1;

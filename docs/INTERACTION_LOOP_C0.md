@@ -206,3 +206,9 @@ Pythonには既存依存のStarlette／httpx非推奨warning，race linkにはma
 `reset --hard`，`git clean`，無断stash，recovery directoryの削除はrollback手段にしない．trace，評価，export，ASR helperの生成物をrollbackの副作用で削除しない．他repositoryとKarteのデータに手を加えない．
 
 C1へ進む前に実機一周，実音声cancel，複数turnの混入防止，実latencyの記録を完了する．VADによる自動交替，音声barge-in，相槌，echo cancellation，能動発話，学習用export加工，Karteへの新しい書込みは別Gateの検討対象である．
+
+## C0.3.1安定化
+
+2026-09-07に取得した`origin/main`は`3d7efd5e3cc25becb9ad67d5bbac5784fb4edc37`である．`fix/c0-3-1-voice-hardening`でASR callbackのsession隔離，構成済みdefault profileの保持，独立inference serviceのbearer認証を修正した．契約の詳細は[ADR-0009のC0.3.1節](adr/ADR-0009-local-voice-providers.md#c031-stabilization2026-09-07)，service設定は[custom voice手順](custom-voice-tts.md)を参照する．
+
+callbackを実行する任意のGo goroutine自体は強制終了できない．timeout／cancel後に旧callbackが残っても次sessionのgateを占有せず，RuntimeとFrontendが旧operationのeventを破棄する．実マイク／speakerの一周と実音声cancel，許諾済みclone素材によるQwen実推論・声質・latencyの受入れは引き続き未確認である．C0.4，Irodori TTS，次Gateへは進まない．

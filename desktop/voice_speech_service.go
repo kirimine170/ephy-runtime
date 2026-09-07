@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -20,9 +21,12 @@ import (
 
 // The endpoint is transport configuration，never a reference-material location．
 // A remote inference node can be reached through an explicit loopback SSH tunnel．
+var speechBearerPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,128}$`)
+
 type speechServiceClient struct {
-	endpoint string
-	client   *http.Client
+	bearerToken string
+	endpoint    string
+	client      *http.Client
 }
 
 func newSpeechServiceClient() *speechServiceClient {
@@ -38,10 +42,10 @@ func newSpeechServiceClient() *speechServiceClient {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.ResponseHeaderTimeout = 5 * time.Second
-	return &speechServiceClient{endpoint: endpoint, client: &http.Client{Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return errors.New("tts_service_unavailable") }}}
+	return &speechServiceClient{bearerToken: os.Getenv("EPHY_TTS_BEARER_TOKEN"), endpoint: endpoint, client: &http.Client{Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return errors.New("tts_service_unavailable") }}}
 }
 func (c *speechServiceClient) request(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
-	if c.endpoint == "" {
+	if c.endpoint == "" || !speechBearerPattern.MatchString(c.bearerToken) {
 		return nil, errors.New("invalid_voice_config")
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.endpoint+path, bytes.NewReader(body))
@@ -49,6 +53,7 @@ func (c *speechServiceClient) request(ctx context.Context, method, path string, 
 		return nil, errors.New("tts_service_unavailable")
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.bearerToken)
 	res, err := c.client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -103,6 +108,9 @@ func (c *speechServiceClient) profiles(ctx context.Context) (VoiceProfileCatalog
 			return VoiceProfileCatalog{}, errors.New("invalid_voice_profile")
 		}
 		seen[p.VoiceProfileID] = true
+	}
+	if result.DefaultProfileID != "" && (!interactionIdentifier.MatchString(result.DefaultProfileID) || result.DefaultProfileID == "macos-kyoko") {
+		return VoiceProfileCatalog{}, errors.New("invalid_voice_profile")
 	}
 	return result, nil
 }

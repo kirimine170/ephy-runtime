@@ -14,6 +14,10 @@ from apps.speech.schemas import DEFAULT_STYLE, QWEN_CAPABILITIES, SpeechError, S
 from apps.speech.service import ProcessWorker, SpeechService, create_app
 
 
+TOKEN = "synthetic-bearer-" + "s" * 32
+AUTH = {"Authorization": "Bearer " + TOKEN}
+
+
 PROFILE = {"voice_profile_id": "voice-1", "display_name": "Test voice", "provider": "qwen3-tts",
     "model_revision": MODEL_REVISION, "language": "ja-JP", "clone_prompt_digest": "a" * 64, "provenance_id": "prov_" + "b" * 32}
 
@@ -96,8 +100,8 @@ def test_failure_is_body_free_and_never_completed():
 def test_catalog_and_http_validation_keep_private_data_out():
     async def run():
         worker = FakeWorker()
-        app = create_app(service=service(worker))
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client:
+        app = create_app(service=service(worker), bearer_token=TOKEN)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1", headers=AUTH) as client:
             catalog = (await client.get("/v1/voice-profiles")).json()
             capabilities = catalog["profiles"][0]["capabilities"]
             assert capabilities["streaming_mode"] == "phrase" and set(capabilities["controls"]) == {"volume"}
@@ -108,7 +112,7 @@ def test_catalog_and_http_validation_keep_private_data_out():
                 assert result.status_code == 400 and result.json() == {"error_code": code}
                 assert "PRIVATE" not in result.text
             result = await client.post("/v1/speech", json=request().model_dump(), headers={"Origin": "https://untrusted.example"})
-            assert result.status_code == 400
+            assert result.status_code == 403
             assert not worker.calls
             result = await client.post("/v1/speech", json=request().model_dump())
             assert result.status_code == 200 and result.headers["content-type"] == "application/x-ndjson"
@@ -138,7 +142,7 @@ def test_http_omitted_controls_use_profile_defaults_and_explicit_values_win(cont
         ]}, worker=worker, available=True)
         body = {**request().model_dump(exclude_unset=True), **controls}
         assert ("volume" in body) == ("volume" in controls)
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service=speech)), base_url="http://127.0.0.1") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(service=speech, bearer_token=TOKEN)), base_url="http://127.0.0.1", headers=AUTH) as client:
             response = await client.post("/v1/speech", json=body)
         assert response.status_code == 200
         assert [json.loads(line)["type"] for line in response.text.splitlines()] == ["audio", "completed"]
@@ -298,13 +302,13 @@ def test_actual_http_disconnect_terminates_the_owned_worker(tmp_path):
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-        server = uvicorn.Server(uvicorn.Config(create_app(service=service(worker)), log_level="critical", access_log=False))
+        server = uvicorn.Server(uvicorn.Config(create_app(service=service(worker), bearer_token=TOKEN), log_level="critical", access_log=False))
         serving = asyncio.create_task(server.serve(sockets=[listener]))
         try:
             async with asyncio.timeout(2):
                 while not server.started:
                     await asyncio.sleep(0.005)
-            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers=AUTH) as client:
                 async with client.stream("POST", "/v1/speech", json=request().model_dump()) as response:
                     assert response.status_code == 200
                     async with asyncio.timeout(2):
@@ -319,4 +323,68 @@ def test_actual_http_disconnect_terminates_the_owned_worker(tmp_path):
             server.should_exit = True
             await asyncio.wait_for(serving, timeout=3)
             listener.close()
+    asyncio.run(run())
+
+@pytest.mark.parametrize('token', ['', 'short', 'x' * 129, 'x' * 43 + '\n', '非公開' * 20])
+def test_http_service_fails_closed_without_valid_secret(token, monkeypatch):
+    monkeypatch.setenv('EPHY_TTS_BEARER_TOKEN', token)
+    with pytest.raises(SpeechError, match='^invalid_voice_config$'):
+        create_app(service=service())
+
+
+def test_http_authentication_covers_all_routes_before_body_or_worker(caplog):
+    async def run():
+        worker = FakeWorker()
+        app = create_app(service=service(worker), bearer_token=TOKEN)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://127.0.0.1') as client:
+            for path in ['/health', '/v1/voice-profiles', '/v1/speech', '/docs', '/unknown']:
+                for headers in [{}, {'Authorization': 'Bearer wrong'}, {'Authorization': 'Basic ' + TOKEN},
+                                [('Authorization', 'Bearer ' + TOKEN), ('Authorization', 'Bearer ' + TOKEN)]]:
+                    result = await client.post(path, headers=headers, content=b'PRIVATE body')
+                    assert result.status_code == 401
+                    assert result.json() == {'error_code': 'tts_unauthorized'}
+                    assert result.headers['cache-control'] == 'no-store'
+                    assert TOKEN not in result.text and 'PRIVATE' not in result.text
+            for path in ['/health', '/v1/voice-profiles', '/v1/speech']:
+                for extra in [{'Origin': 'http://127.0.0.1'}, {'Origin': 'null'}, {'Host': 'attacker.example'}, {'Host': '192.0.2.1'}]:
+                    result = await client.get(path, headers={**AUTH, **extra})
+                    assert result.status_code == 403
+                    assert result.json() == {'error_code': 'tts_forbidden'}
+            assert not worker.calls
+            for path in ['/health', '/v1/voice-profiles']:
+                result = await client.get(path, headers=AUTH)
+                assert result.status_code == 200 and result.headers['cache-control'] == 'no-store'
+            result = await client.post('/v1/speech', headers=AUTH, json=request().model_dump())
+            assert result.status_code == 200
+            assert len(worker.calls) == 1
+    asyncio.run(run())
+    assert TOKEN not in caplog.text and 'PRIVATE body' not in caplog.text
+
+
+def test_serve_keeps_loopback_and_disables_request_logging(monkeypatch):
+    import uvicorn
+    from apps.speech.__main__ import main
+    seen = {}
+    monkeypatch.setenv('EPHY_TTS_BEARER_TOKEN', TOKEN)
+    monkeypatch.setattr(sys, 'argv', ['speech', 'serve', '--port', '8767'])
+    monkeypatch.setattr(uvicorn, 'run', lambda app, **kwargs: seen.update(kwargs))
+    assert main() == 0
+    assert seen['host'] == '127.0.0.1'
+    assert seen['access_log'] is False and seen['log_level'] == 'critical'
+
+
+def test_inference_child_does_not_inherit_http_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv('EPHY_TTS_BEARER_TOKEN', TOKEN)
+    script = tmp_path / 'auth_worker.py'
+    script.write_text('import os,sys,json\n'
+                      'json.loads(sys.stdin.readline())\n'
+                      'assert "EPHY_TTS_BEARER_TOKEN" not in os.environ\n'
+                      'print(json.dumps({"type":"ready"}),flush=True)\n'
+                      'sys.stdin.read()\n')
+    async def run():
+        worker = ProcessWorker({}, command=[sys.executable, str(script)])
+        try:
+            await worker._start()
+        finally:
+            await worker.stop()
     asyncio.run(run())

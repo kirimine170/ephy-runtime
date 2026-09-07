@@ -85,7 +85,7 @@ func speechServer(t *testing.T, handler func(http.ResponseWriter, *http.Request,
 		handler(w, r, request)
 	}))
 	t.Cleanup(server.Close)
-	return &ServiceVoiceTTS{client: &speechServiceClient{endpoint: server.URL, client: server.Client()}, profile: customTestProfile()}
+	return &ServiceVoiceTTS{client: &speechServiceClient{bearerToken: strings.Repeat("s", 43), endpoint: server.URL, client: server.Client()}, profile: customTestProfile()}
 }
 func speechAudioFrame(id any) map[string]any {
 	return map[string]any{"type": "audio", "request_id": id, "sequence": 1, "wav_base64": base64.StdEncoding.EncodeToString(providerTestWAV())}
@@ -373,7 +373,7 @@ func TestSpeechCatalogRefreshPinsActiveProfileAndCachesReadiness(t *testing.T) {
 	}))
 	defer server.Close()
 	r := NewVoiceTTSRegistry()
-	r.remote = &speechServiceClient{endpoint: server.URL, client: server.Client()}
+	r.remote = &speechServiceClient{bearerToken: strings.Repeat("s", 43), endpoint: server.URL, client: server.Client()}
 	var group sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		group.Add(1)
@@ -402,5 +402,89 @@ func TestSpeechCatalogRefreshPinsActiveProfileAndCachesReadiness(t *testing.T) {
 	}
 	if _, err := r.PrepareSpeech(SpeechOptions{VoiceProfileID: "synthetic-voice"}); err == nil {
 		t.Fatal("offline custom profile silently fell back")
+	}
+}
+
+func TestSpeechCatalogDefaultRemainsSelectedWhenUnavailable(t *testing.T) {
+	for _, mode := range []string{"available", "unavailable", "missing"} {
+		t.Run(mode, func(t *testing.T) {
+			profile := customTestProfile()
+			profile.Available = mode != "unavailable"
+			catalog := VoiceProfileCatalog{DefaultProfileID: profile.VoiceProfileID, Profiles: []VoiceProfile{profile}}
+			if mode == "missing" {
+				catalog.Profiles = nil
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { json.NewEncoder(w).Encode(catalog) }))
+			defer server.Close()
+			t.Setenv("EPHY_TTS_ENDPOINT", server.URL)
+			t.Setenv("EPHY_TTS_BEARER_TOKEN", strings.Repeat("s", 43))
+			r := NewVoiceTTSRegistry()
+			if _, err := r.PrepareSpeech(SpeechOptions{}); err == nil {
+				t.Fatal("unresolved service default fell back")
+			}
+			got := r.Profiles(context.Background())
+			if got.DefaultProfileID != profile.VoiceProfileID {
+				t.Fatal("service default lost")
+			}
+			prepared, err := r.PrepareSpeech(SpeechOptions{})
+			if mode == "available" {
+				if err != nil || prepared.profile.VoiceProfileID != profile.VoiceProfileID {
+					t.Fatalf("default not prepared: %v", err)
+				}
+			} else if err == nil || err.Error() != "voice_profile_unavailable" {
+				t.Fatal("unavailable default fell back")
+			}
+			if _, err := r.PrepareSpeech(SpeechOptions{VoiceProfileID: "macos-kyoko"}); err != nil {
+				t.Fatal("explicit native selection lost", err)
+			}
+		})
+	}
+}
+
+func TestSpeechServiceBearerIsRequiredAndNeverExposed(t *testing.T) {
+	token := strings.Repeat("s", 43)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		calls.Add(1)
+		if req.Header.Get("Authorization") != "Bearer "+token {
+			t.Error("missing bearer")
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error_code":"PRIVATE `+token+`"}`)
+	}))
+	defer server.Close()
+	t.Setenv("EPHY_TTS_ENDPOINT", server.URL)
+	for _, value := range []string{"", "short", token + "\n", token} {
+		t.Setenv("EPHY_TTS_BEARER_TOKEN", value)
+		c := newSpeechServiceClient()
+		for _, path := range []string{"/health", "/v1/voice-profiles", "/v1/speech"} {
+			_, err := c.request(context.Background(), http.MethodGet, path, nil)
+			if err == nil || strings.Contains(err.Error(), token) || strings.Contains(err.Error(), "PRIVATE") {
+				t.Fatal("unsafe bearer error")
+			}
+		}
+	}
+	if calls.Load() != 3 {
+		t.Fatal("invalid bearer reached transport")
+	}
+}
+
+func TestSpeechServiceBearerNeverFollowsRedirectOrNonLoopbackEndpoint(t *testing.T) {
+	var forwarded atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { forwarded.Add(1) }))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	t.Setenv("EPHY_TTS_BEARER_TOKEN", strings.Repeat("s", 43))
+	for _, endpoint := range []string{redirect.URL, "http://example.com:8767", "http://192.0.2.1:8767", "http://localhost:8767", "http://user@127.0.0.1:8767", target.URL + "?secret=x"} {
+		t.Setenv("EPHY_TTS_ENDPOINT", endpoint)
+		if _, err := newSpeechServiceClient().request(context.Background(), http.MethodGet, "/health", nil); err == nil {
+			t.Fatal("unsafe endpoint accepted")
+		}
+	}
+	if forwarded.Load() != 0 {
+		t.Fatal("bearer forwarded by redirect")
 	}
 }

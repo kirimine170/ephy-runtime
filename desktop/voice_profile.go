@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -225,6 +226,9 @@ type VoiceTTSRegistry struct {
 func NewVoiceTTSRegistry() *VoiceTTSRegistry {
 	native := NewNativeVoiceTTS()
 	r := &VoiceTTSRegistry{native: native, remote: newSpeechServiceClient(), defaultID: "macos-kyoko", providers: map[string]VoiceSpeechProvider{}}
+	if os.Getenv("EPHY_TTS_BEARER_TOKEN") != "" || os.Getenv("EPHY_TTS_ENDPOINT") != "" {
+		r.defaultID = "" // A configured service must resolve its default before Start．
+	}
 	r.providers[native.Profile().VoiceProfileID] = native
 	r.catalog = VoiceProfileCatalog{DefaultProfileID: r.defaultID, Profiles: []VoiceProfile{native.Profile()}}
 	return r
@@ -264,6 +268,9 @@ func (r *VoiceTTSRegistry) Profiles(ctx context.Context) VoiceProfileCatalog {
 			result.ErrorCode = "tts_service_unavailable"
 		} else {
 			result.ErrorCode = remote.ErrorCode
+			if remote.DefaultProfileID != "" {
+				result.DefaultProfileID = remote.DefaultProfileID
+			}
 			for _, p := range remote.Profiles {
 				if p.VoiceProfileID == r.native.Profile().VoiceProfileID {
 					result.ErrorCode = "invalid_voice_profile"
@@ -275,6 +282,12 @@ func (r *VoiceTTSRegistry) Profiles(ctx context.Context) VoiceProfileCatalog {
 		}
 	}
 	r.mu.Lock()
+	if provider := providers[result.DefaultProfileID]; provider == nil || !provider.Profile().Available {
+		if result.ErrorCode == "" {
+			result.ErrorCode = "voice_profile_unavailable"
+		}
+	}
+	r.defaultID = result.DefaultProfileID
 	r.providers = providers
 	r.catalog = result
 	if result.ErrorCode == "" {

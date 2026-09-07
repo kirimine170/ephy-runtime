@@ -146,7 +146,20 @@ clone promptのcodeとspeaker embeddingはprivate NPZに保存し，pickleを使
 
 default styleとcapabilitiesはadapterが返す．Qwen Baseのこの実装で変更できるdelivery controlはvolume 0〜1だけである．未対応のaffect・intensity・pace・pitch・pause設定を非既定値に変えると`unsupported_voice_control`になる．UIは利用可能なcontrolだけを表示する．profileの声を変更する場合は新しいIDを作り，既存IDの参照先を別のclone promptへ差し替えない．
 
+serviceとRuntimeだけが共有するbearer secretを，Git外のprivate directoryに一度だけ生成する．既存fileは上書きしない．secretを設定JSON，command引数，UI，trace，logへ記載しない．以下はshellのtraceを無効にして実行する．
+
 ```bash
+set +x
+python3 - <<'PYTOKEN'
+import os
+from pathlib import Path
+import secrets
+path = Path(os.environ["EPHY_VOICE_ROOT"]) / "bearer-token"
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w") as output:
+    output.write(secrets.token_urlsafe(32))
+PYTOKEN
+export EPHY_TTS_BEARER_TOKEN="$(cat "$EPHY_VOICE_ROOT/bearer-token")"
 chmod 600 "$EPHY_VOICE_ROOT/service-config.json"
 "$EPHY_VOICE_ROOT/venv/bin/python" -m apps.speech serve \
   --config "$EPHY_VOICE_ROOT/service-config.json" \
@@ -156,9 +169,23 @@ chmod 600 "$EPHY_VOICE_ROOT/service-config.json"
 このterminalでserviceを継続実行する．別terminalから公開metadataだけを確認できる．
 
 ```bash
-curl --fail --silent --show-error http://127.0.0.1:8767/health
-curl --fail --silent --show-error http://127.0.0.1:8767/v1/voice-profiles
+set +x
+export EPHY_TTS_BEARER_TOKEN="$(cat "$EPHY_VOICE_ROOT/bearer-token")"
+python3 - <<'PYHTTP'
+import os
+import urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+for route in ("/health", "/v1/voice-profiles"):
+    request = urllib.request.Request("http://127.0.0.1:8767" + route,
+        headers={"Authorization": "Bearer " + os.environ["EPHY_TTS_BEARER_TOKEN"]})
+    with opener.open(request, timeout=5) as response:
+        print(response.read().decode())
+PYHTTP
 ```
+
+全routeでbearer認証が必須であり，未認証・不一致・重複Authorizationは401の`tts_unauthorized`になる．Origin付きrequestとloopback IP以外のHostは403の`tts_forbidden`になる．secret未設定・形式不正ならserviceは`invalid_voice_config`で起動を拒否する．secretは32〜128文字の英数字・`_`・`-`だけを受け付ける．access logは無効で，inference子processへsecretを継承しない．bindは引き続き`127.0.0.1`固定である．
+
+この境界はsecretを持たないlocal processやbrowserからの呼出しを拒否する．同一OS userがprivate fileやprocess環境を読み取れる場合と，管理者権限でのアクセスを隔離する仕組みではない．secretを変更した場合はserviceとRuntimeの両方を同じ値で再起動する．
 
 `/health`の`ready`はconfigと依存が存在することを表し，実際のmodel読込み・音声合成・声質の合格を保証しない．実合成時にもpinとassetの整合を検証する．初回合成ではmodel読込みが加わる．serviceは1要求ずつ処理し，句間ではworkerを再利用する．
 
@@ -168,6 +195,9 @@ curl --fail --silent --show-error http://127.0.0.1:8767/v1/voice-profiles
 
 ```bash
 EPHY_RUNTIME_REPO='/absolute/path/to/ephy-runtime'
+EPHY_VOICE_ROOT='/absolute/private/ephy-voice'
+set +x
+export EPHY_TTS_BEARER_TOKEN="$(cat "$EPHY_VOICE_ROOT/bearer-token")"
 bash "$EPHY_RUNTIME_REPO/scripts/start_conversation_app.sh"
 ```
 
@@ -180,7 +210,7 @@ EPHY_TTS_ENDPOINT='http://127.0.0.1:8768' \
 
 serviceも同じportで起動する．endpointはloopback IPのHTTPに限定し，redirectとproxyは使用しない．別Inference nodeを使う場合は，明示的なSSH port forwarding等でloopbackへ接続する．Runtimeへ参照音声・transcript・embedding・model pathを設定しない．
 
-UIの声一覧から追加したprofileを選ぶ．既定のKyokoとtext入力は引き続き利用できる．custom profileの失敗時にはerrorを表示し，別の声へ暗黙に切り替えない．Kyokoへ戻す場合はUIで明示的に選択する．Apple Speechの利用可否とTCCの確認は，TTS serviceとは別である．
+serviceの構成済みdefault profileが利用可能なら，UI初期選択とprofile省略時のRuntime選択に反映する．catalog初回確認中は音声開始を保留し，defaultまたは選択中のprofileが利用不能・消失した場合はその選択を保持してUIに明示する．text入力は引き続き利用でき，Kyokoは明示選択できる．custom profileの失敗時にはerrorを表示し，別の声へ暗黙に切り替えない．Kyokoへ戻す場合はUIで明示的に選択する．Apple Speechの利用可否とTCCの確認は，TTS serviceとは別である．
 
 ## 再生境界と確認する内容
 

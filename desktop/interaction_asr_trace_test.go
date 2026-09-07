@@ -289,7 +289,11 @@ func TestInteractionASRTraceIncompleteRecognitionKeepsUnknownTimingsAndPrivateEr
 			}
 			before, _ := h.engine.Trace(start.OperationID)
 			next := h.start(t, "next-asr-session", GenerationLimits{})
-			session.onUpdate(session.update(1537, "final", "private-asr-late-final-marker"))
+			session.onUpdate(session.update(1537, "partial", "private-asr-late-partial-marker"))
+			session.onUpdate(session.update(1538, "final", "private-asr-late-final-marker"))
+			lateFailure := session.update(1539, "failure", "")
+			lateFailure.ErrorCode = "asr_failed"
+			session.onUpdate(lateFailure)
 			nextFinal := awaitInteraction(t, h.engine, next.OperationID, "COMPLETED")
 			if nextFinal.Transcript != "private-prompt-marker" || calls.Load() != 1 {
 				t.Fatal("late ASR final contaminated the next turn")

@@ -460,9 +460,9 @@ export function mountVoiceInteraction({
     const run = begin({}, true);
     if (!run) return false;
     let request;
-    try { request = getRequest(); } catch {
+    try { request = getRequest(); } catch (error) {
       run.resolveIdentity(null);
-      await fail(run, 'microphone_unavailable');
+      await fail(run, VOICE_PROFILE_ERROR_CODES.has(error?.message) ? error.message : 'microphone_unavailable');
       return false;
     }
     if (!live(run)) return false;
