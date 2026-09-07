@@ -8,8 +8,12 @@
   <string>Ephy Local Speech</string>
   <key>CFBundleExecutable</key>
   <string>ephy-asr</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
   <key>CFBundleVersion</key>
   <string>1</string>
+  <key>LSBackgroundOnly</key>
+  <true/>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Ephyは明示的に録音した音声を端末内で文字に変換します．</string>
 </dict>

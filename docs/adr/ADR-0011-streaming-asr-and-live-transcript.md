@@ -87,7 +87,7 @@ cd desktop
 EPHY_C02_INSTALLED=1 go test -run '^TestC02InstalledStreamingASR$' -count=1 -v .
 ```
 
-未許可の場合はskipする．`EPHY_C02_ALLOW_PERMISSION=1`で明示的なOS許可要求を有効にできるが，responsible applicationにSpeech usage descriptionが必要であり，headless agentや通常のtest runnerからの起動が動作するとは限らない．TCCを迂回したり，権限databaseを書き換えたりしない．通常appは既存の`build_conversation_app.sh`がSpeech／Microphoneのusage descriptionを設定する．実機結果と制約は本文なしの作業報告へ記録する．
+未許可の場合はskipする．`EPHY_C02_ALLOW_PERMISSION=1`で明示的なOS許可要求を有効にできるが，responsible applicationにSpeech usage descriptionが必要であり，headless agentや通常のtest runnerからの起動が動作するとは限らない．TCCを迂回したり，権限databaseを書き換えたりしない．通常appは既存の`build_conversation_app.sh`がSpeech／Microphoneのusage descriptionを設定し，`start_conversation_app.sh`がLaunchServices経由で起動してEphy Runtimeをresponsible applicationにする．実機結果と制約は本文なしの作業報告へ記録する．
 
 ## 次Gateへの境界
 

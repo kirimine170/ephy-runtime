@@ -12,7 +12,7 @@ C0のinteraction loopには，実際のASR／TTS providerと，環境にprovider
 
 初期providerはmacOSのApple Speechと，インストール済み音声を使う`/usr/bin/say`である．cloud ASR／TTSへのfallback，modelのdownload，自動的な権限設定の変更は実装しない．他OSでは`asr_unavailable`／`tts_unavailable`を返す．
 
-ASR helperのsourceは`desktop/voice/EphyASR.swift`に置き，`bash scripts/build_voice_provider.sh`で`bin/ephy-asr`を生成する．実行形式には`desktop/voice/Info.plist`のSpeech usage descriptionを埋め込む．helper自身はmicrophoneを開かず，stdinから受けたmono PCM16 WAVをメモリ上の`AVAudioPCMBuffer`へ変換する．入力上限は8 MiB／60秒，sample rateは8，000〜48，000 Hzである．
+ASR helperのsourceは`desktop/voice/EphyASR.swift`に置き，`bash scripts/build_voice_provider.sh`で`bin/EphyASR.app`を生成する．Speech usage descriptionと安定したbundle IDは`Contents/Info.plist`へ配置し，pipeを接続した子processとして直接実行する場合にもTCCが説明文を取得できるよう，同じplistをMach-Oへ埋め込む．app bundle全体を署名する．helper自身はmicrophoneを開かず，stdinから受けたmono PCM16 WAVをメモリ上の`AVAudioPCMBuffer`へ変換する．入力上限は8 MiB／60秒，sample rateは8，000〜48，000 Hzである．
 
 `--check --locale ja-JP`は権限状態，`supportsOnDeviceRecognition`，`isAvailable`を確認し，権限を要求しない．権限未決定の場合は`permission_required`をstdoutへ出して成功する．実際のtranscriptionが開始された場合だけ，必要に応じてmacOSのSpeech権限を要求する．認識要求は常に`requiresOnDeviceRecognition = true`とし，端末内認識が利用できなければ停止する．最終transcriptだけをstdoutに返し，stderrにはallowlistされた固定error codeだけを出す．Go側でも未知のdiagnosticを`asr_failed`へ置き換える．
 
@@ -27,7 +27,7 @@ ASR processは45秒，TTSの各chunkは30秒，準備確認は5秒を上限と�
 | 環境変数 | 既定値 | 制約 |
 | --- | --- | --- |
 | `EPHY_VOICE_LOCALE` | `ja-JP` | 2〜3文字の小文字languageと2文字の大文字region．`-`と`_`を許可 |
-| `EPHY_ASR_HELPER` | runtime rootの`bin/ephy-asr` | 実行権限のある通常fileへの絶対path |
+| `EPHY_ASR_HELPER` | runtime rootの`bin/EphyASR.app/Contents/MacOS/ephy-asr` | 実行権限のある通常fileへの絶対path |
 | `EPHY_TTS_VOICE` | `Kyoko` | ASCII英字で開始し，英数字・space・丸括弧・`_`・`-`だけの80文字以内．localeと一致するインストール済みvoiceが必要 |
 
 provider identityは`macos-speech`／locale／`on-device`と，`macos-say`／voice／`pcm16-22050-<locale>`である．helperや一時fileのpathは含めない．
