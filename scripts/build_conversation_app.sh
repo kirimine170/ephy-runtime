@@ -39,5 +39,10 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   plutil -replace NSSpeechRecognitionUsageDescription -string "録音した発話を端末内で文字に変換します．" "${INFO_PLIST}"
   install -m 0755 "${BINARY_PATH}" "${APP_BINARY}"
   touch "${APP_BUNDLE}"
+  # Keep the bundle identifier stable for TCC．An unsigned Go binary is
+  # otherwise attributed as `a.out` even when LaunchServices opens the app．
+  xattr -cr "${APP_BUNDLE}"
+  codesign --force --deep --sign - --identifier com.wails.ephy-runtime "${APP_BUNDLE}"
+  codesign --verify --strict --deep "${APP_BUNDLE}"
   echo "Updated ${APP_BUNDLE}"
 fi

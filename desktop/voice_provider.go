@@ -58,7 +58,7 @@ type NativeVoiceASR struct {
 func NewNativeVoiceASR(root string) *NativeVoiceASR {
 	executable := strings.TrimSpace(os.Getenv("EPHY_ASR_HELPER"))
 	if executable == "" {
-		executable = filepath.Join(root, "bin", "ephy-asr")
+		executable = filepath.Join(root, "bin", "EphyASR.app", "Contents", "MacOS", "ephy-asr")
 	}
 	return &NativeVoiceASR{executable: executable, locale: voiceLocale(), osName: runtime.GOOS, run: runVoiceProcess}
 }

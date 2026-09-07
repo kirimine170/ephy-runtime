@@ -65,6 +65,16 @@ func asrTestProvider(t *testing.T, runner voiceProcessRunner) *NativeVoiceASR {
 	return &NativeVoiceASR{executable: path, locale: "ja-JP", osName: "darwin", run: runner}
 }
 
+func TestNativeVoiceASRUsesBundledHelperByDefault(t *testing.T) {
+	t.Setenv("EPHY_ASR_HELPER", "")
+	root := filepath.Join(string(filepath.Separator), "runtime")
+	p := NewNativeVoiceASR(root)
+	want := filepath.Join(root, "bin", "EphyASR.app", "Contents", "MacOS", "ephy-asr")
+	if p.executable != want {
+		t.Fatalf("unexpected bundled helper path: %q", p.executable)
+	}
+}
+
 func TestNativeVoiceASRStdinAndReadiness(t *testing.T) {
 	calls := 0
 	p := asrTestProvider(t, func(ctx context.Context, executable string, args []string, input []byte) ([]byte, []byte, error) {

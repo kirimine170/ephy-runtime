@@ -126,16 +126,16 @@ Runtime repositoryのrootで実行する．Python環境，Node.js，Go，Xcode�
 
 ```bash
 bash scripts/build_voice_provider.sh
-bin/ephy-asr --check --locale ja-JP
+bin/EphyASR.app/Contents/MacOS/ephy-asr --check --locale ja-JP
 bash scripts/build_conversation_app.sh
 ```
 
 準備確認の`ready`はSpeech許可済み，`permission_required`は初回Speech許可がまだ必要という意味で，このcommand自体は許可dialogやmicrophoneを開かない．on-device認識が使えない場合は`asr_on_device_unavailable`などで停止する．`build_conversation_app.sh`は親appへMicrophone／Speechのusage descriptionを設定する．ASR helperのbuildは別commandである．
 
-既存Gatewayとmodel stackが動作していることをhealthと通常text chatで確認してから，build済みappを既存の起動手順で開く．Runtimeだけのappを直接起動する場合は次を使う．
+既存Gatewayとmodel stackが動作していることをhealthと通常text chatで確認してから，build済みappを既存の起動手順で開く．macOSのTCCがEphy RuntimeをSpeech権限のresponsible applicationとして扱うよう，app bundle内の実行fileを直接実行せずLaunchServices経由で起動する．
 
 ```bash
-EPHY_START_CONVERSATION=1 desktop/build/bin/ephy-runtime.app/Contents/MacOS/ephy-runtime
+bash scripts/start_conversation_app.sh
 ```
 
 | 操作 | 期待結果 |
