@@ -277,7 +277,7 @@ class IrodoriAdapter:
         # Irodori v4.1 accepts one ref_wav．An ordered profile group is rendered
         # to one short，private，request-scoped WAV and unlinked immediately．
         try:
-            target_rate = max(item.audio_metadata["sample_rate"] for item in group.references)
+            target_rate = max(item.metadata["sample_rate"] for item in group.references)
             if not 8000 <= target_rate <= 48000:
                 raise SpeechError("tts_asset_invalid")
             pieces: list[list[float]] = []

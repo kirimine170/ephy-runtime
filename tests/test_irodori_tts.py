@@ -59,7 +59,7 @@ def factory(**values):
 
 def group(*rates: int):
     references = tuple(SimpleNamespace(audio_bytes=wav_bytes(rate=rate),
-        audio_metadata={"sample_rate": rate}) for rate in rates)
+        metadata={"sample_rate": rate}) for rate in rates)
     return SimpleNamespace(provenance_id="prov_" + "b" * 32, references=references)
 
 

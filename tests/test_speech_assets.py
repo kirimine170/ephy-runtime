@@ -120,6 +120,34 @@ def test_reference_group_is_ordered_bounded_private_and_immutable(fixture):
     assert stat.S_IMODE((root / "groups" / group.group_digest / "manifest.json").stat().st_mode) == 0o600
 
 
+def test_irodori_reference_is_audio_only_explicit_and_groupable(fixture):
+    store, root, audio, _ = fixture
+    reference = store.register_irodori_reference(
+        audio, consent=consent(transcript_verified=False))
+    loaded = store.load_reference(reference.reference_id)
+    assert loaded.transcript is None and loaded.transcript_path is None
+    assert loaded.metadata["conditioning_provider"] == "irodori-tts"
+    assert loaded.metadata["transcript_mode"] == "not_consumed"
+    assert not (root / "references" / reference.reference_id / "transcript.txt").exists()
+    group = store.store_reference_group([reference.reference_id])
+    assert group.references[0].reference_id == reference.reference_id
+    with pytest.raises(SpeechAssetError, match="voice_asset_clone_metadata_invalid"):
+        clone(store, reference)
+
+
+@pytest.mark.parametrize("verified", [True, None])
+def test_irodori_audio_only_requires_explicit_transcript_state(fixture, verified):
+    store, root, audio, _ = fixture
+    record = consent(transcript_verified=False)
+    if verified is None:
+        record.pop("transcript_verified")
+    else:
+        record["transcript_verified"] = verified
+    with pytest.raises(SpeechAssetError, match="voice_asset_consent_required"):
+        store.register_irodori_reference(audio, consent=record)
+    assert not list((root / "references").iterdir())
+
+
 def test_reference_group_rechecks_member_integrity_and_link_count(fixture):
     store, root, _, _ = fixture
     reference = register(fixture)

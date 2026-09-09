@@ -54,6 +54,10 @@ def main() -> int:
     register.add_argument("--audio", required=True)
     register.add_argument("--transcript", required=True)
     register.add_argument("--consent", required=True)
+    register_irodori = sub.add_parser("import-irodori-reference")
+    register_irodori.add_argument("--asset-store", required=True)
+    register_irodori.add_argument("--audio", required=True)
+    register_irodori.add_argument("--consent", required=True)
     group = sub.add_parser("group-references")
     group.add_argument("--asset-store", required=True)
     group.add_argument("--reference-id", action="append", required=True)
@@ -73,6 +77,12 @@ def main() -> int:
             consent = load_private_json(args.consent)
             asset = SpeechAssetStore(Path(args.asset_store)).register_reference(
                 Path(args.audio), Path(args.transcript), consent=consent)
+            result = {"reference_id": asset.reference_id, "provenance_id": asset.provenance_id}
+        elif args.command == "import-irodori-reference":
+            from packages.speech_assets import SpeechAssetStore
+            consent = load_private_json(args.consent)
+            asset = SpeechAssetStore(Path(args.asset_store)).register_irodori_reference(
+                Path(args.audio), consent=consent)
             result = {"reference_id": asset.reference_id, "provenance_id": asset.provenance_id}
         elif args.command == "group-references":
             from packages.speech_assets import SpeechAssetStore

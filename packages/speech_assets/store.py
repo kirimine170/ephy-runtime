@@ -45,8 +45,8 @@ class ReferenceAsset:
     provenance_id: str
     reference_digest: str
     audio_path: Path = field(repr=False)
-    transcript_path: Path = field(repr=False)
-    transcript: str = field(repr=False)
+    transcript_path: Path | None = field(repr=False)
+    transcript: str | None = field(repr=False)
     metadata: dict[str, Any] = field(repr=False)
     audio_bytes: bytes = field(repr=False)
 
@@ -270,16 +270,18 @@ def _publish(parent: int, name: str, files: Mapping[str, bytes]) -> None:
             os.rmdir(staging, dir_fd=parent)
 
 
-def _consent(value: Mapping[str, Any]) -> dict[str, Any]:
+def _consent(value: Mapping[str, Any], *, transcript_required: bool = True) -> dict[str, Any]:
     allowed = {"authority", "storage_allowed", "voice_clone_allowed", "synthesis_allowed", "transcript_verified", "clean_reference", "attested_by", "attested_at", "permission_evidence"}
     if not isinstance(value, Mapping) or set(value) - allowed:
         _fail("voice_asset_consent_required")
     result = dict(value)
     if result.get("authority") not in ("owned", "explicit_permission"):
         _fail("voice_asset_consent_required")
-    for key in ("storage_allowed", "voice_clone_allowed", "synthesis_allowed", "transcript_verified", "clean_reference"):
+    for key in ("storage_allowed", "voice_clone_allowed", "synthesis_allowed", "clean_reference"):
         if result.get(key) is not True:
             _fail("voice_asset_consent_required")
+    if result.get("transcript_verified") is not transcript_required:
+        _fail("voice_asset_consent_required")
     for key, limit in (("attested_by", 200), ("attested_at", 80), ("permission_evidence", 4096)):
         text = result.get(key, "")
         if not isinstance(text, str) or len(text) > limit or "\x00" in text:
@@ -441,6 +443,28 @@ class SpeechAssetStore:
         except Exception:
             _fail()
 
+    def register_irodori_reference(self, reference_path: Path | str, *, consent: Mapping[str, Any]) -> ReferenceAsset:
+        """Register audio-only conditioning for Irodori，which does not consume a transcript．"""
+        try:
+            permission = _consent(consent, transcript_required=False)
+            source = _source(Path(reference_path), MAX_AUDIO_BYTES)
+            audio, measurements = _clean_wav(source)
+            provenance_id = "prov_" + uuid.uuid4().hex
+            manifest = {"schema_version": 2, "provenance_id": provenance_id,
+                        "source_audio_sha256": _digest(source), "audio_sha256": _digest(audio),
+                        "conditioning_provider": "irodori-tts", "transcript_mode": "not_consumed",
+                        "consent": permission, "imported_at": datetime.now(timezone.utc).isoformat(),
+                        **measurements}
+            reference_id = "ref_" + _digest(_json_bytes(manifest))
+            manifest["reference_id"] = reference_id
+            with self._category("references") as directory:
+                _publish(directory, reference_id, {"reference.wav": audio, "manifest.json": _json_bytes(manifest)})
+            return self.load_reference(reference_id)
+        except SpeechAssetError:
+            raise
+        except Exception:
+            _fail()
+
     def load_reference(self, reference_id: str) -> ReferenceAsset:
         try:
             if not isinstance(reference_id, str) or not _ID.fullmatch(reference_id):
@@ -449,20 +473,41 @@ class SpeechAssetStore:
                 manifest_bytes = _read(asset, "manifest.json", MAX_JSON_BYTES)
                 manifest = _json_read(manifest_bytes)
                 audio = _read(asset, "reference.wav", MAX_AUDIO_BYTES)
-                transcript_bytes = _read(asset, "transcript.txt", MAX_TRANSCRIPT_BYTES)
-            if (set(manifest) != {"schema_version", "reference_id", "provenance_id", "source_audio_sha256", "audio_sha256", "transcript_sha256", "consent", "imported_at", "sample_rate", "sample_count"}
-                    or manifest["schema_version"] != 1 or manifest["reference_id"] != reference_id
-                    or not _PROVENANCE.fullmatch(manifest["provenance_id"]) or not _DIGEST.fullmatch(manifest["source_audio_sha256"])
-                    or manifest["audio_sha256"] != _digest(audio) or manifest["transcript_sha256"] != _digest(transcript_bytes)):
+                transcript_bytes = (_read(asset, "transcript.txt", MAX_TRANSCRIPT_BYTES)
+                                    if manifest.get("schema_version") == 1 else None)
+            common = {"schema_version", "reference_id", "provenance_id", "source_audio_sha256",
+                      "audio_sha256", "consent", "imported_at", "sample_rate", "sample_count"}
+            version_one = common | {"transcript_sha256"}
+            version_two = common | {"conditioning_provider", "transcript_mode"}
+            if (set(manifest) not in (version_one, version_two) or manifest["schema_version"] not in (1, 2)
+                    or (manifest["schema_version"] == 1 and set(manifest) != version_one)
+                    or (manifest["schema_version"] == 2 and set(manifest) != version_two)
+                    or manifest["reference_id"] != reference_id
+                    or not _PROVENANCE.fullmatch(manifest["provenance_id"])
+                    or not _DIGEST.fullmatch(manifest["source_audio_sha256"])
+                    or manifest["audio_sha256"] != _digest(audio)):
                 _fail("voice_asset_integrity")
+            if manifest["schema_version"] == 1:
+                if transcript_bytes is None or manifest["transcript_sha256"] != _digest(transcript_bytes):
+                    _fail("voice_asset_integrity")
+                transcript = _transcript(transcript_bytes)
+                transcript_path: Path | None = self._root / "references" / reference_id / "transcript.txt"
+                _consent(manifest["consent"])
+            else:
+                if (manifest["conditioning_provider"] != "irodori-tts"
+                        or manifest["transcript_mode"] != "not_consumed"):
+                    _fail("voice_asset_integrity")
+                transcript = None
+                transcript_path = None
+                _consent(manifest["consent"], transcript_required=False)
             if "ref_" + _digest(_json_bytes({key: value for key, value in manifest.items() if key != "reference_id"})) != reference_id:
                 _fail("voice_asset_integrity")
-            _consent(manifest["consent"])
             clean, measurements = _clean_wav(audio)
             if clean != audio or any(manifest[key] != value for key, value in measurements.items()):
                 _fail("voice_asset_integrity")
             base = self._root / "references" / reference_id
-            return ReferenceAsset(reference_id, manifest["provenance_id"], _digest(manifest_bytes), base / "reference.wav", base / "transcript.txt", _transcript(transcript_bytes), manifest, audio)
+            return ReferenceAsset(reference_id, manifest["provenance_id"], _digest(manifest_bytes),
+                                  base / "reference.wav", transcript_path, transcript, manifest, audio)
         except SpeechAssetError:
             raise
         except Exception:
@@ -532,6 +577,8 @@ class SpeechAssetStore:
     def store_clone_prompt(self, reference_id: str, *, provider: str, model_revision: str, tokenizer_revision: str, arrays: Mapping[str, Any], metadata: Mapping[str, Any]) -> ClonePromptAsset:
         try:
             reference = self.load_reference(reference_id)
+            if reference.transcript is None:
+                _fail("voice_asset_clone_metadata_invalid")
             for value in (provider, model_revision, tokenizer_revision):
                 if not isinstance(value, str) or not _REVISION.fullmatch(value) or "://" in value or value.startswith("/"):
                     _fail("voice_asset_model_revision_invalid")

@@ -12,7 +12,7 @@ import pytest
 from apps.speech.irodori import MODEL_REVISION as IRODORI_MODEL_REVISION
 from apps.speech.qwen import MODEL_REVISION, waveform_to_wav
 from apps.speech.schemas import (DEFAULT_STYLE, IRODORI_CAPABILITIES, QWEN_CAPABILITIES,
-                                 SpeechError, SpeechRequest, public_profile)
+                                 SpeechError, SpeechRequest, parse_speech_request, public_profile)
 from apps.speech.service import ProcessWorker, SpeechService, create_app
 
 
@@ -43,6 +43,11 @@ def irodori_request(**changes):
         "session_id": "session-1", "turn_id": "turn-1", "generation_revision": 1, "speech_unit_sequence": 1,
         "voice_profile_id": "anime-voice", "model_revision": IRODORI_MODEL_REVISION,
         "reference_group_digest": "c" * 64, "speech_text": "確定した文です。", **changes})
+
+
+def test_bytearray_http_body_is_normalized_for_pydantic_compatibility():
+    body = bytearray(irodori_request().model_dump_json().encode())
+    assert parse_speech_request(body) == irodori_request()
 
 
 class Connection:

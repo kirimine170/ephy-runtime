@@ -25,16 +25,34 @@ Irodori-TTS-ServerはStep 3の比較対象だが，Runtime統合では使用し�
 
 ## private reference group
 
-既存の`import-reference`で各clipを登録する．すべてに正確なtranscriptと所有・明示許諾recordが必要である．1〜4個の登録済みreferenceを一つのordered groupにする．同じIDの重複，symlink，hardlink，unsafe permission，上書きを拒否する．
+Irodori v4.1のspeaker conditioningはreference WAVだけを消費し，reference transcriptを受け取らない．Qwen向け`import-reference`のtranscript要件は維持しつつ，Irodoriでは`import-irodori-reference`を使う．`transcript_verified`は`false`として，未確認のtranscriptを使うのではなく，このproviderでは非消費であることをmanifestへ明示する．所有・明示許諾record，clean reference確認，symlink／hardlink拒否，unsafe permission拒否，非上書き保存は共通である．
 
-```bash
-"$EPHY_VOICE_ROOT/venv/bin/python" -m apps.speech group-references \
-  --asset-store "$EPHY_VOICE_ROOT/assets" \
-  --reference-id 'ref_<first 64 hex>' \
-  --reference-id 'ref_<second 64 hex>'
+```json
+{
+  "authority": "explicit_permission",
+  "storage_allowed": true,
+  "voice_clone_allowed": true,
+  "synthesis_allowed": true,
+  "transcript_verified": false,
+  "clean_reference": true,
+  "attested_by": "<private attestor identity>",
+  "attested_at": "<ISO 8601 timestamp with timezone>",
+  "permission_evidence": "<private permission record>"
+}
 ```
 
-成功時に公開してよいのは`reference_group_digest`，`provenance_id`，`reference_count`だけである．現在のIrodori APIはtranscriptをspeaker conditionへ渡さないが，storeの許諾・正確性条件は弱めない．
+```bash
+"$EPHY_VOICE_ROOT/venv/bin/python" -m apps.speech import-irodori-reference \
+  --asset-store "$EPHY_VOICE_ROOT/assets" \
+  --audio "$EPHY_VOICE_ROOT/input/reference.wav" \
+  --consent "$EPHY_VOICE_ROOT/input/consent.json"
+
+"$EPHY_VOICE_ROOT/venv/bin/python" -m apps.speech group-references \
+  --asset-store "$EPHY_VOICE_ROOT/assets" \
+  --reference-id 'ref_<first 64 hex>'
+```
+
+1〜4個の登録済みreferenceを一つのordered groupにできる．成功時に公開してよいのは`reference_group_digest`，`provenance_id`，`reference_count`だけである．
 
 ## service config
 

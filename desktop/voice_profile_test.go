@@ -529,6 +529,30 @@ func TestIrodoriCannotBecomeServiceDefault(t *testing.T) {
 	}
 }
 
+func TestIrodoriOnlyCatalogKeepsNativeDefaultAndExplicitSelection(t *testing.T) {
+	profile := irodoriTestProfile()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		json.NewEncoder(w).Encode(VoiceProfileCatalog{Profiles: []VoiceProfile{profile}})
+	}))
+	defer server.Close()
+	t.Setenv("EPHY_TTS_ENDPOINT", server.URL)
+	t.Setenv("EPHY_TTS_BEARER_TOKEN", strings.Repeat("s", 43))
+	r := NewVoiceTTSRegistry()
+	if _, err := r.PrepareSpeech(SpeechOptions{}); err == nil {
+		t.Fatal("unresolved service catalog fell back before refresh")
+	}
+	catalog := r.Profiles(context.Background())
+	if catalog.DefaultProfileID != "macos-kyoko" || catalog.ErrorCode != "" {
+		t.Fatalf("native default not restored after successful catalog: %#v", catalog)
+	}
+	if _, err := r.PrepareSpeech(SpeechOptions{}); err != nil {
+		t.Fatal("native default unavailable after refresh", err)
+	}
+	if _, err := r.PrepareSpeech(SpeechOptions{VoiceProfileID: profile.VoiceProfileID}); err != nil {
+		t.Fatal("explicit experimental profile selection was lost", err)
+	}
+}
+
 func TestSpeechServiceBearerIsRequiredAndNeverExposed(t *testing.T) {
 	token := strings.Repeat("s", 43)
 	var calls atomic.Int32

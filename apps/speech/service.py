@@ -327,13 +327,16 @@ def create_app(config: dict[str, Any] | None = None, *, service: SpeechService |
         try:
             if connection.headers.get("origin") is not None or connection.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise SpeechError("invalid_speech_text")
-            body = bytearray()
-            async with asyncio.timeout(5.0):
+
+            async def read_body() -> bytes:
+                body = bytearray()
                 async for part in connection.stream():
                     if len(body) + len(part) > MAX_REQUEST_BYTES:
                         raise SpeechError("invalid_speech_text")
                     body.extend(part)
-            request = parse_speech_request(body)
+                return bytes(body)
+
+            request = parse_speech_request(await asyncio.wait_for(read_body(), timeout=5.0))
             speech.profile(request)
         except SpeechError as exc:
             return JSONResponse({"error_code": exc.code}, status_code=400)

@@ -305,6 +305,11 @@ func (r *VoiceTTSRegistry) Profiles(ctx context.Context) VoiceProfileCatalog {
 				} else {
 					result.DefaultProfileID = remote.DefaultProfileID
 				}
+			} else {
+				// An Irodori-only experimental catalog intentionally has no remote
+				// default．After a successful catalog fetch，keep native Kyoko as the
+				// explicit default without masking a failed custom selection．
+				result.DefaultProfileID = r.native.Profile().VoiceProfileID
 			}
 		}
 	}

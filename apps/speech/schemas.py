@@ -34,7 +34,9 @@ def error_code(error: BaseException) -> str:
 
 def parse_speech_request(value: Any) -> SpeechRequest:
     try:
-        return SpeechRequest.model_validate_json(value) if isinstance(value, (bytes, bytearray, str)) else SpeechRequest.model_validate(value)
+        if isinstance(value, bytearray):
+            value = bytes(value)
+        return SpeechRequest.model_validate_json(value) if isinstance(value, (bytes, str)) else SpeechRequest.model_validate(value)
     except ValidationError as exc:
         # Inspect only our fixed validator marker，never expose Pydantic's input．
         for detail in exc.errors(include_input=False):
