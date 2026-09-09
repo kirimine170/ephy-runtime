@@ -241,7 +241,7 @@ class IrodoriAdapter:
             original_tokenizer = PretrainedTextTokenizer.from_pretrained
 
             def local_tokenizer(cls, repo_id: str, add_bos: bool = True,
-                                local_files_only: bool = False):
+                                local_files_only: bool = False, revision: str | None = None):
                 return original_tokenizer(repo_id=str(model_root / "tokenizer"),
                                           add_bos=add_bos, local_files_only=True)
 
