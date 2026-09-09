@@ -7,7 +7,6 @@ import json
 import os
 import sys
 
-from .qwen import QwenAdapter
 from .schemas import MAX_REQUEST_BYTES, SpeechError, error_code, parse_speech_request
 from .service import encode_frame
 
@@ -25,9 +24,16 @@ def run_worker() -> int:
     try:
         line = source.readline(64 * 1024 + 1)
         config = json.loads(line)
-        if not line.endswith(b"\n") or set(config) != {"type", "config"} or config["type"] != "configure":
+        if not line.endswith(b"\n") or set(config) != {"type", "provider", "config"} or config["type"] != "configure":
             return 1
-        adapter = QwenAdapter(config["config"])
+        if config["provider"] == "qwen3-tts":
+            from .qwen import QwenAdapter
+            adapter = QwenAdapter(config["config"])
+        elif config["provider"] == "irodori-tts":
+            from .irodori import IrodoriAdapter
+            adapter = IrodoriAdapter(config["config"])
+        else:
+            return 1
         output.write(encode_frame({"type": "ready"}))
         output.flush()
         while True:

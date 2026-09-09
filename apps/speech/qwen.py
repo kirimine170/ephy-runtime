@@ -192,7 +192,7 @@ class QwenAdapter:
 
     def synthesize(self, request: SpeechRequest, profile: dict[str, Any]) -> bytes:
         self._load()
-        if request.model_revision != MODEL_REVISION:
+        if request.model_revision != MODEL_REVISION or request.reference_group_digest:
             raise SpeechError("voice_profile_changed")
         language = QWEN_LANGUAGES.get(profile["language"])
         if language is None:

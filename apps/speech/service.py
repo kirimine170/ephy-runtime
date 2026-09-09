@@ -13,6 +13,7 @@ import re
 import json
 from pathlib import Path
 import sys
+import tempfile
 import wave
 from contextlib import asynccontextmanager
 from typing import Any
@@ -20,9 +21,26 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .qwen import MODEL_REVISION, SOURCE_REVISION
+from .irodori import (CODEC_REVISION as IRODORI_CODEC_REVISION,
+                      MODEL_REVISION as IRODORI_MODEL_REVISION,
+                      SILENTCIPHER_REVISION as IRODORI_SILENTCIPHER_REVISION,
+                      SOURCE_REVISION as IRODORI_SOURCE_REVISION)
+from .qwen import MODEL_REVISION as QWEN_MODEL_REVISION, SOURCE_REVISION as QWEN_SOURCE_REVISION
 from .schemas import (MAX_REQUEST_BYTES, MAX_WAV_BYTES, MAX_WORKER_FRAME_BYTES,
-                      SpeechError, SpeechRequest, error_code, public_profile, parse_speech_request)
+                      SpeechError, SpeechRequest, error_code, public_profile, parse_speech_request,
+                      validate_style_for_capabilities)
+
+
+def provider_config(config: dict[str, Any], provider: str) -> dict[str, Any]:
+    providers = config.get("providers")
+    if isinstance(providers, dict):
+        value = providers.get(provider)
+        if not isinstance(value, dict):
+            raise SpeechError("tts_unavailable")
+        return dict(value, asset_store_path=config.get("asset_store_path", ""))
+    if provider == "qwen3-tts":
+        return dict(config)
+    raise SpeechError("tts_unavailable")
 
 
 def encode_frame(value: dict[str, Any]) -> bytes:
@@ -36,10 +54,10 @@ def validate_wav(body: bytes) -> None:
         raise SpeechError("tts_invalid_audio")
     try:
         with wave.open(io.BytesIO(body), "rb") as wav:
-            if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getcomptype()) != (1, 2, 24000, "NONE"):
+            if (wav.getnchannels(), wav.getsampwidth(), wav.getcomptype()) != (1, 2, "NONE"):
                 raise SpeechError("tts_invalid_audio")
-            frames = wav.getnframes()
-            if not 0 < frames <= 24000 * 60 or len(wav.readframes(frames)) != frames * 2:
+            frames, rate = wav.getnframes(), wav.getframerate()
+            if not 8000 <= rate <= 48000 or not 0 < frames <= rate * 60 or len(wav.readframes(frames)) != frames * 2:
                 raise SpeechError("tts_invalid_audio")
     except SpeechError:
         raise
@@ -54,6 +72,8 @@ class ProcessWorker:
         self.config = config
         self.command = command or [sys.executable, "-m", "apps.speech", "--worker"]
         self.process: asyncio.subprocess.Process | None = None
+        self.provider = ""
+        self.temporary: tempfile.TemporaryDirectory[str] | None = None
         self.lock = asyncio.Lock()
 
     async def _line(self) -> dict[str, Any]:
@@ -76,23 +96,32 @@ class ProcessWorker:
         self.process.stdin.write(encode_frame(value))
         await self.process.stdin.drain()
 
-    async def _start(self) -> None:
-        if self.process is not None and self.process.returncode is None:
+    async def _start(self, provider: str) -> None:
+        if self.process is not None and self.process.returncode is None and self.provider == provider:
             return
         await self.stop()
+        self.temporary = tempfile.TemporaryDirectory(prefix="ephy-tts-worker-")
+        os.chmod(self.temporary.name, 0o700)
+        configuration = provider_config(self.config, provider)
+        configuration["temporary_path"] = self.temporary.name
         self.process = await asyncio.create_subprocess_exec(
             *self.command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, cwd=str(Path(__file__).resolve().parents[2]),
             limit=MAX_WORKER_FRAME_BYTES,
             env={key: value for key, value in os.environ.items() if key != "EPHY_TTS_BEARER_TOKEN"},
         )
-        await self._write({"type": "configure", "config": self.config})
+        self.provider = provider
+        await self._write({"type": "configure", "provider": provider, "config": configuration})
         if await self._line() != {"type": "ready"}:
             raise SpeechError("tts_unavailable")
 
     async def stop(self) -> None:
         process, self.process = self.process, None
+        temporary, self.temporary = self.temporary, None
+        self.provider = ""
         if process is None:
+            if temporary is not None:
+                temporary.cleanup()
             return
         if process.returncode is None:
             try:
@@ -109,13 +138,15 @@ class ProcessWorker:
             await asyncio.wait_for(process.wait(), timeout=1.0)
         if process.stdin is not None:
             process.stdin.close()
+        if temporary is not None:
+            temporary.cleanup()
 
     async def synthesize(self, request: SpeechRequest, profile: dict[str, Any]) -> bytes:
         if self.lock.locked():
             raise SpeechError("tts_busy")
         async with self.lock:
             try:
-                await asyncio.wait_for(self._start(), timeout=5.0)
+                await asyncio.wait_for(self._start(profile["provider"]), timeout=5.0)
                 await self._write({"type": "synthesize", "request": request.model_dump(), "profile": profile})
                 result = await self._line()
                 if result.get("request_id") != request.request_id:
@@ -137,27 +168,48 @@ class SpeechService:
                  available: bool | None = None, request_timeout: float = 60.0):
         self.config = config or {}
         self.request_timeout = min(60.0, max(0.01, request_timeout))
-        self.available = self._configured() if available is None else available
         raw_profiles = self.config.get("profiles", [])
         if not isinstance(raw_profiles, list) or len(raw_profiles) > 16:
             raise SpeechError("invalid_speech_text")
-        self.profiles = {p["voice_profile_id"]: public_profile(p, available=self.available) for p in raw_profiles}
+        self.provider_available = {provider: self._configured(provider) if available is None else available
+                                   for provider in {p.get("provider") for p in raw_profiles if isinstance(p, dict)}}
+        self.profiles = {p["voice_profile_id"]: public_profile(
+            p, available=self.provider_available.get(p.get("provider"), False)) for p in raw_profiles}
         if len(self.profiles) != len(raw_profiles):
             raise SpeechError("invalid_speech_text")
         default = self.config.get("default_profile_id", "")
         if default and default not in self.profiles:
             raise SpeechError("invalid_speech_text")
+        if default and self.profiles[default]["provider"] == "irodori-tts":
+            raise SpeechError("invalid_voice_config")
         self.default_profile_id = default
         self.worker = worker or ProcessWorker(self.config)
 
-    def _configured(self) -> bool:
+    @property
+    def available(self) -> bool:
+        return any(profile["available"] for profile in self.profiles.values())
+
+    def _configured(self, provider: str) -> bool:
         try:
-            return (self.config.get("source_revision") == SOURCE_REVISION and
-                    self.config.get("model_revision") == MODEL_REVISION and
-                    Path(self.config["model_path"]).is_dir() and
-                    Path(self.config["asset_store_path"]).is_dir() and
-                    importlib.util.find_spec("qwen_tts") is not None and
-                    importlib.util.find_spec("torch") is not None)
+            value = provider_config(self.config, provider)
+            common = Path(value["asset_store_path"]).is_dir() and importlib.util.find_spec("torch") is not None
+            if provider == "qwen3-tts":
+                return (common and value.get("source_revision") == QWEN_SOURCE_REVISION and
+                        value.get("model_revision") == QWEN_MODEL_REVISION and Path(value["model_path"]).is_dir() and
+                        importlib.util.find_spec("qwen_tts") is not None)
+            if provider == "irodori-tts":
+                model = Path(value["model_path"])
+                return (common and value.get("source_revision") == IRODORI_SOURCE_REVISION and
+                        value.get("model_revision") == IRODORI_MODEL_REVISION and
+                        value.get("codec_revision") == IRODORI_CODEC_REVISION and
+                        value.get("silentcipher_revision") == IRODORI_SILENTCIPHER_REVISION and
+                        (model.is_file() or (model / "model.safetensors").is_file()) and
+                        Path(value["codec_path"]).is_dir() and Path(value["silentcipher_path"]).is_dir() and
+                        value.get("precision", "fp32") == "fp32" and
+                        importlib.util.find_spec("irodori_tts") is not None and
+                        importlib.util.find_spec("dacvae") is not None and
+                        importlib.util.find_spec("silentcipher") is not None)
+            return False
         except Exception:
             return False
 
@@ -168,15 +220,23 @@ class SpeechService:
         return result
 
     def profile(self, request: SpeechRequest) -> dict[str, Any]:
-        if not self.available:
-            raise SpeechError("tts_unavailable")
         profile = self.profiles.get(request.voice_profile_id)
-        if profile is None or any(profile[key] != getattr(request, key) for key in ("model_revision", "clone_prompt_digest")):
+        if profile is None or not profile["available"]:
+            raise SpeechError("tts_unavailable")
+        if any(profile[key] != getattr(request, key) for key in (
+                "model_revision", "clone_prompt_digest", "reference_group_digest")):
             raise SpeechError("voice_profile_changed")
+        validate_style_for_capabilities(request, profile["capabilities"])
         return profile
 
     async def events(self, request: SpeechRequest, connection: Any):
         job: asyncio.Task | None = None
+
+        def identity() -> dict[str, Any]:
+            return {"request_id": request.request_id, "operation_id": request.operation_id,
+                    "session_id": request.session_id, "turn_id": request.turn_id,
+                    "generation_revision": request.generation_revision,
+                    "speech_unit_sequence": request.speech_unit_sequence}
 
         async def abort() -> None:
             if job is not None and not job.done():
@@ -205,15 +265,15 @@ class SpeechService:
             validate_wav(body)
             if await connection.is_disconnected():
                 raise SpeechError("tts_canceled")
-            yield encode_frame({"type": "audio", "request_id": request.request_id, "sequence": 1,
+            yield encode_frame({"type": "audio", **identity(), "sequence": 1,
                                 "wav_base64": base64.b64encode(body).decode("ascii")})
-            yield encode_frame({"type": "completed", "request_id": request.request_id, "sequence": 1, "finish_reason": "stop"})
+            yield encode_frame({"type": "completed", **identity(), "sequence": 1, "finish_reason": "stop"})
         except asyncio.CancelledError:
             await abort()
             raise
         except BaseException as exc:
             await abort()
-            yield encode_frame({"type": "error", "request_id": request.request_id, "error_code": error_code(exc)})
+            yield encode_frame({"type": "error", **identity(), "error_code": error_code(exc)})
         finally:
             await abort()
 

@@ -26,6 +26,7 @@ MAX_AUDIO_BYTES = 8 << 20
 MAX_TRANSCRIPT_BYTES = 16 << 10
 MAX_JSON_BYTES = 64 << 10
 MAX_PROMPT_BYTES = 8 << 20
+MAX_REFERENCE_GROUP_SIZE = 4
 _ID = re.compile(r"^ref_[0-9a-f]{64}$")
 _PROVENANCE = re.compile(r"^prov_[0-9a-f]{32}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -65,6 +66,17 @@ class ClonePromptAsset:
     def public_metadata(self) -> dict[str, str]:
         return {"clone_prompt_digest": self.prompt_digest, "provenance_id": self.provenance_id,
                 "provider": self.metadata["provider"], "model_revision": self.metadata["model_revision"]}
+
+
+@dataclass(frozen=True)
+class ReferenceGroupAsset:
+    group_digest: str
+    provenance_id: str
+    references: tuple[ReferenceAsset, ...] = field(repr=False)
+
+    def public_metadata(self) -> dict[str, str | int]:
+        return {"reference_group_digest": self.group_digest, "provenance_id": self.provenance_id,
+                "reference_count": len(self.references)}
 
 
 def _fail(code: str = "voice_asset_invalid") -> None:
@@ -393,7 +405,7 @@ class SpeechAssetStore:
         self._root = Path(root if root is not None else os.environ.get("EPHY_VOICE_ASSET_ROOT", default))
         try:
             with _directory_path(self._root, create=True, private=True, reject_git=True) as directory:
-                for category in ("references", "prompts"):
+                for category in ("references", "prompts", "groups"):
                     with _child_directory(directory, category, create=True):
                         pass
         except SpeechAssetError:
@@ -451,6 +463,67 @@ class SpeechAssetStore:
                 _fail("voice_asset_integrity")
             base = self._root / "references" / reference_id
             return ReferenceAsset(reference_id, manifest["provenance_id"], _digest(manifest_bytes), base / "reference.wav", base / "transcript.txt", _transcript(transcript_bytes), manifest, audio)
+        except SpeechAssetError:
+            raise
+        except Exception:
+            _fail()
+
+    def store_reference_group(self, reference_ids: list[str] | tuple[str, ...]) -> ReferenceGroupAsset:
+        """Publish an immutable ordered group of already consented reference clips．"""
+        try:
+            if (not isinstance(reference_ids, (list, tuple)) or
+                    not 1 <= len(reference_ids) <= MAX_REFERENCE_GROUP_SIZE or
+                    len(set(reference_ids)) != len(reference_ids)):
+                _fail("voice_asset_group_invalid")
+            references = tuple(self.load_reference(reference_id) for reference_id in reference_ids)
+            identities = [{"reference_id": item.reference_id,
+                           "reference_digest": item.reference_digest,
+                           "provenance_id": item.provenance_id} for item in references]
+            provenance_id = "prov_" + _digest(_json_bytes({"references": identities}))[:32]
+            manifest = {"schema_version": 1, "provenance_id": provenance_id,
+                        "references": identities}
+            manifest_bytes = _json_bytes(manifest)
+            digest = _digest(manifest_bytes)
+            with self._category("groups") as directory:
+                _publish(directory, digest, {"manifest.json": manifest_bytes})
+            return self.load_reference_group(digest)
+        except SpeechAssetError:
+            raise
+        except Exception:
+            _fail()
+
+    def load_reference_group(self, group_digest: str) -> ReferenceGroupAsset:
+        try:
+            if not isinstance(group_digest, str) or not _DIGEST.fullmatch(group_digest):
+                _fail("voice_asset_id_invalid")
+            with self._category("groups") as directory, _child_directory(directory, group_digest) as asset:
+                manifest_bytes = _read(asset, "manifest.json", MAX_JSON_BYTES)
+                manifest = _json_read(manifest_bytes)
+            if (_digest(manifest_bytes) != group_digest or set(manifest) != {"schema_version", "provenance_id", "references"}
+                    or manifest["schema_version"] != 1 or not _PROVENANCE.fullmatch(manifest["provenance_id"])
+                    or not isinstance(manifest["references"], list)
+                    or not 1 <= len(manifest["references"]) <= MAX_REFERENCE_GROUP_SIZE):
+                _fail("voice_asset_integrity")
+            references: list[ReferenceAsset] = []
+            seen: set[str] = set()
+            for identity in manifest["references"]:
+                if (not isinstance(identity, dict)
+                        or set(identity) != {"reference_id", "reference_digest", "provenance_id"}
+                        or identity["reference_id"] in seen):
+                    _fail("voice_asset_integrity")
+                reference = self.load_reference(identity["reference_id"])
+                if (identity["reference_digest"] != reference.reference_digest
+                        or identity["provenance_id"] != reference.provenance_id):
+                    _fail("voice_asset_integrity")
+                seen.add(reference.reference_id)
+                references.append(reference)
+            identities = [{"reference_id": item.reference_id,
+                           "reference_digest": item.reference_digest,
+                           "provenance_id": item.provenance_id} for item in references]
+            expected_provenance = "prov_" + _digest(_json_bytes({"references": identities}))[:32]
+            if manifest["provenance_id"] != expected_provenance:
+                _fail("voice_asset_integrity")
+            return ReferenceGroupAsset(group_digest, manifest["provenance_id"], tuple(references))
         except SpeechAssetError:
             raise
         except Exception:

@@ -9,11 +9,13 @@ import pytest
 import numpy as np
 
 from apps.speech.qwen import MODEL_REVISION, QwenAdapter, verify_model_files, waveform_to_wav
-from apps.speech.schemas import SpeechError, SpeechRequest, parse_speech_request
+from apps.speech.schemas import (QWEN_CAPABILITIES, SpeechError, SpeechRequest,
+                                 parse_speech_request, validate_style_for_capabilities)
 
 
 def speech_request(**changes):
     return SpeechRequest.model_validate({"request_id": "request-1", "voice_profile_id": "voice-1",
+        "operation_id": "operation-1", "session_id": "session-1", "turn_id": "turn-1", "generation_revision": 1, "speech_unit_sequence": 1,
         "model_revision": MODEL_REVISION, "clone_prompt_digest": "a" * 64,
         "speech_text": "春には桜が咲きます。", **changes})
 
@@ -83,11 +85,11 @@ def test_inference_failure_restores_talker_instrumentation():
 
 
 @pytest.mark.parametrize("control", [{"affect": "happy"}, {"pace": 1.2}, {"pitch_hint": 1.0}, {"intensity": 0.5}, {"pause_style": "short"}, {"interruptible": False}])
-def test_unsupported_controls_are_explicitly_rejected(control):
+def test_qwen_unsupported_controls_are_explicitly_rejected(control):
     request = speech_request().model_dump()
     request.update(control)
     with pytest.raises(SpeechError, match="unsupported_voice_control"):
-        parse_speech_request(request)
+        validate_style_for_capabilities(parse_speech_request(request), QWEN_CAPABILITIES)
 
 
 def test_pcm_volume_scaling_and_invalid_waveforms():

@@ -98,6 +98,37 @@ def test_reference_audio_bytes_remain_the_validated_snapshot(fixture):
         fixture[0].load_reference(reference.reference_id)
 
 
+def test_reference_group_is_ordered_bounded_private_and_immutable(fixture):
+    store, root, audio, transcript = fixture
+    first = register(fixture)
+    audio.write_bytes(wav_bytes(frames=240))
+    transcript.write_text("二つ目の合成参照文です．\n", encoding="utf-8")
+    second = store.register_reference(audio, transcript, consent=consent())
+    group = store.store_reference_group([first.reference_id, second.reference_id])
+    loaded = store.load_reference_group(group.group_digest)
+    assert [item.reference_id for item in loaded.references] == [first.reference_id, second.reference_id]
+    assert loaded.public_metadata() == {"reference_group_digest": group.group_digest,
+        "provenance_id": group.provenance_id, "reference_count": 2}
+    exposed = json.dumps(loaded.public_metadata()) + repr(loaded)
+    for private in (PRIVATE_TEXT, PRIVATE_ATTESTOR, str(root), "reference.wav", "transcript"):
+        assert private not in exposed
+    with pytest.raises(SpeechAssetError, match="voice_asset_exists"):
+        store.store_reference_group([first.reference_id, second.reference_id])
+    with pytest.raises(SpeechAssetError, match="voice_asset_group_invalid"):
+        store.store_reference_group([first.reference_id, first.reference_id])
+    assert stat.S_IMODE((root / "groups" / group.group_digest).stat().st_mode) == 0o700
+    assert stat.S_IMODE((root / "groups" / group.group_digest / "manifest.json").stat().st_mode) == 0o600
+
+
+def test_reference_group_rechecks_member_integrity_and_link_count(fixture):
+    store, root, _, _ = fixture
+    reference = register(fixture)
+    group = store.store_reference_group([reference.reference_id])
+    os.link(root / "groups" / group.group_digest / "manifest.json", root / "groups" / group.group_digest / "copy.json")
+    with pytest.raises(SpeechAssetError):
+        store.load_reference_group(group.group_digest)
+
+
 @pytest.mark.parametrize("change", [
     {"authority": "unknown"}, {"storage_allowed": False}, {"voice_clone_allowed": False},
     {"synthesis_allowed": False}, {"transcript_verified": False}, {"clean_reference": False},

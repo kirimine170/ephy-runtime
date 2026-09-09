@@ -3,7 +3,8 @@ const STYLE_DEFAULTS = Object.freeze({
 });
 const CONTROL_LABELS = Object.freeze({affect: '話し方', intensity: '表現の強さ', pace: '話す速さ', pitch_hint: '声の高さ', volume: '音量', pause_style: '間の取り方'});
 const NUMBER_CONTROLS = new Set(['intensity', 'pace', 'pitch_hint', 'volume']);
-const ENUM_LABELS = Object.freeze({neutral: '自然', natural: '自然', calm: '穏やか', warm: '温かく', cheerful: '明るく'});
+const ENUM_LABELS = Object.freeze({neutral: '自然', natural: '自然', calm: '穏やか', warm: '温かく',
+  cheerful: '明るく', cute: '可愛く', sleepy: '眠そうに', concerned: '心配そうに', short: '短め', deliberate: '丁寧'});
 const PROFILE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$/;
 const CATALOG_ERRORS = new Set([
   'tts_unavailable', 'tts_service_unavailable', 'tts_failed', 'tts_timeout', 'tts_canceled', 'tts_incomplete',

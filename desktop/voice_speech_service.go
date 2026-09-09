@@ -131,7 +131,9 @@ func (p *ServiceVoiceTTS) Ready(ctx context.Context) error {
 	return nil // The inference service validates the pinned profile for every request．
 }
 func (p *ServiceVoiceTTS) Stream(ctx context.Context, text string, emit func([]byte) error) error {
-	return p.StreamSpeech(ctx, SpeechRequest{SpeechStyle: p.profile.DefaultStyle, SpeechText: text, VoiceProfileID: p.profile.VoiceProfileID}, emit)
+	return p.StreamSpeech(ctx, SpeechRequest{SpeechStyle: p.profile.DefaultStyle, SpeechText: text,
+		VoiceProfileID: p.profile.VoiceProfileID, OperationID: interactionID("speechop_"),
+		SessionID: interactionID("speechsession_"), TurnID: interactionID("speechturn_"), GenerationRevision: 1, SpeechUnitSequence: 1}, emit)
 }
 func (p *ServiceVoiceTTS) StreamSpeech(ctx context.Context, request SpeechRequest, emit func([]byte) error) error {
 	if emit == nil || !utf8.ValidString(request.SpeechText) || utf8.RuneCountInString(request.SpeechText) > 16000 || strings.TrimSpace(request.SpeechText) == "" {
@@ -139,6 +141,18 @@ func (p *ServiceVoiceTTS) StreamSpeech(ctx context.Context, request SpeechReques
 	}
 	if request.VoiceProfileID != p.profile.VoiceProfileID {
 		return errors.New("voice_profile_unavailable")
+	}
+	if request.OperationID == "" && request.SessionID == "" && request.TurnID == "" && request.GenerationRevision == 0 && request.SpeechUnitSequence == 0 {
+		request.OperationID = interactionID("speechop_")
+		request.SessionID = interactionID("speechsession_")
+		request.TurnID = interactionID("speechturn_")
+		request.GenerationRevision = 1
+		request.SpeechUnitSequence = 1
+	}
+	if !interactionIdentifier.MatchString(request.OperationID) || !interactionIdentifier.MatchString(request.SessionID) ||
+		!interactionIdentifier.MatchString(request.TurnID) || request.GenerationRevision < 1 || request.GenerationRevision > 64 ||
+		request.SpeechUnitSequence < 1 || request.SpeechUnitSequence > 64 {
+		return errors.New("invalid_speech_text")
 	}
 	if err := validateSpeechStyle(request.SpeechStyle, p.profile); err != nil {
 		return err
@@ -205,10 +219,11 @@ func (p *ServiceVoiceTTS) streamPhrase(ctx context.Context, request SpeechReques
 	id := interactionID("speech_")
 	payload := struct {
 		SpeechRequest
-		RequestID         string `json:"request_id"`
-		ModelRevision     string `json:"model_revision"`
-		ClonePromptDigest string `json:"clone_prompt_digest"`
-	}{request, id, p.profile.ModelRevision, p.profile.ClonePromptDigest}
+		RequestID            string `json:"request_id"`
+		ModelRevision        string `json:"model_revision"`
+		ClonePromptDigest    string `json:"clone_prompt_digest"`
+		ReferenceGroupDigest string `json:"reference_group_digest"`
+	}{request, id, p.profile.ModelRevision, p.profile.ClonePromptDigest, p.profile.ReferenceGroupDigest}
 	body, _ := json.Marshal(payload)
 	res, err := p.client.request(ctx, http.MethodPost, "/v1/speech", body)
 	if err != nil {
@@ -238,14 +253,21 @@ func (p *ServiceVoiceTTS) streamPhrase(ctx context.Context, request SpeechReques
 			return errors.New("tts_stream_invalid")
 		}
 		var frame struct {
-			Type         string `json:"type"`
-			RequestID    string `json:"request_id"`
-			Sequence     int    `json:"sequence"`
-			WAVBase64    string `json:"wav_base64"`
-			FinishReason string `json:"finish_reason"`
-			ErrorCode    string `json:"error_code"`
+			Type               string `json:"type"`
+			RequestID          string `json:"request_id"`
+			OperationID        string `json:"operation_id"`
+			SessionID          string `json:"session_id"`
+			TurnID             string `json:"turn_id"`
+			GenerationRevision int    `json:"generation_revision"`
+			SpeechUnitSequence int    `json:"speech_unit_sequence"`
+			Sequence           int    `json:"sequence"`
+			WAVBase64          string `json:"wav_base64"`
+			FinishReason       string `json:"finish_reason"`
+			ErrorCode          string `json:"error_code"`
 		}
-		if decodeSpeechJSON(line, &frame) != nil || frame.RequestID != id {
+		if decodeSpeechJSON(line, &frame) != nil || frame.RequestID != id || frame.OperationID != request.OperationID ||
+			frame.SessionID != request.SessionID || frame.TurnID != request.TurnID ||
+			frame.GenerationRevision != request.GenerationRevision || frame.SpeechUnitSequence != request.SpeechUnitSequence {
 			return errors.New("tts_stream_invalid")
 		}
 		switch frame.Type {

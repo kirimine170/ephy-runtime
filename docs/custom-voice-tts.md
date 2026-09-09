@@ -2,6 +2,8 @@
 
 C0.3の設計判断は[ADR-0012](adr/ADR-0012-custom-voice-tts.md)に記録する．この手順は，Qwen3-TTSの推論環境をRuntimeから独立して準備し，許諾を確認した参照素材から再利用可能なclone promptを作るためのものである．参照素材はまだ提供されておらず，実際のclone品質・声の一致度・実機latencyの受入れは未完了である．合成fixtureのtest合格を実声の合格とみなさない．
 
+C0.3.2の第3 providerであるIrodori Animeは，[Irodori-TTS experimental provider](irodori-tts-provider.md)の別手順を使う．QwenとIrodoriのreference identity形式やstyle capabilityを混在させない．
+
 ## 1．推論用のPython環境を準備する
 
 以下のpathはすべてplaceholderである．`EPHY_VOICE_ROOT`にはGit repository外の絶対pathを指定する．Runtime repositoryのignored directoryも使用できない．symlinkを含むpathはprivate storeが拒否する．既存素材を移動・削除する必要はない．
