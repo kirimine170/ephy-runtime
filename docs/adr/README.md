@@ -13,5 +13,6 @@
 | [ADR-0007](ADR-0007-karte-adapter-is-compatibility-layer.md) | Karte JSON adapterを互換layerとして扱う | Accepted |
 | [ADR-0010](ADR-0010-generation-completion-safety.md) | 生成終端と確定済み発話境界をC0.1で保護する | Accepted |
 | [ADR-0012](ADR-0012-custom-voice-tts.md) | VoiceProfileと独立Inference serviceで句単位TTSを実現する | Implemented，voice品質受入れは別途 |
+| [ADR-0013](ADR-0013-irodori-experimental-provider.md) | Irodori-TTSを第3のexperimental providerとして隔離する | Implemented，production採用は別途 |
 
 新しい判断は，連番のADRとして追加する．既存ADRの判断を変更する場合は本文を上書きせず，新しいADRで置換関係を示す．

@@ -2345,6 +2345,7 @@ export namespace main {
 	    model_revision: string;
 	    language: string;
 	    clone_prompt_digest: string;
+	    reference_group_digest: string;
 	    provenance_id: string;
 	    default_style: SpeechStyle;
 	    capabilities: VoiceCapabilities;
@@ -2363,6 +2364,7 @@ export namespace main {
 	        this.model_revision = source["model_revision"];
 	        this.language = source["language"];
 	        this.clone_prompt_digest = source["clone_prompt_digest"];
+	        this.reference_group_digest = source["reference_group_digest"];
 	        this.provenance_id = source["provenance_id"];
 	        this.default_style = this.convertValues(source["default_style"], SpeechStyle);
 	        this.capabilities = this.convertValues(source["capabilities"], VoiceCapabilities);

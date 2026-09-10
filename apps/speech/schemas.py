@@ -34,7 +34,9 @@ def error_code(error: BaseException) -> str:
 
 def parse_speech_request(value: Any) -> SpeechRequest:
     try:
-        return SpeechRequest.model_validate_json(value) if isinstance(value, (bytes, bytearray, str)) else SpeechRequest.model_validate(value)
+        if isinstance(value, bytearray):
+            value = bytes(value)
+        return SpeechRequest.model_validate_json(value) if isinstance(value, (bytes, str)) else SpeechRequest.model_validate(value)
     except ValidationError as exc:
         # Inspect only our fixed validator marker，never expose Pydantic's input．
         for detail in exc.errors(include_input=False):
@@ -58,22 +60,31 @@ class SpeechStyle(BaseModel):
     interruptible: bool = True
 
     @model_validator(mode="after")
-    def supported_style(self) -> SpeechStyle:
+    def finite_style(self) -> SpeechStyle:
         if not all(math.isfinite(v) for v in (self.intensity, self.pace, self.pitch_hint, self.volume)):
             raise ValueError("invalid_speech_text")
-        if (self.affect, self.intensity, self.pace, self.pitch_hint, self.pause_style, self.interruptible) != (
-            "neutral", 1.0, 1.0, 0.0, "natural", True
-        ):
-            raise ValueError("unsupported_voice_control")
         return self
 
 
 class SpeechRequest(SpeechStyle):
     request_id: str = Field(pattern=ID_PATTERN)
+    operation_id: str = Field(pattern=ID_PATTERN)
+    session_id: str = Field(pattern=ID_PATTERN)
+    turn_id: str = Field(pattern=ID_PATTERN)
+    generation_revision: int = Field(ge=1, le=64)
+    speech_unit_sequence: int = Field(ge=1, le=64)
     voice_profile_id: str = Field(pattern=ID_PATTERN)
     model_revision: str = Field(pattern=ID_PATTERN)
-    clone_prompt_digest: str = Field(pattern=DIGEST_PATTERN)
+    clone_prompt_digest: str = ""
+    reference_group_digest: str = ""
     speech_text: str = Field(min_length=1, max_length=180)
+
+    @field_validator("clone_prompt_digest", "reference_group_digest")
+    @classmethod
+    def validate_optional_digest(cls, value: str) -> str:
+        if value and not re.fullmatch(DIGEST_PATTERN, value):
+            raise ValueError("invalid_speech_text")
+        return value
 
     @field_validator("speech_text")
     @classmethod
@@ -90,6 +101,16 @@ QWEN_CAPABILITIES: dict[str, Any] = {
     "controls": {"volume": {"type": "number", "min": 0.0, "max": 1.0, "step": 0.05}},
     "streaming": True, "streaming_mode": "phrase", "interruptible": True,
 }
+IRODORI_CAPABILITIES: dict[str, Any] = {
+    "controls": {
+        "affect": {"type": "enum", "values": ["neutral", "warm", "cheerful", "cute", "sleepy", "concerned"]},
+        "intensity": {"type": "number", "min": 0.75, "max": 1.25, "step": 0.25},
+        "pace": {"type": "number", "min": 0.85, "max": 1.15, "step": 0.15},
+        "volume": {"type": "number", "min": 0.0, "max": 1.0, "step": 0.05},
+        "pause_style": {"type": "enum", "values": ["natural", "short", "deliberate"]},
+    },
+    "streaming": True, "streaming_mode": "phrase", "interruptible": True,
+}
 
 
 def _matches_capabilities(value: Any, expected: Any) -> bool:
@@ -102,19 +123,52 @@ def _matches_capabilities(value: Any, expected: Any) -> bool:
     return type(value) is type(expected) and value == expected
 
 
+def _control_value(style: SpeechStyle, name: str) -> Any:
+    return getattr(style, name)
+
+
+def validate_style_for_capabilities(style: SpeechStyle, capabilities: dict[str, Any]) -> None:
+    controls = capabilities["controls"]
+    defaults = SpeechStyle()
+    for name in ("affect", "intensity", "pace", "pitch_hint", "volume", "pause_style"):
+        value = _control_value(style, name)
+        control = controls.get(name)
+        if control is None:
+            if value != _control_value(defaults, name):
+                raise SpeechError("unsupported_voice_control")
+        elif control["type"] == "enum":
+            if value not in control["values"]:
+                raise SpeechError("unsupported_voice_control")
+        elif type(value) not in (int, float) or not control["min"] <= value <= control["max"]:
+            raise SpeechError("unsupported_voice_control")
+        elif control.get("step"):
+            steps = (value - control["min"]) / control["step"]
+            if abs(steps - round(steps)) > 1e-7:
+                raise SpeechError("unsupported_voice_control")
+    if not style.interruptible or not capabilities["interruptible"]:
+        raise SpeechError("unsupported_voice_control")
+
+
 def public_profile(value: dict[str, Any], *, available: bool) -> dict[str, Any]:
-    fields = ("voice_profile_id", "display_name", "provider", "model_revision", "language", "clone_prompt_digest", "provenance_id")
+    fields = ("voice_profile_id", "display_name", "provider", "model_revision", "language",
+              "clone_prompt_digest", "reference_group_digest", "provenance_id")
     # Availability and error codes are service facts，never configuration claims．
+    required = set(fields) - {"clone_prompt_digest", "reference_group_digest"}
     if (not isinstance(value, dict) or type(available) is not bool
-            or not set(fields) <= set(value)
+            or not required <= set(value)
             or set(value) - set(fields) - {"default_style", "capabilities"}):
         raise SpeechError("invalid_speech_text")
-    result = {key: value[key] for key in fields}
+    result = {key: value.get(key, "") for key in fields}
     for key in ("voice_profile_id", "provider", "model_revision", "language", "provenance_id"):
         if not isinstance(result[key], str) or not re.fullmatch(ID_PATTERN, result[key]):
             raise SpeechError("invalid_speech_text")
-    if (result["provider"] != "qwen3-tts" or not isinstance(result["clone_prompt_digest"], str)
-            or not re.fullmatch(DIGEST_PATTERN, result["clone_prompt_digest"])):
+    provider_capabilities = {"qwen3-tts": QWEN_CAPABILITIES, "irodori-tts": IRODORI_CAPABILITIES}
+    expected_capabilities = provider_capabilities.get(result["provider"])
+    clone = result["clone_prompt_digest"]
+    group = result["reference_group_digest"]
+    if (expected_capabilities is None or not all(isinstance(item, str) for item in (clone, group))
+            or (result["provider"] == "qwen3-tts" and (not re.fullmatch(DIGEST_PATTERN, clone) or group))
+            or (result["provider"] == "irodori-tts" and (clone or not re.fullmatch(DIGEST_PATTERN, group)))):
         raise SpeechError("invalid_speech_text")
     if not isinstance(result["display_name"], str) or not 1 <= len(result["display_name"]) <= 80:
         raise SpeechError("invalid_speech_text")
@@ -122,9 +176,10 @@ def public_profile(value: dict[str, Any], *, available: bool) -> dict[str, Any]:
         style = SpeechStyle.model_validate(value.get("default_style", {})).model_dump()
     except ValidationError:
         raise SpeechError("unsupported_voice_control") from None
-    if "capabilities" in value and not _matches_capabilities(value["capabilities"], QWEN_CAPABILITIES):
+    if "capabilities" in value and not _matches_capabilities(value["capabilities"], expected_capabilities):
         raise SpeechError("unsupported_voice_control")
-    result.update(default_style=style, capabilities=deepcopy(QWEN_CAPABILITIES), available=available)
+    validate_style_for_capabilities(SpeechStyle.model_validate(style), expected_capabilities)
+    result.update(default_style=style, capabilities=deepcopy(expected_capabilities), available=available)
     if not available:
         result["error_code"] = "tts_unavailable"
     return result

@@ -532,5 +532,22 @@ func generationSpeechText(unit string) string {
 	text = generationLineMarker.ReplaceAllString(text, "")
 	text = strings.NewReplacer("**", "", "__", "", "~~", "", "`", "").Replace(text)
 	text = generationEmphasis.ReplaceAllString(text, "$1$2")
+	// Emoji-only decorations have no speech payload．Keep them in committed UI
+	// text and history，but omit them before enqueue so a non-spoken response can
+	// follow the same tts_skipped path as a code-only response．Provider controls
+	// and embedded emoji remain the selected speech adapter's responsibility．
+	if speechWithoutEmoji(text) == "" {
+		return ""
+	}
 	return strings.TrimSpace(text)
+}
+
+func speechWithoutEmoji(text string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if (r >= 0x1F1E6 && r <= 0x1FAFF) || (r >= 0x2600 && r <= 0x27BF) ||
+			r == 0x200D || r == 0xFE0E || r == 0xFE0F {
+			return -1
+		}
+		return r
+	}, text))
 }

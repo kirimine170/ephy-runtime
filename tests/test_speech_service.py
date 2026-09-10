@@ -9,8 +9,10 @@ import sys
 import httpx
 import pytest
 
+from apps.speech.irodori import MODEL_REVISION as IRODORI_MODEL_REVISION
 from apps.speech.qwen import MODEL_REVISION, waveform_to_wav
-from apps.speech.schemas import DEFAULT_STYLE, QWEN_CAPABILITIES, SpeechError, SpeechRequest, public_profile
+from apps.speech.schemas import (DEFAULT_STYLE, IRODORI_CAPABILITIES, QWEN_CAPABILITIES,
+                                 SpeechError, SpeechRequest, parse_speech_request, public_profile)
 from apps.speech.service import ProcessWorker, SpeechService, create_app
 
 
@@ -18,13 +20,34 @@ TOKEN = "synthetic-bearer-" + "s" * 32
 AUTH = {"Authorization": "Bearer " + TOKEN}
 
 
+def identity():
+    return {"request_id": "request-1", "operation_id": "operation-1", "session_id": "session-1",
+            "turn_id": "turn-1", "generation_revision": 1, "speech_unit_sequence": 1}
+
+
 PROFILE = {"voice_profile_id": "voice-1", "display_name": "Test voice", "provider": "qwen3-tts",
     "model_revision": MODEL_REVISION, "language": "ja-JP", "clone_prompt_digest": "a" * 64, "provenance_id": "prov_" + "b" * 32}
+IRODORI_PROFILE = {"voice_profile_id": "anime-voice", "display_name": "Anime experimental", "provider": "irodori-tts",
+    "model_revision": IRODORI_MODEL_REVISION, "language": "ja-JP", "reference_group_digest": "c" * 64,
+    "provenance_id": "prov_" + "d" * 32}
 
 
 def request(**changes):
     return SpeechRequest.model_validate({"request_id": "request-1", "voice_profile_id": "voice-1", "model_revision": MODEL_REVISION,
+        "operation_id": "operation-1", "session_id": "session-1", "turn_id": "turn-1", "generation_revision": 1, "speech_unit_sequence": 1,
         "clone_prompt_digest": "a" * 64, "speech_text": "確定した文です。", **changes})
+
+
+def irodori_request(**changes):
+    return SpeechRequest.model_validate({"request_id": "request-anime", "operation_id": "operation-1",
+        "session_id": "session-1", "turn_id": "turn-1", "generation_revision": 1, "speech_unit_sequence": 1,
+        "voice_profile_id": "anime-voice", "model_revision": IRODORI_MODEL_REVISION,
+        "reference_group_digest": "c" * 64, "speech_text": "確定した文です。", **changes})
+
+
+def test_bytearray_http_body_is_normalized_for_pydantic_compatibility():
+    body = bytearray(irodori_request().model_dump_json().encode())
+    assert parse_speech_request(body) == irodori_request()
 
 
 class Connection:
@@ -66,7 +89,7 @@ def test_audio_is_an_independent_wav_then_exact_completed_terminal():
     frames = asyncio.run(collect(service()))
     assert [item["type"] for item in frames] == ["audio", "completed"]
     assert base64.b64decode(frames[0]["wav_base64"])[:4] == b"RIFF"
-    assert frames[-1] == {"type": "completed", "request_id": "request-1", "sequence": 1, "finish_reason": "stop"}
+    assert frames[-1] == {"type": "completed", **identity(), "sequence": 1, "finish_reason": "stop"}
 
 
 @pytest.mark.parametrize("mode", ["timeout", "disconnect", "cancel"])
@@ -86,14 +109,14 @@ def test_cancel_timeout_disconnect_stop_inflight_inference(mode):
                     await asyncio.sleep(0)
                     return self.disconnect
             frames = await collect(speech, InflightConnection(mode == "disconnect"))
-            assert frames == [{"type": "error", "request_id": "request-1", "error_code": "tts_canceled" if mode == "disconnect" else "tts_timeout"}]
+            assert frames == [{"type": "error", **identity(), "error_code": "tts_canceled" if mode == "disconnect" else "tts_timeout"}]
         assert worker.stops >= 1
     asyncio.run(run())
 
 
 def test_failure_is_body_free_and_never_completed():
     frames = asyncio.run(collect(service(FakeWorker(error=ValueError("PRIVATE transcript prompt embedding raw audio")))))
-    assert frames == [{"type": "error", "request_id": "request-1", "error_code": "tts_failed"}]
+    assert frames == [{"type": "error", **identity(), "error_code": "tts_failed"}]
     assert "PRIVATE" not in json.dumps(frames)
 
 
@@ -204,6 +227,38 @@ def test_profile_capabilities_and_defaults_are_independent_copies():
     assert public_profile(PROFILE, available=True)["capabilities"] == expected_caps
 
 
+def test_irodori_profile_exposes_only_bounded_controls_and_cannot_be_default():
+    public = public_profile(IRODORI_PROFILE, available=True)
+    assert public["provider"] == "irodori-tts" and public["clone_prompt_digest"] == ""
+    assert public["reference_group_digest"] == "c" * 64
+    assert public["capabilities"] == IRODORI_CAPABILITIES
+    assert set(public["capabilities"]["controls"]["affect"]["values"]) == {
+        "neutral", "warm", "cheerful", "cute", "sleepy", "concerned"}
+    with pytest.raises(SpeechError, match="invalid_voice_config"):
+        SpeechService({"default_profile_id": "anime-voice", "profiles": [IRODORI_PROFILE]},
+                      worker=FakeWorker(), available=True)
+
+
+def test_irodori_http_style_and_reference_identity_are_provider_scoped():
+    async def run():
+        worker = FakeWorker()
+        speech = SpeechService({"default_profile_id": "", "profiles": [PROFILE, IRODORI_PROFILE]},
+                               worker=worker, available=True)
+        body = irodori_request(affect="cute", intensity=1.25, pace=0.85, pause_style="deliberate").model_dump()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(
+                app=create_app(service=speech, bearer_token=TOKEN)),
+                base_url="http://127.0.0.1", headers=AUTH) as client:
+            response = await client.post("/v1/speech", json=body)
+            assert response.status_code == 200
+            assert [json.loads(line)["type"] for line in response.text.splitlines()] == ["audio", "completed"]
+            damaged = await client.post("/v1/speech", json={**body, "reference_group_digest": "e" * 64})
+            assert damaged.status_code == 400 and damaged.json() == {"error_code": "voice_profile_changed"}
+            arbitrary = await client.post("/v1/speech", json={**body, "affect": "PRIVATE free prompt"})
+            assert arbitrary.status_code == 400 and arbitrary.json() == {"error_code": "unsupported_voice_control"}
+        assert len(worker.calls) == 1 and worker.calls[0].affect == "cute"
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("profile", [{}, {**PROFILE, "clone_prompt_digest": None}])
 def test_malformed_profile_identity_returns_only_a_fixed_error(profile):
     with pytest.raises(SpeechError) as error:
@@ -241,6 +296,81 @@ def test_real_worker_process_is_reused_serially(tmp_path):
         finally:
             await worker.stop()
         assert worker.process is None
+    asyncio.run(run())
+
+
+def test_worker_process_is_reused_per_provider_and_replaced_on_switch(tmp_path):
+    async def run():
+        worker = ProcessWorker({"providers": {"qwen3-tts": {}, "irodori-tts": {}}},
+                               command=fake_worker_command(tmp_path))
+        try:
+            assert await worker.synthesize(irodori_request(), IRODORI_PROFILE)
+            anime_pid = worker.process.pid
+            assert await worker.synthesize(irodori_request(request_id="request-anime-2"), IRODORI_PROFILE)
+            assert worker.process.pid == anime_pid
+            assert await worker.synthesize(request(), PROFILE)
+            assert worker.process.pid != anime_pid and worker.provider == "qwen3-tts"
+        finally:
+            await worker.stop()
+        assert worker.process is None and worker.temporary is None
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mode", ["cancel", "timeout"])
+def test_cancel_during_provider_switch_reaps_stubborn_worker_before_unlock(tmp_path, mode):
+    async def run():
+        command = fake_worker_command(tmp_path)
+        script = Path(command[1])
+        script.write_text("import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n" + script.read_text())
+        worker = ProcessWorker({"providers": {"qwen3-tts": {}, "irodori-tts": {}}}, command=command)
+        old = None
+        switching = None
+        try:
+            await worker.synthesize(irodori_request(), IRODORI_PROFILE)
+            old, temporary = worker.process, worker.temporary
+            private_file = Path(temporary.name) / "ref-synthetic.wav"
+            private_file.write_bytes(b"synthetic private reference")
+            terminated = asyncio.Event()
+            original_terminate = old.terminate
+
+            def terminate():
+                original_terminate()
+                terminated.set()
+
+            old.terminate = terminate
+            speech = service(worker, request_timeout=0.05 if mode == "timeout" else 60)
+            switching = asyncio.create_task(collect(speech))
+            await asyncio.wait_for(terminated.wait(), 2)
+            if mode == "cancel":
+                switching.cancel()
+                await asyncio.sleep(0.02)
+                switching.cancel()  # Repeated cancellation must not abandon cleanup．
+            else:
+                await asyncio.sleep(0.08)
+            assert worker.lock.locked(), "cleanup released the worker to another request"
+            with pytest.raises(SpeechError, match="tts_busy"):
+                await worker.synthesize(request(request_id="contender"), PROFILE)
+            if mode == "cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(switching, 3)
+            else:
+                frames = await asyncio.wait_for(switching, 3)
+                assert [frame["type"] for frame in frames] == ["error"]
+                assert frames[0]["error_code"] == "tts_timeout"
+            assert old.returncode is not None and worker.process is None
+            assert not Path(temporary.name).exists() and worker.temporary is None
+            assert not worker.lock.locked()
+            worker.command = fake_worker_command(tmp_path)
+            assert await worker.synthesize(request(request_id="next-turn"), PROFILE)
+            assert worker.process.pid != old.pid
+        finally:
+            if old is not None and old.returncode is None:
+                old.kill()
+                await old.wait()
+            if switching is not None and not switching.done():
+                switching.cancel()
+                await asyncio.gather(switching, return_exceptions=True)
+            await worker.stop()
     asyncio.run(run())
 
 
@@ -294,11 +424,29 @@ def test_canceled_before_start_contender_cannot_stop_the_worker_owner(tmp_path):
     asyncio.run(run())
 
 
-def test_actual_http_disconnect_terminates_the_owned_worker(tmp_path):
+@pytest.mark.parametrize("during_switch", [False, True], ids=["synthesis", "provider-switch"])
+def test_actual_http_disconnect_terminates_the_owned_worker(tmp_path, during_switch):
     import uvicorn
 
     async def run():
-        worker = ProcessWorker({}, command=fake_worker_command(tmp_path, "blocked"))
+        command = fake_worker_command(tmp_path, "valid" if during_switch else "blocked")
+        if during_switch:
+            script = Path(command[1])
+            script.write_text("import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n" + script.read_text())
+        worker = ProcessWorker({"providers": {"qwen3-tts": {}, "irodori-tts": {}}}, command=command)
+        stopping = asyncio.Event()
+        process = None
+        temporary = None
+        if during_switch:
+            await worker.synthesize(irodori_request(), IRODORI_PROFILE)
+            process, temporary = worker.process, worker.temporary
+            original_terminate = process.terminate
+
+            def terminate():
+                original_terminate()
+                stopping.set()
+
+            process.terminate = terminate
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -311,15 +459,27 @@ def test_actual_http_disconnect_terminates_the_owned_worker(tmp_path):
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers=AUTH) as client:
                 async with client.stream("POST", "/v1/speech", json=request().model_dump()) as response:
                     assert response.status_code == 200
+                    if during_switch:
+                        await asyncio.wait_for(stopping.wait(), 2)
                     async with asyncio.timeout(2):
                         while worker.process is None:
                             await asyncio.sleep(0.005)
                     process = worker.process
-                # Close a real TCP response while the model process is blocked．
-                async with asyncio.timeout(2):
+                # Close TCP during synthesis or the switch's stubborn-worker wait．
+                async with asyncio.timeout(3):
                     while process.returncode is None or worker.process is not None:
                         await asyncio.sleep(0.005)
+                if temporary is not None:
+                    assert not Path(temporary.name).exists()
+                worker.command = fake_worker_command(tmp_path)
+                following = await client.post("/v1/speech", json=request(request_id="after-disconnect").model_dump())
+                frames = [json.loads(line) for line in following.text.splitlines()]
+                assert [frame["type"] for frame in frames] == ["audio", "completed"]
+                assert all(frame["request_id"] == "after-disconnect" for frame in frames)
         finally:
+            if process is not None and process.returncode is None:
+                process.kill()
+                await process.wait()
             server.should_exit = True
             await asyncio.wait_for(serving, timeout=3)
             listener.close()
@@ -384,7 +544,7 @@ def test_inference_child_does_not_inherit_http_secret(tmp_path, monkeypatch):
     async def run():
         worker = ProcessWorker({}, command=[sys.executable, str(script)])
         try:
-            await worker._start()
+            await worker._start("qwen3-tts")
         finally:
             await worker.stop()
     asyncio.run(run())

@@ -39,17 +39,18 @@ type VoiceCapabilities struct {
 	Interruptible bool                    `json:"interruptible"`
 }
 type VoiceProfile struct {
-	VoiceProfileID    string            `json:"voice_profile_id"`
-	DisplayName       string            `json:"display_name"`
-	Provider          string            `json:"provider"`
-	ModelRevision     string            `json:"model_revision"`
-	Language          string            `json:"language"`
-	ClonePromptDigest string            `json:"clone_prompt_digest"`
-	ProvenanceID      string            `json:"provenance_id"`
-	DefaultStyle      SpeechStyle       `json:"default_style"`
-	Capabilities      VoiceCapabilities `json:"capabilities"`
-	Available         bool              `json:"available"`
-	ErrorCode         string            `json:"error_code,omitempty"`
+	VoiceProfileID       string            `json:"voice_profile_id"`
+	DisplayName          string            `json:"display_name"`
+	Provider             string            `json:"provider"`
+	ModelRevision        string            `json:"model_revision"`
+	Language             string            `json:"language"`
+	ClonePromptDigest    string            `json:"clone_prompt_digest"`
+	ReferenceGroupDigest string            `json:"reference_group_digest"`
+	ProvenanceID         string            `json:"provenance_id"`
+	DefaultStyle         SpeechStyle       `json:"default_style"`
+	Capabilities         VoiceCapabilities `json:"capabilities"`
+	Available            bool              `json:"available"`
+	ErrorCode            string            `json:"error_code,omitempty"`
 }
 type VoiceProfileCatalog struct {
 	DefaultProfileID string         `json:"default_profile_id"`
@@ -62,8 +63,13 @@ type SpeechOptions struct {
 }
 type SpeechRequest struct {
 	SpeechStyle
-	SpeechText     string `json:"speech_text"`
-	VoiceProfileID string `json:"voice_profile_id"`
+	SpeechText         string `json:"speech_text"`
+	VoiceProfileID     string `json:"voice_profile_id"`
+	OperationID        string `json:"operation_id"`
+	SessionID          string `json:"session_id"`
+	TurnID             string `json:"turn_id"`
+	GenerationRevision int    `json:"generation_revision"`
+	SpeechUnitSequence int    `json:"speech_unit_sequence"`
 }
 type VoiceSpeechProvider interface {
 	VoiceTTS
@@ -109,6 +115,12 @@ func validateSpeechStyle(style SpeechStyle, profile VoiceProfile) error {
 		if control.Type != "number" || values[0] < control.Min || values[0] > control.Max {
 			return invalid
 		}
+		if control.Step > 0 {
+			steps := (values[0] - control.Min) / control.Step
+			if math.Abs(steps-math.Round(steps)) > 1e-7 {
+				return invalid
+			}
+		}
 	}
 	for name, values := range map[string][2]string{"affect": {style.Affect, base.Affect}, "pause_style": {style.PauseStyle, base.PauseStyle}} {
 		control, supported := profile.Capabilities.Controls[name]
@@ -141,6 +153,16 @@ func validateVoiceProfile(p VoiceProfile) error {
 		if err != nil || len(b) != 32 {
 			return errors.New("invalid_voice_profile")
 		}
+	}
+	if p.ReferenceGroupDigest != "" {
+		b, err := hex.DecodeString(p.ReferenceGroupDigest)
+		if err != nil || len(b) != 32 {
+			return errors.New("invalid_voice_profile")
+		}
+	}
+	if (p.Provider == "qwen3-tts" && (p.ClonePromptDigest == "" || p.ReferenceGroupDigest != "")) ||
+		(p.Provider == "irodori-tts" && (p.ClonePromptDigest != "" || p.ReferenceGroupDigest == "")) {
+		return errors.New("invalid_voice_profile")
 	}
 	if p.ProvenanceID != "" && !interactionIdentifier.MatchString(p.ProvenanceID) {
 		return errors.New("invalid_voice_profile")
@@ -268,9 +290,6 @@ func (r *VoiceTTSRegistry) Profiles(ctx context.Context) VoiceProfileCatalog {
 			result.ErrorCode = "tts_service_unavailable"
 		} else {
 			result.ErrorCode = remote.ErrorCode
-			if remote.DefaultProfileID != "" {
-				result.DefaultProfileID = remote.DefaultProfileID
-			}
 			for _, p := range remote.Profiles {
 				if p.VoiceProfileID == r.native.Profile().VoiceProfileID {
 					result.ErrorCode = "invalid_voice_profile"
@@ -278,6 +297,19 @@ func (r *VoiceTTSRegistry) Profiles(ctx context.Context) VoiceProfileCatalog {
 				}
 				result.Profiles = append(result.Profiles, p)
 				providers[p.VoiceProfileID] = &ServiceVoiceTTS{client: r.remote, profile: copyVoiceProfile(p)}
+			}
+			if remote.DefaultProfileID != "" {
+				candidate := providers[remote.DefaultProfileID]
+				if candidate != nil && candidate.Profile().Provider == "irodori-tts" {
+					result.ErrorCode = "invalid_voice_profile"
+				} else {
+					result.DefaultProfileID = remote.DefaultProfileID
+				}
+			} else {
+				// An Irodori-only experimental catalog intentionally has no remote
+				// default．After a successful catalog fetch，keep native Kyoko as the
+				// explicit default without masking a failed custom selection．
+				result.DefaultProfileID = r.native.Profile().VoiceProfileID
 			}
 		}
 	}

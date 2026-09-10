@@ -54,6 +54,13 @@ def main() -> int:
     register.add_argument("--audio", required=True)
     register.add_argument("--transcript", required=True)
     register.add_argument("--consent", required=True)
+    register_irodori = sub.add_parser("import-irodori-reference")
+    register_irodori.add_argument("--asset-store", required=True)
+    register_irodori.add_argument("--audio", required=True)
+    register_irodori.add_argument("--consent", required=True)
+    group = sub.add_parser("group-references")
+    group.add_argument("--asset-store", required=True)
+    group.add_argument("--reference-id", action="append", required=True)
     args = parser.parse_args()
     try:
         if args.command == "serve":
@@ -71,12 +78,24 @@ def main() -> int:
             asset = SpeechAssetStore(Path(args.asset_store)).register_reference(
                 Path(args.audio), Path(args.transcript), consent=consent)
             result = {"reference_id": asset.reference_id, "provenance_id": asset.provenance_id}
+        elif args.command == "import-irodori-reference":
+            from packages.speech_assets import SpeechAssetStore
+            consent = load_private_json(args.consent)
+            asset = SpeechAssetStore(Path(args.asset_store)).register_irodori_reference(
+                Path(args.audio), consent=consent)
+            result = {"reference_id": asset.reference_id, "provenance_id": asset.provenance_id}
+        elif args.command == "group-references":
+            from packages.speech_assets import SpeechAssetStore
+            asset = SpeechAssetStore(Path(args.asset_store)).store_reference_group(args.reference_id)
+            result = asset.public_metadata()
         else:
             config = load_private_json(args.config)
-            if config.get("source_revision") != SOURCE_REVISION or config.get("model_revision") != MODEL_REVISION:
+            from .service import provider_config
+            qwen_config = provider_config(config, "qwen3-tts")
+            if qwen_config.get("source_revision") != SOURCE_REVISION or qwen_config.get("model_revision") != MODEL_REVISION:
                 raise SpeechError("tts_model_revision_mismatch")
             with quiet_inference():
-                asset = QwenAdapter(config).prepare(args.reference_id)
+                asset = QwenAdapter(qwen_config).prepare(args.reference_id)
             result = {"reference_id": asset.reference_id, "clone_prompt_digest": asset.prompt_digest}
         print(json.dumps(result, ensure_ascii=True, allow_nan=False))
         return 0

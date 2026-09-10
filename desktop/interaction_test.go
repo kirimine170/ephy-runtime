@@ -408,7 +408,8 @@ func TestInteractionRejectsInvalidOrLateAudioAndIsolatesTurns(t *testing.T) {
 func TestInteractionTraceRetentionAndNoConversationPersistence(t *testing.T) {
 	dir := t.TempDir()
 	var engine *InteractionEngine
-	engine = NewInteractionEngine(testVoiceASR{}, testVoiceTTS{}, testVoiceChat, func(event InteractionEvent) {
+	irodori := &syntheticSpeechProvider{profile: irodoriTestProfile()}
+	engine = NewInteractionEngine(testVoiceASR{}, irodori, testVoiceChat, func(event InteractionEvent) {
 		if event.Kind == "audio" {
 			engine.Playback(event.OperationID, event.Sequence, "started")
 			engine.Playback(event.OperationID, event.Sequence, "stopped")
@@ -416,7 +417,7 @@ func TestInteractionTraceRetentionAndNoConversationPersistence(t *testing.T) {
 	}, dir)
 	defer engine.Close()
 	var first string
-	// 200 complete synthetic turns exercise the complete loop and playback acks.
+	// 200 complete synthetic Irodori-contract turns exercise the complete loop and playback acks.
 	for i := 0; i < 200; i++ {
 		s := startTestInteraction(t, engine)
 		if i == 0 {

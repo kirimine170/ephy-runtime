@@ -30,6 +30,47 @@ func customTestProfile() VoiceProfile {
 	p.ProvenanceID = "synthetic-provenance"
 	return p
 }
+
+func irodoriTestProfile() VoiceProfile {
+	p := customTestProfile()
+	p.VoiceProfileID = "irodori-anime"
+	p.Provider = "irodori-tts"
+	p.ModelRevision = "6b259f5baa5e236b3d14cbd1f8555ca87d92b530"
+	p.ClonePromptDigest = ""
+	p.ReferenceGroupDigest = strings.Repeat("c", 64)
+	p.ProvenanceID = "prov_" + strings.Repeat("d", 32)
+	p.Capabilities.Controls = map[string]VoiceControl{
+		"affect":      {Type: "enum", Values: []string{"neutral", "warm", "cheerful", "cute", "sleepy", "concerned"}},
+		"intensity":   {Type: "number", Min: 0.75, Max: 1.25, Step: 0.25},
+		"pace":        {Type: "number", Min: 0.85, Max: 1.15, Step: 0.15},
+		"pause_style": {Type: "enum", Values: []string{"natural", "short", "deliberate"}},
+		"volume":      {Type: "number", Min: 0, Max: 1, Step: 0.05},
+	}
+	return p
+}
+
+func TestIrodoriProfileAcceptsOnlyFiniteProviderControls(t *testing.T) {
+	p := irodoriTestProfile()
+	if err := validateVoiceProfile(p); err != nil {
+		t.Fatal(err)
+	}
+	style := p.DefaultStyle
+	style.Affect, style.Intensity, style.Pace, style.PauseStyle = "cute", 1.25, 0.85, "deliberate"
+	if err := validateSpeechStyle(style, p); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*SpeechStyle){
+		func(s *SpeechStyle) { s.Affect = "free prompt" },
+		func(s *SpeechStyle) { s.Intensity = 0.9 },
+		func(s *SpeechStyle) { s.PitchHint = 1 },
+	} {
+		candidate := p.DefaultStyle
+		mutate(&candidate)
+		if validateSpeechStyle(candidate, p) == nil {
+			t.Fatal("unbounded Irodori control accepted")
+		}
+	}
+}
 func TestVoiceProfileRejectsUnsupportedAndPinsStyle(t *testing.T) {
 	p := customTestProfile()
 	for _, change := range []func(*SpeechStyle){func(s *SpeechStyle) { s.Affect = "happy" }, func(s *SpeechStyle) { s.PitchHint = 1 }, func(s *SpeechStyle) { s.Intensity = 0.5 }, func(s *SpeechStyle) { s.PauseStyle = "dramatic" }, func(s *SpeechStyle) { s.Interruptible = false }, func(s *SpeechStyle) { s.Volume = math.NaN() }, func(s *SpeechStyle) { s.Pace = 5 }} {
@@ -87,22 +128,43 @@ func speechServer(t *testing.T, handler func(http.ResponseWriter, *http.Request,
 	t.Cleanup(server.Close)
 	return &ServiceVoiceTTS{client: &speechServiceClient{bearerToken: strings.Repeat("s", 43), endpoint: server.URL, client: server.Client()}, profile: customTestProfile()}
 }
-func speechAudioFrame(id any) map[string]any {
-	return map[string]any{"type": "audio", "request_id": id, "sequence": 1, "wav_base64": base64.StdEncoding.EncodeToString(providerTestWAV())}
+func speechIdentityFrame(request map[string]any) map[string]any {
+	return map[string]any{"request_id": request["request_id"], "operation_id": request["operation_id"],
+		"session_id": request["session_id"], "turn_id": request["turn_id"],
+		"generation_revision": request["generation_revision"], "speech_unit_sequence": request["speech_unit_sequence"]}
 }
-func speechCompletedFrame(id any) map[string]any {
-	return map[string]any{"type": "completed", "request_id": id, "sequence": 1, "finish_reason": "stop"}
+func speechAudioFrame(request map[string]any) map[string]any {
+	frame := speechIdentityFrame(request)
+	frame["type"], frame["sequence"], frame["wav_base64"] = "audio", 1, base64.StdEncoding.EncodeToString(providerTestWAV())
+	return frame
+}
+func speechCompletedFrame(request map[string]any) map[string]any {
+	frame := speechIdentityFrame(request)
+	frame["type"], frame["sequence"], frame["finish_reason"] = "completed", 1, "stop"
+	return frame
 }
 
 func TestSpeechServiceRequiresTerminalAndRejectsProtocolDamage(t *testing.T) {
-	for _, kind := range []string{"complete", "missing-terminal", "missing-newline", "wrong-identity", "wrong-sequence", "after-terminal", "length", "private-error", "invalid-audio"} {
+	for _, kind := range []string{"complete", "missing-terminal", "missing-newline", "wrong-identity", "wrong-operation",
+		"wrong-session", "wrong-turn", "wrong-generation", "wrong-unit", "wrong-sequence", "after-terminal", "length", "private-error", "invalid-audio"} {
 		t.Run(kind, func(t *testing.T) {
 			provider := speechServer(t, func(w http.ResponseWriter, r *http.Request, request map[string]any) {
 				id := request["request_id"]
 				encoder := json.NewEncoder(w)
-				audio := speechAudioFrame(id)
+				audio := speechAudioFrame(request)
 				if kind == "wrong-identity" {
 					audio["request_id"] = "stale"
+				}
+				for changed, field := range map[string]string{"wrong-operation": "operation_id", "wrong-session": "session_id", "wrong-turn": "turn_id"} {
+					if kind == changed {
+						audio[field] = "stale"
+					}
+				}
+				if kind == "wrong-generation" {
+					audio["generation_revision"] = 64
+				}
+				if kind == "wrong-unit" {
+					audio["speech_unit_sequence"] = 64
 				}
 				if kind == "wrong-sequence" {
 					audio["sequence"] = 2
@@ -118,7 +180,7 @@ func TestSpeechServiceRequiresTerminalAndRejectsProtocolDamage(t *testing.T) {
 				if kind == "missing-terminal" {
 					return
 				}
-				terminal := speechCompletedFrame(id)
+				terminal := speechCompletedFrame(request)
 				if kind == "length" {
 					terminal["finish_reason"] = "length"
 				}
@@ -156,8 +218,13 @@ func TestSpeechServiceBoundedUnicodeAndEarlyPlayback(t *testing.T) {
 		if request["model_revision"] != "revision-1" || request["clone_prompt_digest"] != strings.Repeat("a", 64) {
 			t.Error("profile pin lost")
 		}
+		for _, key := range []string{"request_id", "operation_id", "session_id", "turn_id", "generation_revision", "speech_unit_sequence"} {
+			if request[key] == nil || request[key] == "" {
+				t.Errorf("speech identity missing: %s", key)
+			}
+		}
 		encoder := json.NewEncoder(w)
-		encoder.Encode(speechAudioFrame(request["request_id"]))
+		encoder.Encode(speechAudioFrame(request))
 		w.(http.Flusher).Flush()
 		if serverCalls.Add(1) == 1 {
 			select {
@@ -166,7 +233,7 @@ func TestSpeechServiceBoundedUnicodeAndEarlyPlayback(t *testing.T) {
 				t.Error("waited for complete WAV response before playback")
 			}
 		}
-		encoder.Encode(speechCompletedFrame(request["request_id"]))
+		encoder.Encode(speechCompletedFrame(request))
 	})
 	err := provider.Stream(context.Background(), strings.Repeat(strings.Repeat("界", 179)+"。", 88)+strings.Repeat("界", 160), func([]byte) error {
 		if calls == 0 {
@@ -186,7 +253,7 @@ func TestSpeechServiceBoundedUnicodeAndEarlyPlayback(t *testing.T) {
 func TestSpeechServiceCancelDisconnectsAndDropsLateAudio(t *testing.T) {
 	disconnected := make(chan struct{})
 	provider := speechServer(t, func(w http.ResponseWriter, r *http.Request, request map[string]any) {
-		json.NewEncoder(w).Encode(speechAudioFrame(request["request_id"]))
+		json.NewEncoder(w).Encode(speechAudioFrame(request))
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 		close(disconnected)
@@ -237,7 +304,7 @@ func TestSpeechProfileContinuationHistoryAndTracePrivacy(t *testing.T) {
 	var mu sync.Mutex
 	var requests []SpeechRequest
 	segments := 0
-	p := &syntheticSpeechProvider{profile: customTestProfile(), stream: func(ctx context.Context, r SpeechRequest, emit func([]byte) error) error {
+	p := &syntheticSpeechProvider{profile: irodoriTestProfile(), stream: func(ctx context.Context, r SpeechRequest, emit func([]byte) error) error {
 		mu.Lock()
 		requests = append(requests, r)
 		mu.Unlock()
@@ -272,6 +339,10 @@ func TestSpeechProfileContinuationHistoryAndTracePrivacy(t *testing.T) {
 		if r.Volume != 0.5 || r.VoiceProfileID != p.profile.VoiceProfileID || strings.ContainsAny(r.SpeechText, "#桃") {
 			t.Fatalf("unsafe or mutable speech request: %+v", r)
 		}
+		if r.OperationID != s.OperationID || r.SessionID != s.SessionID || r.TurnID != s.TurnID ||
+			r.GenerationRevision < 1 || r.SpeechUnitSequence < 1 {
+			t.Fatalf("speech identity fence lost: %+v", r)
+		}
 	}
 	stored, readErr := os.ReadFile(filepath.Join(h.store, s.OperationID+".json"))
 	if readErr != nil || len(stored) > 256<<10 {
@@ -292,11 +363,56 @@ func TestSpeechProfileContinuationHistoryAndTracePrivacy(t *testing.T) {
 	found := false
 	for _, e := range events {
 		if e.Name == "tts_completed" {
-			found = e.ProviderID == "synthetic-tts" && e.ModelID == "revision-1"
+			found = e.ProviderID == "irodori-tts" && e.ModelID == "6b259f5baa5e236b3d14cbd1f8555ca87d92b530"
 		}
 	}
 	if !found {
 		t.Fatal(fmt.Sprint("prepared provider identity missing"))
+	}
+}
+
+func TestSpeechProfileEmojiOnlyUnitsDoNotFailCompletedGeneration(t *testing.T) {
+	for _, text := range []string{"了解です。🙂", "🙂", "👩‍💻 🇯🇵 ❤️"} {
+		t.Run(text, func(t *testing.T) {
+			var calls atomic.Int32
+			p := &syntheticSpeechProvider{profile: irodoriTestProfile(), stream: func(ctx context.Context, r SpeechRequest, emit func([]byte) error) error {
+				calls.Add(1)
+				// Model the adapter boundary that rejects an empty normalized phrase．
+				if r.SpeechText != "了解です。" {
+					return errors.New("invalid_speech_text")
+				}
+				return emit(providerTestWAV())
+			}}
+			h := newInteractionGenerationHarness(t, testVoiceTTS{}, func(ctx context.Context, r ChatRequest, onToken func(string)) (*ChatResponse, error) {
+				onToken(text)
+				return completedVoiceResponse(text), nil
+			})
+			h.engine.tts = p
+			s := h.start(t, "emoji-speech", GenerationLimits{})
+			complete := awaitInteraction(t, h.engine, s.OperationID, "COMPLETED")
+			if complete.ResponsePlan.Text != text || !complete.Generation.Complete {
+				t.Fatal("speech filtering changed the displayed response")
+			}
+			wantCalls := int32(0)
+			if strings.HasPrefix(text, "了解") {
+				wantCalls = 1
+			}
+			if calls.Load() != wantCalls || complete.LastAudioSequence != int(wantCalls) {
+				t.Fatal("unexpected speech or playback count", calls.Load(), complete.LastAudioSequence)
+			}
+			trace, err := h.engine.Trace(s.OperationID)
+			if err != nil || !ValidateTrace(trace).Valid {
+				t.Fatal("invalid completed trace", err)
+			}
+			skipped := false
+			for _, event := range trace {
+				skipped = skipped || event.Name == "tts_skipped"
+			}
+			if skipped != (wantCalls == 0) {
+				t.Fatal("non-spoken turn did not use tts_skipped")
+			}
+			h.checkPlayback(t)
+		})
 	}
 }
 
@@ -438,6 +554,47 @@ func TestSpeechCatalogDefaultRemainsSelectedWhenUnavailable(t *testing.T) {
 				t.Fatal("explicit native selection lost", err)
 			}
 		})
+	}
+}
+
+func TestIrodoriCannotBecomeServiceDefault(t *testing.T) {
+	profile := irodoriTestProfile()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		json.NewEncoder(w).Encode(VoiceProfileCatalog{DefaultProfileID: profile.VoiceProfileID, Profiles: []VoiceProfile{profile}})
+	}))
+	defer server.Close()
+	r := NewVoiceTTSRegistry()
+	r.remote = &speechServiceClient{bearerToken: strings.Repeat("s", 43), endpoint: server.URL, client: server.Client()}
+	catalog := r.Profiles(context.Background())
+	if catalog.DefaultProfileID == profile.VoiceProfileID || catalog.ErrorCode != "invalid_voice_profile" {
+		t.Fatal("experimental Irodori profile became default")
+	}
+	if _, err := r.PrepareSpeech(SpeechOptions{VoiceProfileID: profile.VoiceProfileID}); err != nil {
+		t.Fatal("explicit experimental profile selection was lost", err)
+	}
+}
+
+func TestIrodoriOnlyCatalogKeepsNativeDefaultAndExplicitSelection(t *testing.T) {
+	profile := irodoriTestProfile()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		json.NewEncoder(w).Encode(VoiceProfileCatalog{Profiles: []VoiceProfile{profile}})
+	}))
+	defer server.Close()
+	t.Setenv("EPHY_TTS_ENDPOINT", server.URL)
+	t.Setenv("EPHY_TTS_BEARER_TOKEN", strings.Repeat("s", 43))
+	r := NewVoiceTTSRegistry()
+	if _, err := r.PrepareSpeech(SpeechOptions{}); err == nil {
+		t.Fatal("unresolved service catalog fell back before refresh")
+	}
+	catalog := r.Profiles(context.Background())
+	if catalog.DefaultProfileID != "macos-kyoko" || catalog.ErrorCode != "" {
+		t.Fatalf("native default not restored after successful catalog: %#v", catalog)
+	}
+	if _, err := r.PrepareSpeech(SpeechOptions{}); err != nil {
+		t.Fatal("native default unavailable after refresh", err)
+	}
+	if _, err := r.PrepareSpeech(SpeechOptions{VoiceProfileID: profile.VoiceProfileID}); err != nil {
+		t.Fatal("explicit experimental profile selection was lost", err)
 	}
 }
 

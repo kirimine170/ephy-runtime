@@ -89,6 +89,31 @@ test('catalog default selects a generic profile，hides singleton controls and o
   h.controller.dispose();
 });
 
+test('experimental Irodori profile renders every bounded preset without retaining private identity metadata', async () => {
+  const source = profile('irodori-anime', {
+    provider: 'irodori-tts', clone_prompt_digest: '', reference_group_digest: 'PRIVATE-GROUP',
+    default_style: neutral(), capabilities: {controls: {
+      affect: {type: 'enum', values: ['neutral', 'warm', 'cheerful', 'cute', 'sleepy', 'concerned']},
+      intensity: {type: 'number', min: 0.75, max: 1.25, step: 0.25},
+      pace: {type: 'number', min: 0.85, max: 1.15, step: 0.15},
+      volume: {type: 'number', min: 0, max: 1, step: 0.05},
+      pause_style: {type: 'enum', values: ['natural', 'short', 'deliberate']},
+    }, streaming: true, interruptible: true},
+  });
+  const h = harness({bridge: {GetVoiceProfiles: async () => ({default_profile_id: 'macos-kyoko', profiles: [source]})}});
+  await h.controller.ready;
+  h.select.change('irodori-anime');
+  h.node('voice-style-affect').change('cute');
+  h.node('voice-style-intensity').change('1.25');
+  h.node('voice-style-pace').change('0.85');
+  h.node('voice-style-pause_style').change('deliberate');
+  const settings = h.controller.readSettings();
+  assert.equal(settings.voice_profile_id, 'irodori-anime');
+  assert.deepEqual(settings.style, {...neutral(), affect: 'cute', intensity: 1.25, pace: 0.85, pause_style: 'deliberate'});
+  assert.doesNotMatch(JSON.stringify(settings), /PRIVATE|caption|emoji|reference|provider|model_revision/);
+  h.controller.dispose();
+});
+
 test('profile selection resets delivery defaults and unavailable options cannot be selected', async () => {
   const h = harness({bridge: {GetVoiceProfiles: async () => catalog(profile(), profile('missing-voice', {available: false, error_code: 'PRIVATE diagnostic'}))}});
   await h.controller.ready;

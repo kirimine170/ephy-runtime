@@ -401,6 +401,7 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 		return
 	}
 	ctx, revision := t.ctx, t.snapshot.GenerationRevision
+	operationID, sessionID, turnID := t.snapshot.OperationID, t.snapshot.SessionID, t.snapshot.TurnID
 	firstSequence := t.snapshot.LastAudioSequence
 	req, limits := t.request.Chat, t.request.GenerationLimits
 	requestConfigurationID := t.requestConfigurationID
@@ -443,7 +444,9 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 				emit := func(chunk []byte) error { return e.emitGenerationAudio(t, revision, ttsCtx, chunk) }
 				var err error
 				if prepared != nil {
-					err = prepared.provider.StreamSpeech(ttsCtx, SpeechRequest{SpeechStyle: prepared.style, SpeechText: text, VoiceProfileID: prepared.profile.VoiceProfileID}, emit)
+					err = prepared.provider.StreamSpeech(ttsCtx, SpeechRequest{SpeechStyle: prepared.style, SpeechText: text,
+						VoiceProfileID: prepared.profile.VoiceProfileID, OperationID: operationID,
+						SessionID: sessionID, TurnID: turnID, GenerationRevision: revision, SpeechUnitSequence: units + 1}, emit)
 				} else {
 					err = provider.Stream(ttsCtx, text, emit)
 				}
