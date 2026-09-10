@@ -371,6 +371,51 @@ func TestSpeechProfileContinuationHistoryAndTracePrivacy(t *testing.T) {
 	}
 }
 
+func TestSpeechProfileEmojiOnlyUnitsDoNotFailCompletedGeneration(t *testing.T) {
+	for _, text := range []string{"了解です。🙂", "🙂", "👩‍💻 🇯🇵 ❤️"} {
+		t.Run(text, func(t *testing.T) {
+			var calls atomic.Int32
+			p := &syntheticSpeechProvider{profile: irodoriTestProfile(), stream: func(ctx context.Context, r SpeechRequest, emit func([]byte) error) error {
+				calls.Add(1)
+				// Model the adapter boundary that rejects an empty normalized phrase．
+				if r.SpeechText != "了解です。" {
+					return errors.New("invalid_speech_text")
+				}
+				return emit(providerTestWAV())
+			}}
+			h := newInteractionGenerationHarness(t, testVoiceTTS{}, func(ctx context.Context, r ChatRequest, onToken func(string)) (*ChatResponse, error) {
+				onToken(text)
+				return completedVoiceResponse(text), nil
+			})
+			h.engine.tts = p
+			s := h.start(t, "emoji-speech", GenerationLimits{})
+			complete := awaitInteraction(t, h.engine, s.OperationID, "COMPLETED")
+			if complete.ResponsePlan.Text != text || !complete.Generation.Complete {
+				t.Fatal("speech filtering changed the displayed response")
+			}
+			wantCalls := int32(0)
+			if strings.HasPrefix(text, "了解") {
+				wantCalls = 1
+			}
+			if calls.Load() != wantCalls || complete.LastAudioSequence != int(wantCalls) {
+				t.Fatal("unexpected speech or playback count", calls.Load(), complete.LastAudioSequence)
+			}
+			trace, err := h.engine.Trace(s.OperationID)
+			if err != nil || !ValidateTrace(trace).Valid {
+				t.Fatal("invalid completed trace", err)
+			}
+			skipped := false
+			for _, event := range trace {
+				skipped = skipped || event.Name == "tts_skipped"
+			}
+			if skipped != (wantCalls == 0) {
+				t.Fatal("non-spoken turn did not use tts_skipped")
+			}
+			h.checkPlayback(t)
+		})
+	}
+}
+
 func TestSpeechResponseBudgetDoesNotManufactureEOF(t *testing.T) {
 	for _, extra := range []string{"", "extra-frame"} {
 		reader := &speechResponseReader{reader: strings.NewReader("completed\n" + extra), remaining: len("completed\n")}

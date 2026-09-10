@@ -93,6 +93,26 @@ def test_targeted_normalization_keeps_display_text_separate_and_drops_emoji():
     assert normalize_speech_text("温度は20℃，重さは2kgです．")[0] == "温度は20°C,重さは2kgです."
 
 
+@pytest.mark.parametrize("original, expected", [
+    ("API，" + "あ" * 175 + "。", "エーピーアイ," + "あ" * 175 + "。"),
+    ("TTS，" * 44 + "終わり。", "ティーティーエス," * 44 + "終わり。"),
+    ("㌔" * 179 + "。", "キロ" * 179 + "。"),
+], ids=["reading-boundary", "repeated-acronym", "nfkc-expansion"])
+def test_full_wire_phrase_survives_reading_expansion_without_truncation(tmp_path, original, expected):
+    assert len(original) == 180 and len(expected) > 180
+    runtime = Runtime()
+    speech = request(speech_text=original)
+    body = adapter(tmp_path, runtime).synthesize(speech, {"provenance_id": "prov_" + "b" * 32})
+    assert body[:4] == b"RIFF" and len(runtime.calls) == 1
+    assert runtime.calls[0]["text"] == expected
+    assert speech.speech_text == original and list(tmp_path.iterdir()) == []
+
+
+def test_normalization_still_bounds_source_phrase():
+    with pytest.raises(SpeechError, match="invalid_speech_text"):
+        normalize_speech_text("あ" * 181)
+
+
 def test_auto_duration_full_precision_controls_and_group_temp_cleanup(tmp_path):
     runtime = Runtime()
     synthesis = adapter(tmp_path, runtime, group(16000, 24000))

@@ -18,6 +18,7 @@ import wave
 from contextlib import asynccontextmanager
 from typing import Any
 
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -75,6 +76,7 @@ class ProcessWorker:
         self.provider = ""
         self.temporary: tempfile.TemporaryDirectory[str] | None = None
         self.lock = asyncio.Lock()
+        self._stopping: asyncio.Task[None] | None = None
 
     async def _line(self) -> dict[str, Any]:
         assert self.process is not None and self.process.stdout is not None
@@ -97,6 +99,8 @@ class ProcessWorker:
         await self.process.stdin.drain()
 
     async def _start(self, provider: str) -> None:
+        if self._stopping is not None:
+            await self.stop()
         if self.process is not None and self.process.returncode is None and self.provider == provider:
             return
         await self.stop()
@@ -116,12 +120,33 @@ class ProcessWorker:
             raise SpeechError("tts_unavailable")
 
     async def stop(self) -> None:
-        process, self.process = self.process, None
-        temporary, self.temporary = self.temporary, None
-        self.provider = ""
+        # All callers join the same cleanup．Neither HTTP cancellation scopes nor
+        # repeated Task.cancel() may release the owner before terminate/kill/wait．
+        if self._stopping is None:
+            self._stopping = asyncio.create_task(self._stop_owned_process())
+        stopping = self._stopping
+        canceled = False
+        try:
+            with anyio.CancelScope(shield=True):
+                while not stopping.done():
+                    try:
+                        await asyncio.shield(stopping)
+                    except asyncio.CancelledError:
+                        canceled = True
+                stopping.result()
+        finally:
+            if stopping.done() and self._stopping is stopping:
+                self._stopping = None
+        if canceled:
+            raise asyncio.CancelledError
+
+    async def _stop_owned_process(self) -> None:
+        process, temporary = self.process, self.temporary
+        self.provider = ""  # A failed cleanup must never make this process reusable．
         if process is None:
             if temporary is not None:
                 temporary.cleanup()
+            self.temporary = None
             return
         if process.returncode is None:
             try:
@@ -140,6 +165,11 @@ class ProcessWorker:
             process.stdin.close()
         if temporary is not None:
             temporary.cleanup()
+        # Retain these handles until cleanup succeeds，including if wait or
+        # directory removal fails and a later caller needs to retry．
+        self.process = None
+        self.temporary = None
+        self.provider = ""
 
     async def synthesize(self, request: SpeechRequest, profile: dict[str, Any]) -> bytes:
         if self.lock.locked():

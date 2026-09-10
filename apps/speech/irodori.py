@@ -110,6 +110,10 @@ def verify_source_revision() -> None:
 
 
 def normalize_speech_text(text: str) -> tuple[str, tuple[str, ...]]:
+    # Bound the source unit．NFKC and the fixed reading table can expand it，but
+    # cannot create unbounded output．Never truncate or reject their expansion．
+    if not 0 < len(text) <= 180:
+        raise SpeechError("invalid_speech_text")
     result = unicodedata.normalize("NFKC", text)
     changes: list[str] = []
     for pattern, reading in PRONUNCIATIONS:
@@ -123,7 +127,7 @@ def normalize_speech_text(text: str) -> tuple[str, tuple[str, ...]]:
         or ord(char) in {0x200D, 0xFE0E, 0xFE0F}
     ))
     result = re.sub(r"[ \t]+", " ", result).strip()
-    if not result or len(result) > 180:
+    if not result:
         raise SpeechError("invalid_speech_text")
     return result, tuple(changes)
 

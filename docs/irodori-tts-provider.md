@@ -102,4 +102,8 @@ Qwen互換の旧configも維持するが，複数providerには次の形を使�
 
 自動検証はsynthetic WAVだけを使う．provider contract，capability UI，有限style mapping，reference grouping，bearer認証，timeout，cancel，disconnect，stale audio，長文continuation，200-turn stress，trace retention，temporary WAV削除を検証する．
 
+provider切替中の旧worker回収はrequestのcancelから保護する．SIGTERMで終了しない場合もkillとwait，private temporary directory削除を完了してからworkerの所有権を解放する．連続cancel，timeout，実HTTP disconnectの合成process testで，次requestへ旧workerが残らないことを確認する．
+
+180文字の上限は正規化前の`SpeechRequest.speech_text`へ適用する．adapter内のNFKCと有限の読み置換による文字数増加は許容し，展開後の文字列を180文字へ切り詰めない．モデルのduration上限は従来どおりであり，実音声の途中切れはUATで確認する．emojiだけの確定句はRuntimeがTTS enqueue前に除外する．表示本文とhistoryは変更せず，回答全体が非発話なら既存の`tts_skipped`経路で完了する．
+
 実UATでは許諾済みlocal referenceだけを使用し，読み，途中切れ，identity，style，感情の過剰さ，長文安定性を人間が判定する．Step 3.6の暫定policyはauto duration＋Runtimeの句分割＋対象語辞書である．自動test合格だけでvoice品質，production-ready，default voice採用を宣言しない．
