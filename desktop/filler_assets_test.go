@@ -116,3 +116,35 @@ func TestBackchannelAssetsRequireSeparateApprovalAndKeepTheirKind(t *testing.T) 
 		t.Fatal("changed acknowledgement accepted")
 	}
 }
+
+func TestConversationalBackchannelAllowsThreeSecondsWithoutExtendingFiller(t *testing.T) {
+	for _, tc := range []struct {
+		candidate string
+		seconds   int
+		allowed   bool
+	}{
+		{"backchannel_gomen_iiyo", 3, true},
+		{"backchannel_gomen_iiyo", 4, false},
+		{"hesitation_etto", 2, false},
+		{"backchannel_unknown", 2, false},
+	} {
+		t.Run(tc.candidate+string(rune('0'+tc.seconds)), func(t *testing.T) {
+			root, speech, manifest := fillerFixture(t)
+			audio := durationTestWAV(tc.seconds, 48000)
+			digest := sha256.Sum256(audio)
+			asset := fillerAsset{Candidate: tc.candidate, File: tc.candidate + ".wav", SHA256: hex.EncodeToString(digest[:]), DurationMS: float64(tc.seconds * 1000), Approved: true}
+			manifest.Assets = []fillerAsset{asset}
+			if err := os.WriteFile(filepath.Join(root, asset.File), audio, 0600); err != nil {
+				t.Fatal(err)
+			}
+			writeFillerManifest(t, root, manifest)
+			assets, err := loadFillerAssets(root, speech)
+			if (err == nil) != tc.allowed {
+				t.Fatalf("allowed=%v error=%v", tc.allowed, err)
+			}
+			if tc.allowed && (len(assets) != 1 || assets[0].Kind != "backchannel" || assets[0].DurationMS != 3000) {
+				t.Fatal("wrong backchannel")
+			}
+		})
+	}
+}

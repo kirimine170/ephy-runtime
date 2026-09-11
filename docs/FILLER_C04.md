@@ -8,15 +8,15 @@
 - `fillerController.js`は`DISABLED → ARMED → PLAYING → SPENT／CLOSED`の独立状態機械である．本文readyが発火前ならtimerを失効させ，再生中なら有限clipの自然終了を待つ．cancel，barge-in，identity／device変更は即時停止してtimerを失効させる．最大1回で，再生失敗も回数を消費する．continuationのrevision 2以降は無効である．
 - `voiceInteraction.js`は本文audioのdecode中にもフィラーを独立再生できる．本文readyでは最初のdecode済みchunkを保持し，再生中のフィラーが自然終了した直後に本文を開始する．有限clip全体を文節境界として扱い，途中では切らない．追加のbridge ACKや接続用timerは待たない．割込み検知は本文開始直前まで続け，cancel後に待機が解けてもturn／playback epochを再検証して旧本文を捨てる．本文のfirst-audio traceをフィラーで置き換えない．
 - 生の音声，本文，候補IDをC0.4 traceに残さない．追加traceのschemaは`kind`と`latency_ms`だけである．calibration fileは数値の対応sample，設定のopaque digest，retention時刻を別に保持する．32条件，各200 samples，各256 trace，7日を上限とする．
-- 待ち時間のフィラーは「えっと」「ええと」のみである．割込み専用の短い返しは「うん」「はい」とし，ユーザーへ話を譲る用途だけに限定する．待ち時間や回答の先頭には使わない．「なるほど」「確認しています」「覚えています」はどちらの集合にもない．
+- 待ち時間のフィラーは「えっと」「ええと」のみである．割込み専用の返しは「うん」「はい」「ごめんごめん，いいよ？」とし，ユーザーへ話を譲る用途だけに限定する．待ち時間や回答の先頭には使わない．「なるほど」「確認しています」「覚えています」はどちらの集合にもない．
 
 ## 有限assetとidentity
 
-`scripts/filler/prepare.py`は「えっと」「ええと」と割込み用の「うん」「はい」を採用profileで生成する．追加の合成文は人間の本文接続確認用で，live fillerには使わない．新規生成後はすべて`approved=false`，`enabled=false`である．`--base-bundle`を指定した場合は同一profileかつ同一checksumの既存候補と承認だけをコピーし，新しい候補の承認を流用しない．生成音声はGit外のprivate directoryへ保存する．
+`scripts/filler/prepare.py`は「えっと」「ええと」と割込み用の「うん」「はい」「ごめんごめん，いいよ？」を採用profileで生成する．追加の合成文は人間の本文接続確認用で，live fillerには使わない．新規生成後はすべて`approved=false`，`enabled=false`である．`--base-bundle`を指定した場合は同一profileかつ同一checksumの既存候補と承認だけをコピーし，新しい候補の承認を流用しない．生成音声はGit外のprivate directoryへ保存する．
 
 live読込はprofile，model revision，reference group，provenance，言語，synthesis設定digestを照合する．source／codec／watermark revision，seed，steps，CFG，device等が変わるとdigestが変わる．本文TTS requestにもdigestをpinし，service側で変更を拒否する．旧serviceのdigestなしprofileは本文TTSの互換性を維持するが，fillerを有効化できない．
 
-初期版はneutral，pace 1，volume 1等の中立設定だけを受け付ける．同じ話者でも未検証のstyleには流用しない．音声長150〜1500 ms，WAVの実長，checksum，0600 file／0700 directory，symlink／hardlinkを検証する．未承認候補は再生対象にしない．
+初期版はneutral，pace 1，volume 1等の中立設定だけを受け付ける．同じ話者でも未検証のstyleには流用しない．音声長は待ち時間フィラー150〜1500 ms，割込みへの返し150〜3000 msとし，WAVの実長，checksum，0600 file／0700 directory，symlink／hardlinkを検証する．未承認候補は再生対象にしない．
 
 ## 計測と発火
 
@@ -78,6 +78,8 @@ synthetic testは時刻境界，1turnの回数，late decode，cancel，本文�
 
 `createFillerBackchannel`は`READY → WAITING → PLAYING → CLOSED`で，再生済みclipを再開しない．準備時にdecodeを完了し，割込み時に元のturnの稼働済みAudioContextを引き継ぎ，検出から300 msの間を置く．待機中もcancel／次turn／session変更／device変更／disposeで返しを取り消してcontextを閉じる．event loop停止等で発火が検出から400 msを超えた場合は，遅れて再生せず無音へfallbackする．元の音声source／timer／待機本文とマイク監視は先に停止する．contextは返し終了時または待機取消し時に閉じる．非再生の準備を捨てるだけなら本文contextを閉じない．session identityは再生開始時と25 msごとのguardで照合する．自然終了通知が欠ければ音声長＋100 msのwatchdogで停止する．
 
-割込み用assetも同一profile，digest，checksum，承認，150〜1500 ms制限に従う．未承認／decode失敗なら従来の無音停止へfallbackし，別の声や自由生成で埋めない．複数承認時はmanifest順の先頭を使用する．traceは`backchannel_started`（発話検出からsource開始），`backchannel_ended`／`backchannel_stopped`／`backchannel_failed`／`backchannel_watchdog`（再生開始からの時間，待機中の停止は検出からの時間）の種類とlatencyだけで，本文・音声・候補IDは保存しない．失敗とwatchdogも同じ条件の品質停止件数に含める．
+割込み用assetも同一profile，digest，checksum，承認の検証に従い，長さだけは150〜3000 ms，最大300 KiBとする．未承認／decode失敗なら従来の無音停止へfallbackし，別の声や自由生成で埋めない．複数承認時は承認済みの返しをmanifest順に循環させ，短い返しと一言ある返しを併用できる．選択は固定集合内で決定的に行い，LLMへ生成や感情判定を依頼しない．割込みが起きて返しを予約したときだけ順番を進める．traceは`backchannel_started`（発話検出からsource開始），`backchannel_ended`／`backchannel_stopped`／`backchannel_failed`／`backchannel_watchdog`（再生開始からの時間，待機中の停止は検出からの時間）の種類とlatencyだけで，本文・音声・候補IDは保存しない．失敗とwatchdogも同じ条件の品質停止件数に含める．
 
 試聴画面では「割込みへの返し」を選び，「割込みを再現」でマイクなしでも切替を確認できる．その後ヘッドホン＋マイクで，返しの開始p50／p95，ユーザーの続きを遮らない短さ，内容への賛成に聞こえない抑揚，停止，再割込みでの重複なし，旧本文の再開なしを評価する．この短い返しは発話検出の受け止めであり，入力内容を理解したことを表さない．発話の自動転写や次turnへの自動投入は追加しない．
+
+「ごめんごめん，いいよ？」はユーザーの希望に基づく割込み専用の有限候補である．発言内容の正しさへの同意や，システムによる許可を意味する用途には使わない．短い「うん」「はい」も残す．一言ある返しはユーザーの続きを遮る時間が長くなり得るため，口調と長さを個別試聴して承認する．待ち時間フィラーの長さ・予測・最大1回，300 msの間，明示停止・旧本文取消しの条件は変えない．

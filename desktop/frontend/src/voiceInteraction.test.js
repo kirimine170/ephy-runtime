@@ -175,6 +175,30 @@ test('barge-in replaces canceled filler with one predecoded acknowledgement with
   }
 });
 
+test('approved short and conversational backchannels rotate across interruptions in a five-asset bundle', async () => {
+  let time = 0, monitor;
+  const durations = [.8, .88, 2.4];
+  const h = harness({now: () => time, startBargeIn: async options => { monitor = options; return {stop() {}}; },
+    bridge: {GetInteractionFiller: async () => ({...fillerSetup(), assets: [...fillerSetup().assets, ...fillerSetup().assets,
+      ...durations.map(duration => ({kind: 'backchannel', audio_base64: wav(), duration_ms: duration * 1000}))]})}});
+  for (let turn = 1; turn <= 4; turn++) {
+    time = 0; let decodes = 0;
+    const expected = durations[(turn - 1) % durations.length];
+    await h.controller.adopt(snapshot(turn, 'THINKING'));
+    const context = h.contexts[turn - 1]; context.decode = async () => ({duration: ++decodes === 1 ? 1 : expected});
+    const trace = (name, at) => { time = at; h.event(turn, 'trace', {trace: {name, monotonic_ms: at}}); };
+    trace('endpoint_commit', 0); trace('llm_requested', 20); trace('llm_identity_ready', 30);
+    await tick(); await tick(); trace('llm_first_token', 900); trace('tts_requested', 1100);
+    time = 3850; for (const t of [...h.timeouts.values()]) t.callback();
+    monitor.onSpeech(); time = 4150; for (const t of [...h.timeouts.values()]) t.callback();
+    assert.equal(context.sources.length, 2);
+    assert.equal(context.sources[1].buffer.duration, expected);
+    time += expected * 1000; context.sources[1].end(); await tick();
+    assert.equal(context.closed, true);
+  }
+  await h.controller.dispose();
+});
+
 function button() {
   const handlers = new Map();
   return {

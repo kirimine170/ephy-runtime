@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createFillerBackchannel} from './fillerController.js';
 
-function rig() {
+function rig(duration = .8) {
   let time = 0, valid = true;
   const sources = [], trace = [], timers = new Map();
   const context = {state: 'running', destination: {}, closed: false, close() { this.closed = true; },
@@ -11,7 +11,7 @@ function rig() {
       const source = {connect() {}, disconnect() {}, start() { this.started = true; }, stop() { this.stopped = true; }};
       sources.push(source); return source;
     }};
-  const ack = createFillerBackchannel({context, buffer: {duration: .8}, now: () => time, isCurrent: () => valid,
+  const ack = createFillerBackchannel({context, buffer: {duration}, now: () => time, isCurrent: () => valid,
     onTrace: t => trace.push(t), timers: {setTimeout(fn) { const key = Symbol(); timers.set(key, fn); return key; }, clearTimeout(key) { timers.delete(key); }}});
   return {ack, context, sources, trace, timers, invalidate() { valid = false; },
     advance(t) { time = t; for (const [id, fn] of [...timers]) { timers.delete(id); fn(); } }};
@@ -27,6 +27,16 @@ test('interruption acknowledgement waits 300 ms once and closes its output after
   assert.equal(r.context.closed, true); assert.equal(r.sources.length, 1);
   assert.deepEqual(r.trace.map(t => t.kind), ['backchannel_started', 'backchannel_ended']);
   assert.ok(r.trace.every(t => Object.keys(t).sort().join() === 'kind,latency_ms'));
+});
+
+test('a conversational clip keeps its actual duration after the same 300 ms pause', () => {
+  const r = rig(2.4); r.ack.play(); r.advance(300);
+  r.advance(1800); assert.equal(r.context.closed, false);
+  r.advance(2700); r.sources[0].onended();
+  assert.equal(r.trace.at(-1).kind, 'backchannel_ended');
+  assert.equal(r.trace.at(-1).latency_ms, 2400);
+  const stopped = rig(2.4); stopped.ack.play(); stopped.advance(300); stopped.advance(1800); stopped.ack.stop();
+  assert.equal(stopped.sources[0].stopped, true); assert.equal(stopped.context.closed, true);
 });
 test('unused acknowledgement does not close the answer context', () => {
   const r = rig(); r.ack.stop(); r.ack.play();
