@@ -54,6 +54,8 @@ func validFillerTrace(t FillerTrace) bool {
 		return false
 	}
 	switch t.Kind {
+	case "backchannel_started", "backchannel_ended", "backchannel_stopped", "backchannel_watchdog", "backchannel_failed":
+		return true
 	case "filler_started", "filler_ended", "filler_disabled", "filler_expired", "filler_suppressed_fast", "filler_stopped_answer", "filler_stopped_cancel", "filler_stopped_barge_in", "filler_stopped_invalidated", "filler_failed", "filler_watchdog", "filler_gap", "filler_gap_exceeded", "filler_answer_wait":
 		return true
 	}
@@ -160,7 +162,7 @@ func (a *App) GetInteractionFiller(operationID string, revision int) FillerSetup
 	// Repeated overrun／output failures disable this condition until recalibration．
 	failures := 0
 	for _, event := range group.Trace {
-		if event.Kind == "filler_gap_exceeded" || event.Kind == "filler_failed" || event.Kind == "filler_watchdog" {
+		if event.Kind == "filler_gap_exceeded" || event.Kind == "filler_failed" || event.Kind == "filler_watchdog" || event.Kind == "backchannel_failed" || event.Kind == "backchannel_watchdog" {
 			failures++
 		}
 	}

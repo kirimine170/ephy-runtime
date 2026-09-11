@@ -14,7 +14,7 @@ import threading
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from packages.speech_assets import read_private_json_file
-from scripts.filler.prepare import CANDIDATES
+from scripts.filler.prepare import CANDIDATES, candidate_kind
 
 
 def serve(bundle: Path, port: int) -> None:
@@ -53,7 +53,7 @@ def serve(bundle: Path, port: int) -> None:
             route = self.route()
             if route == "manifest":
                 with lock:
-                    public = [{"candidate": a["candidate"], "phrase": CANDIDATES[a["candidate"]], "file": a["file"],
+                    public = [{"candidate": a["candidate"], "kind": candidate_kind(a["candidate"]), "phrase": CANDIDATES[a["candidate"]], "file": a["file"],
                                "duration_ms": a["duration_ms"], "approved": a["approved"]} for a in manifest["assets"]]
                 return self.reply(200, json.dumps(public, ensure_ascii=False).encode())
             if route not in files:
