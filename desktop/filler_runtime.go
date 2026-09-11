@@ -54,7 +54,7 @@ func validFillerTrace(t FillerTrace) bool {
 		return false
 	}
 	switch t.Kind {
-	case "filler_started", "filler_ended", "filler_disabled", "filler_expired", "filler_suppressed_fast", "filler_stopped_answer", "filler_stopped_cancel", "filler_stopped_barge_in", "filler_stopped_invalidated", "filler_failed", "filler_watchdog", "filler_gap", "filler_gap_exceeded":
+	case "filler_started", "filler_ended", "filler_disabled", "filler_expired", "filler_suppressed_fast", "filler_stopped_answer", "filler_stopped_cancel", "filler_stopped_barge_in", "filler_stopped_invalidated", "filler_failed", "filler_watchdog", "filler_gap", "filler_gap_exceeded", "filler_answer_wait":
 		return true
 	}
 	return false

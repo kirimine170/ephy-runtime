@@ -50,13 +50,14 @@ $('start').onclick = async () => {
     t.controller.progress({llm_request_ms: 20, llm_first_ms: 900, tts_request_ms: 1100});
     t.controller.arm(origin); setStatus('応答を待っています．');
     const delay = {normal: 5000, fast: 500, preempt: 5000 - d - 150 + d / 2, gap: 7000}[$('scenario').value];
-    t.timer = setTimeout(() => {
+    t.timer = setTimeout(async () => {
       if (!current()) return;
-      t.controller.answerReady();
+      const boundary = t.controller.answerReady();
+      if (boundary) { setStatus('フィラーの終わりを待って，本文へ接続します．'); await boundary; }
       if (!current()) return;
       t.answer = context.createBufferSource(); t.answer.buffer = answer; t.answer.connect(context.destination);
       t.answer.onended = () => { if (current()) { stop(); setStatus('試験が完了しました．'); } };
-      t.answer.start(); setStatus('本文を再生中です．');
+      t.answer.start(); t.controller.answerStarted(); setStatus('本文を再生中です．');
     }, delay);
   } catch { if (current()) { stop(); setStatus('音声を準備できませんでした．'); } }
 };
