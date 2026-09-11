@@ -80,6 +80,11 @@ type playbackChunk struct {
 	waitingAt, startedAt time.Time
 }
 type interactionTurn struct {
+	fillerIdentityReady    bool
+	fillerSetupServed      bool
+	fillerSampleSaved      bool
+	fillerScope            string
+	fillerTraceCount       int
 	snapshot               InteractionSnapshot
 	request                VoiceTurnRequest
 	ctx                    context.Context
@@ -471,6 +476,7 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 			if !e.generationLiveLocked(t, revision, llmCtx) {
 				return
 			}
+			oldProvider, oldModel, oldConfig := t.request.Chat.ProviderID, t.request.Chat.ModelID, t.request.Chat.ConfigurationID
 			if interactionIdentifier.MatchString(provider) {
 				t.request.Chat.ProviderID = provider
 			}
@@ -480,6 +486,12 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 			if interactionIdentifier.MatchString(configuration) {
 				combined := sha256.Sum256([]byte(requestConfigurationID + "\x00" + configuration))
 				t.request.Chat.ConfigurationID = hex.EncodeToString(combined[:16])
+			}
+			if !t.fillerIdentityReady {
+				t.fillerIdentityReady = true
+				e.traceLocked(t, "llm_identity_ready", "")
+			} else if oldProvider != t.request.Chat.ProviderID || oldModel != t.request.Chat.ModelID || oldConfig != t.request.Chat.ConfigurationID {
+				e.traceLocked(t, "llm_identity_changed", "")
 			}
 		})
 		chat := func(segmentCtx context.Context, segmentReq ChatRequest, onToken func(string)) (*ChatResponse, error) {

@@ -1,3 +1,7 @@
+import {createTimingObserver} from './fillerTiming.js';
+import {createFillerController, createFillerPlayer} from './fillerController.js';
+import {startFillerBargeIn} from './fillerBargeIn.js';
+
 const TERMINAL = new Set(['COMPLETED', 'INCOMPLETE', 'CANCELED', 'FAILED']);
 const STATE_ORDER = ['IDLE', 'PREPARING', 'RECORDING', 'TRANSCRIBING', 'THINKING', 'SYNTHESIZING', 'PLAYING', 'CANCELING'];
 const STATUS = {
@@ -221,6 +225,8 @@ export function mountVoiceInteraction({
   timers = globalThis,
   encodeBase64 = toBase64,
   decodeBase64 = fromBase64,
+  now = () => performance.now(),
+  startBargeIn = startFillerBargeIn,
 } = {}) {
   const record = root?.querySelector('#voice-record');
   const cancelButton = root?.querySelector('#voice-cancel');
@@ -231,6 +237,51 @@ export function mountVoiceInteraction({
   const revisableTranscript = root?.querySelector('#voice-transcript-revisable');
   let current = null;
   let disposed = false;
+  let nextFiller = 0;
+
+  function stopFiller(run, reason = 'invalidated') {
+    run.filler?.cancel(reason);
+    run.bargeIn?.stop(); run.bargeIn = null;
+  }
+  function recordFillerSample(run) {
+    if (!run.fillerSample || !run.fillerSetupDone || !attached(run)) return;
+    const sample = run.fillerSample; run.fillerSample = null;
+    try { Promise.resolve(bridge.RecordInteractionFillerTiming?.(run.snapshot.operation_id,
+      run.snapshot.generation_revision || 1, sample)).catch(() => {}); } catch { /* Optional telemetry． */ }
+  }
+  async function prepareFiller(run) {
+    if (run.fillerAttempted || (run.snapshot.generation_revision || 1) !== 1 || typeof bridge.GetInteractionFiller !== 'function') return;
+    run.fillerAttempted = true;
+    try {
+      const setup = await bridge.GetInteractionFiller(run.snapshot.operation_id, 1);
+      if (!attached(run)) return;
+      run.fillerSetupDone = true; recordFillerSample(run);
+      if (setup?.enabled !== true || run.fillerInvalidated || run.bodyVisible || run.bodyReady || !Array.isArray(setup.assets) || !setup.assets.length || setup.assets.length > 2
+          || !Array.isArray(setup.samples) || setup.samples.length > 200 || !await run.contextReady) return;
+      const asset = setup.assets[nextFiller++ % setup.assets.length];
+      if (asset.kind !== 'hesitation' || typeof asset.audio_base64 !== 'string' || asset.audio_base64.length > 210000
+          || !Number.isFinite(asset.duration_ms) || asset.duration_ms < 150 || asset.duration_ms > 1500) return;
+      const buffer = await run.context.decodeAudioData(decodeBase64(asset.audio_base64));
+      if (!attached(run) || run.bodyVisible || run.bodyReady || !Number.isFinite(buffer.duration) || Math.abs(buffer.duration * 1000 - asset.duration_ms) > 2) return;
+      const available = () => attached(run) && !run.fillerInvalidated && !run.bodyReady && !run.bodyVisible;
+      const monitor = await startBargeIn({context: run.context, mediaDevices, isCurrent: () => attached(run) && !run.bodyReady,
+        onSpeech: () => { if (!attached(run)) return; stopFiller(run, 'barge_in'); void cancel(); },
+        onUnavailable: () => { run.fillerInvalidated = true; stopFiller(run); }});
+      if (!monitor) return;
+      if (!available()) { monitor.stop(); return; }
+      run.bargeIn = monitor;
+      render();
+      const player = createFillerPlayer(run.context, buffer);
+      run.filler = createFillerController({samples: setup.samples, durationMS: asset.duration_ms, ledger: run.fillerLedger,
+        play: player.play, stop: player.stop, isCurrent: available, now, timers,
+        onUnsafeStop: () => { void fail(run, 'playback_failed'); },
+        onTrace: event => {
+          try { Promise.resolve(bridge.RecordInteractionFillerTrace?.(run.snapshot.operation_id, 1, event)).catch(() => {}); } catch { /* Optional telemetry． */ }
+        }});
+      run.filler.progress(run.timing.marks);
+      if (run.timing.origin !== null) run.filler.arm(run.timing.origin);
+    } catch { /* Missing or failed filler setup cannot fail the answer． */ }
+  }
 
   function active(run = current) {
     return !disposed && run === current && !!run && !run.finished;
@@ -269,6 +320,7 @@ export function mountVoiceInteraction({
         : current?.asrOpenPending && !current.cancelRequested
           ? '音声認識を開始しています．必要な場合は音声認識の許可を確認してください．'
           : voiceStatusText(current?.snapshot);
+      if (current?.bargeIn && live(current)) status.textContent += ' ヘッドホン用の割込み検出中です．';
     }
     if (fallback) {
       fallback.hidden = !['FAILED', 'INCOMPLETE'].includes(current?.snapshot.state) || !current.snapshot.transcript;
@@ -296,6 +348,7 @@ export function mountVoiceInteraction({
   }
 
   function stopPlayback(run) {
+    stopFiller(run, run.cancelRequested ? 'cancel' : 'invalidated');
     run.playbackEpoch += 1;
     if (run.playing) {
       const source = run.playing.source;
@@ -409,6 +462,9 @@ export function mountVoiceInteraction({
       streaming: preparing,
       operationRequested: !preparing,
       readinessState: '',
+      timing: createTimingObserver(now), fillerLedger: {used: false}, filler: null, bargeIn: null,
+      fillerAttempted: false, fillerSetupDone: false, fillerSample: null, bodyVisible: false, bodyReady: false,
+      fillerInvalidated: false,
     };
     run.resolveIdentity = ready;
     current = run;
@@ -665,6 +721,14 @@ export function mountVoiceInteraction({
       item.bytes = null;
       if (!live(run) || epoch !== run.playbackEpoch) return;
       if (!await run.contextReady || !live(run) || epoch !== run.playbackEpoch) return;
+      // Body owns the output immediately after decode．No filler ACK，natural
+      // ending or network trip is allowed between this mute and source.start．
+      if (!run.bodyReady) {
+        run.filler?.answerReady(); run.bargeIn?.stop(); run.bargeIn = null;
+        if (!live(run) || epoch !== run.playbackEpoch) return;
+        run.bodyReady = true;
+        run.fillerSample = run.timing.ready(); recordFillerSample(run);
+      }
       const source = run.context.createBufferSource();
       source.buffer = decoded;
       source.connect(run.context.destination);
@@ -776,7 +840,7 @@ export function mountVoiceInteraction({
   function receive(event) {
     const run = current;
     if (!active(run) || !event || typeof event !== 'object'
-      || !['state', 'transcript', 'token', 'output', 'audio', 'asr_update'].includes(event.kind)) return;
+      || !['state', 'transcript', 'token', 'output', 'audio', 'asr_update', 'trace'].includes(event.kind)) return;
     if (!run.snapshot.operation_id) {
       // Open starts only after Start has supplied the current identity．An
       // earlier ASR callback therefore belongs to another operation．
@@ -796,6 +860,13 @@ export function mountVoiceInteraction({
     if (!attached(run) && !run.cancelRequested) return;
     if (event.kind === 'state') applySnapshot(run, event.snapshot);
     if (!live(run)) return;
+    if (event.kind === 'trace') {
+      if (event.trace?.name === 'llm_identity_changed') { run.fillerInvalidated = true; stopFiller(run); }
+      run.timing.trace(event.trace);
+      run.filler?.progress(run.timing.marks);
+      if (event.trace?.name === 'llm_identity_ready') void prepareFiller(run);
+      return;
+    }
     if (event.kind === 'asr_update') {
       if (event.session_id !== run.snapshot.session_id || event.turn_id !== run.snapshot.turn_id) return;
       receiveASR(run, event.asr);
@@ -807,7 +878,10 @@ export function mountVoiceInteraction({
       run.liveTranscript = run.stablePrefix = '';
       render();
     }
-    else if (event.kind === 'token' && typeof event.text === 'string') onToken(run.snapshot, event.text);
+    else if (event.kind === 'token' && typeof event.text === 'string') {
+      if (event.text) { run.bodyVisible = true; run.filler?.answerVisible(); }
+      onToken(run.snapshot, event.text);
+    }
     else if (event.kind === 'output') {
       const snapshot = event.snapshot;
       if (!snapshot || snapshot.operation_id !== run.snapshot.operation_id
@@ -817,6 +891,7 @@ export function mountVoiceInteraction({
       // Output may arrive while a confirmed unit is playing．It does not move
       // the playback state backwards，but replaces the confirmed document．
       run.snapshot = {...run.snapshot, response_plan: snapshot.response_plan, generation: snapshot.generation};
+      if (snapshot.response_plan?.text) { run.bodyVisible = true; run.filler?.answerVisible(); }
       onOutput(run.snapshot);
     }
     else if (event.kind === 'audio') enqueue(run, event);
@@ -833,6 +908,10 @@ export function mountVoiceInteraction({
   }
 
   const onRecord = () => { void (current?.recording ? stop() : start()); };
+  const onDeviceChange = () => {
+    if (current && active()) { current.fillerInvalidated = true; stopFiller(current); }
+  };
+  mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
   const onCancelClick = () => { void cancel(); };
   const onFallbackClick = () => { if (['FAILED', 'INCOMPLETE'].includes(current?.snapshot.state)) onFallback(current.snapshot); };
   record?.addEventListener('click', onRecord);
@@ -845,6 +924,7 @@ export function mountVoiceInteraction({
     isActive: () => active(),
     get lastSnapshot() { return current?.snapshot || null; },
     async dispose() {
+      mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
       record?.removeEventListener('click', onRecord);
       cancelButton?.removeEventListener('click', onCancelClick);
       fallback?.removeEventListener('click', onFallbackClick);

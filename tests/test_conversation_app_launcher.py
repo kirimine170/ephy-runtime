@@ -6,12 +6,34 @@ import subprocess
 import pytest
 
 
-def _copy_launch_scripts(scripts: Path) -> Path:
+def _copy_launch_scripts(scripts: Path, platform="Linux") -> Path:
     source_scripts = Path(__file__).parents[1] / "scripts"
     launcher = scripts / "start_conversation_app.sh"
-    shutil.copyfile(source_scripts / launcher.name, launcher)
+    # Scratch shell executables are not registered macOS apps．Select the
+    # launcher branch deterministically instead of invoking real LaunchServices．
+    launcher.write_text((source_scripts / launcher.name).read_text().replace('$(uname -s)', platform))
     shutil.copyfile(source_scripts / "_karte_runtime.sh", scripts / "_karte_runtime.sh")
     return launcher
+
+
+def test_macos_launcher_passes_filler_configuration_without_losing_spaces(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    launcher = _copy_launch_scripts(scripts, platform="Darwin")
+    binary = tmp_path / "desktop/build/bin/ephy-runtime.app/Contents/MacOS/ephy-runtime"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/bash\nexit 0\n"); binary.chmod(0o700)
+    commands = tmp_path / "commands"; commands.mkdir()
+    opener = commands / "open"
+    opener.write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n'); opener.chmod(0o700)
+    env = {"PATH": str(commands) + ":" + os.environ.get("PATH", os.defpath), "EPHY_START_KARTE": "0"}
+    for extras in ({}, {"EPHY_FILLER_BUNDLE": "/private/voice with spaces", "EPHY_FILLER_CONDITION": "warm headset", "EPHY_FILLER_SHADOW": "1"}):
+        result = subprocess.run(["bash", str(launcher), "argument with spaces"], env={**env, **extras}, capture_output=True, text=True, check=True)
+        arguments = result.stdout.splitlines()
+        assert arguments[:4] == ["-W", "-n", "--env", "EPHY_START_CONVERSATION=1"]
+        assert arguments[-2:] == ["--args", "argument with spaces"]
+        for name, value in extras.items():
+            assert name + "=" + value in arguments
 
 
 def test_packaged_launcher_preserves_root_environment_and_arguments(tmp_path):

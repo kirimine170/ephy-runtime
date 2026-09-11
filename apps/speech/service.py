@@ -7,6 +7,7 @@ import base64
 import importlib.util
 import io
 import hmac
+import hashlib
 import ipaddress
 import os
 import re
@@ -46,6 +47,18 @@ def provider_config(config: dict[str, Any], provider: str) -> dict[str, Any]:
 
 def encode_frame(value: dict[str, Any]) -> bytes:
     return (json.dumps(value, ensure_ascii=True, separators=(",", ":"), allow_nan=False) + "\n").encode()
+
+
+def synthesis_config_digest(config: dict[str, Any], provider: str) -> str:
+    """Pin synthesis controls without exposing local paths or credentials．"""
+    try:
+        value = provider_config(config, provider)
+    except SpeechError:
+        return ""  # Synthetic／legacy catalogs cannot enable filler assets．
+    keys = ("source_revision", "model_revision", "codec_revision", "silentcipher_revision",
+            "device", "precision", "dtype", "seed", "num_steps", "cfg", "output_budget")
+    public = {key: value[key] for key in keys if key in value}
+    return hashlib.sha256(json.dumps(public, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
 def validate_wav(body: bytes) -> None:
@@ -205,6 +218,8 @@ class SpeechService:
                                    for provider in {p.get("provider") for p in raw_profiles if isinstance(p, dict)}}
         self.profiles = {p["voice_profile_id"]: public_profile(
             p, available=self.provider_available.get(p.get("provider"), False)) for p in raw_profiles}
+        for profile in self.profiles.values():
+            profile["synthesis_config_digest"] = synthesis_config_digest(self.config, profile["provider"])
         if len(self.profiles) != len(raw_profiles):
             raise SpeechError("invalid_speech_text")
         default = self.config.get("default_profile_id", "")
@@ -255,6 +270,8 @@ class SpeechService:
             raise SpeechError("tts_unavailable")
         if any(profile[key] != getattr(request, key) for key in (
                 "model_revision", "clone_prompt_digest", "reference_group_digest")):
+            raise SpeechError("voice_profile_changed")
+        if request.synthesis_config_digest and request.synthesis_config_digest != profile["synthesis_config_digest"]:
             raise SpeechError("voice_profile_changed")
         validate_style_for_capabilities(request, profile["capabilities"])
         return profile

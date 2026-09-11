@@ -70,6 +70,8 @@ export function GetInteraction(arg1:string):Promise<main.InteractionSnapshot>;
 
 export function GetInteractionASRReadiness():Promise<main.VoiceReadiness>;
 
+export function GetInteractionFiller(arg1:string,arg2:number):Promise<main.FillerSetup>;
+
 export function GetInteractionTrace(arg1:string):Promise<Array<main.InteractionTraceEvent>>;
 
 export function GetKarteProposalStatus(arg1:string):Promise<main.KarteConversationStatusResponse>;
@@ -125,6 +127,10 @@ export function ReadExportedResult(arg1:main.ExportedFileRequest):Promise<main.E
 export function RecordExecution(arg1:main.ExecutionHistoryItem):Promise<Array<main.ExecutionHistoryItem>>;
 
 export function RecordInteractionFeedback(arg1:string):Promise<main.InteractionEvaluationRecord>;
+
+export function RecordInteractionFillerTiming(arg1:string,arg2:number,arg3:main.FillerTiming):Promise<void>;
+
+export function RecordInteractionFillerTrace(arg1:string,arg2:number,arg3:main.FillerTrace):Promise<void>;
 
 export function ReloadGatewayConfig():Promise<main.ReloadConfigResponse>;
 

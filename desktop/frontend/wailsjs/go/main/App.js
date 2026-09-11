@@ -138,6 +138,10 @@ export function GetInteractionASRReadiness() {
   return window['go']['main']['App']['GetInteractionASRReadiness']();
 }
 
+export function GetInteractionFiller(arg1, arg2) {
+  return window['go']['main']['App']['GetInteractionFiller'](arg1, arg2);
+}
+
 export function GetInteractionTrace(arg1) {
   return window['go']['main']['App']['GetInteractionTrace'](arg1);
 }
@@ -248,6 +252,14 @@ export function RecordExecution(arg1) {
 
 export function RecordInteractionFeedback(arg1) {
   return window['go']['main']['App']['RecordInteractionFeedback'](arg1);
+}
+
+export function RecordInteractionFillerTiming(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RecordInteractionFillerTiming'](arg1, arg2, arg3);
+}
+
+export function RecordInteractionFillerTrace(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RecordInteractionFillerTrace'](arg1, arg2, arg3);
 }
 
 export function ReloadGatewayConfig() {

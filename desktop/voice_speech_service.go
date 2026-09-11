@@ -219,11 +219,12 @@ func (p *ServiceVoiceTTS) streamPhrase(ctx context.Context, request SpeechReques
 	id := interactionID("speech_")
 	payload := struct {
 		SpeechRequest
-		RequestID            string `json:"request_id"`
-		ModelRevision        string `json:"model_revision"`
-		ClonePromptDigest    string `json:"clone_prompt_digest"`
-		ReferenceGroupDigest string `json:"reference_group_digest"`
-	}{request, id, p.profile.ModelRevision, p.profile.ClonePromptDigest, p.profile.ReferenceGroupDigest}
+		RequestID             string `json:"request_id"`
+		ModelRevision         string `json:"model_revision"`
+		ClonePromptDigest     string `json:"clone_prompt_digest"`
+		ReferenceGroupDigest  string `json:"reference_group_digest"`
+		SynthesisConfigDigest string `json:"synthesis_config_digest,omitempty"`
+	}{request, id, p.profile.ModelRevision, p.profile.ClonePromptDigest, p.profile.ReferenceGroupDigest, p.profile.SynthesisConfigDigest}
 	body, _ := json.Marshal(payload)
 	res, err := p.client.request(ctx, http.MethodPost, "/v1/speech", body)
 	if err != nil {

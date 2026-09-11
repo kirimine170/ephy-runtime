@@ -484,6 +484,98 @@ export namespace main {
 	        this.content = source["content"];
 	    }
 	}
+	export class FillerAudio {
+	    kind: string;
+	    audio_base64: string;
+	    duration_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new FillerAudio(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.audio_base64 = source["audio_base64"];
+	        this.duration_ms = source["duration_ms"];
+	    }
+	}
+	export class FillerTiming {
+	    llm_request_ms: number;
+	    llm_first_ms: number;
+	    tts_request_ms: number;
+	    tts_chunk_ms: number;
+	    answer_ready_ms: number;
+	    llm_ttft_ms: number;
+	    tts_latency_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new FillerTiming(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.llm_request_ms = source["llm_request_ms"];
+	        this.llm_first_ms = source["llm_first_ms"];
+	        this.tts_request_ms = source["tts_request_ms"];
+	        this.tts_chunk_ms = source["tts_chunk_ms"];
+	        this.answer_ready_ms = source["answer_ready_ms"];
+	        this.llm_ttft_ms = source["llm_ttft_ms"];
+	        this.tts_latency_ms = source["tts_latency_ms"];
+	    }
+	}
+	export class FillerSetup {
+	    enabled: boolean;
+	    status: string;
+	    samples: FillerTiming[];
+	    assets: FillerAudio[];
+
+	    static createFrom(source: any = {}) {
+	        return new FillerSetup(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.status = source["status"];
+	        this.samples = this.convertValues(source["samples"], FillerTiming);
+	        this.assets = this.convertValues(source["assets"], FillerAudio);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+	export class FillerTrace {
+	    kind: string;
+	    latency_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new FillerTrace(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.latency_ms = source["latency_ms"];
+	    }
+	}
+
 	export class GenerationLimits {
 	    segment_tokens: number;
 	    max_segments: number;
@@ -2346,6 +2438,7 @@ export namespace main {
 	    language: string;
 	    clone_prompt_digest: string;
 	    reference_group_digest: string;
+	    synthesis_config_digest?: string;
 	    provenance_id: string;
 	    default_style: SpeechStyle;
 	    capabilities: VoiceCapabilities;
@@ -2365,6 +2458,7 @@ export namespace main {
 	        this.language = source["language"];
 	        this.clone_prompt_digest = source["clone_prompt_digest"];
 	        this.reference_group_digest = source["reference_group_digest"];
+	        this.synthesis_config_digest = source["synthesis_config_digest"];
 	        this.provenance_id = source["provenance_id"];
 	        this.default_style = this.convertValues(source["default_style"], SpeechStyle);
 	        this.capabilities = this.convertValues(source["capabilities"], VoiceCapabilities);
