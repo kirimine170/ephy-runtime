@@ -19,28 +19,42 @@ test('fast body arrival cancels timers without playing and cannot be rearmed', (
   r.advance(1000); r.controller.answerReady(); r.advance(5000); queued.forEach(c => c.fn()); r.controller.arm(0);
   assert.deepEqual(r.events, []); assert.equal(r.controller.state, 'CLOSED');
 });
-test('answer preempts filler synchronously without waiting for an ACK or natural ending', () => {
+test('early answer waits for the whole clip without stopping it or adding a gap', async () => {
   const r = rig(); r.arm(); r.advance(4150); assert.deepEqual(r.events, ['play']);
-  r.controller.answerReady(); assert.deepEqual(r.events, ['play', 'stop']);
-  r.end(); r.advance(6000); assert.equal(r.controller.state, 'CLOSED');
+  r.advance(4350);
+  const boundary = r.controller.answerReady(); let released = false;
+  boundary.then(() => { released = true; });
+  assert.equal(r.controller.answerReady(), boundary);
+  await Promise.resolve(); assert.equal(released, false);
+  assert.deepEqual(r.events, ['play']);
+  r.advance(4850); r.end(); await boundary; r.controller.answerStarted();
+  assert.equal(released, true);
+  assert.deepEqual(r.events, ['play']);
+  assert.equal(r.trace.find(t => t.kind === 'filler_answer_wait').latency_ms, 500);
+  assert.equal(r.trace.find(t => t.kind === 'filler_gap').latency_ms, 0);
+  r.advance(6000); assert.equal(r.controller.state, 'CLOSED');
   assert.equal(r.ledger.used, true);
 });
-test('cancel，barge-in，old callbacks and continuation never create a second filler', () => {
+test('cancel，barge-in，old callbacks and continuation never create a second filler', async () => {
   for (const reason of ['cancel', 'barge_in', 'invalidated']) {
-    const r = rig(); r.arm(); r.advance(4150); r.controller.cancel(reason); r.end(); r.advance(6000);
+    const r = rig(); r.arm(); r.advance(4150);
+    const boundary = r.controller.answerReady();
+    r.controller.cancel(reason); await boundary; r.end(); r.advance(6000);
     assert.deepEqual(r.events, ['play', 'stop']);
     const next = rig(r.ledger); next.arm(); next.advance(4150); assert.deepEqual(next.events, []);
     assert.ok(r.trace.every(t => Object.keys(t).sort().join() === 'kind,latency_ms'));
   }
   const stale = rig(); stale.arm(); stale.invalidate(); stale.advance(4150); assert.deepEqual(stale.events, []);
 });
-test('natural end does not repeat；gap overrun is visible and watchdog halts stuck source', () => {
+test('natural end does not repeat；gap overrun is visible and watchdog releases waiting body', async () => {
   const r = rig(); r.arm(); r.advance(4150); r.advance(4850); r.end();
-  r.advance(5300); r.controller.answerReady();
+  r.advance(5300); r.controller.answerReady(); r.controller.answerStarted();
   assert.equal(r.trace.find(t => t.kind === 'filler_gap_exceeded').latency_ms, 450);
   assert.deepEqual(r.events, ['play']);
-  const stuck = rig(); stuck.arm(); stuck.advance(4150); stuck.advance(5000);
+  const stuck = rig(); stuck.arm(); stuck.advance(4150);
+  const boundary = stuck.controller.answerReady(); stuck.advance(5000); await boundary;
   assert.deepEqual(stuck.events, ['play', 'stop']);
+  assert.equal(stuck.trace.at(-1).kind, 'filler_watchdog');
 });
 test('player silences gain before stopping source and disconnects failed source', () => {
   const actions = []; let source;

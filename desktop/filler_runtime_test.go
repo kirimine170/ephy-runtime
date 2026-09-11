@@ -66,6 +66,9 @@ func TestFillerTelemetryIsBoundedPrivateAndDoesNotMutateConversation(t *testing.
 		t.Fatal(err)
 	}
 	a.RecordInteractionFillerTiming(op, 1, sample)
+	if err := a.RecordInteractionFillerTrace(op, 1, FillerTrace{"filler_answer_wait", 620}); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 300; i++ {
 		a.RecordInteractionFillerTrace(op, 1, FillerTrace{"filler_started", 3610})
 	}
@@ -81,6 +84,9 @@ func TestFillerTelemetryIsBoundedPrivateAndDoesNotMutateConversation(t *testing.
 	}
 	store := a.interaction.readFillerStoreLocked()
 	group := store.Groups[turn.fillerScope]
+	if group.Trace[0].Kind != "filler_answer_wait" || group.Trace[0].LatencyMS != 620 {
+		t.Fatal("answer wait timing was not retained")
+	}
 	if len(group.Samples) != 1 || group.Samples[0].LLMttftMS != 880 || group.Samples[0].TTSLatencyMS != 3870 || len(group.Trace) != 12 {
 		t.Fatalf("unbounded or fabricated timings: %+v", group)
 	}

@@ -264,7 +264,7 @@ export function mountVoiceInteraction({
       const buffer = await run.context.decodeAudioData(decodeBase64(asset.audio_base64));
       if (!attached(run) || run.bodyVisible || run.bodyReady || !Number.isFinite(buffer.duration) || Math.abs(buffer.duration * 1000 - asset.duration_ms) > 2) return;
       const available = () => attached(run) && !run.fillerInvalidated && !run.bodyReady && !run.bodyVisible;
-      const monitor = await startBargeIn({context: run.context, mediaDevices, isCurrent: () => attached(run) && !run.bodyReady,
+      const monitor = await startBargeIn({context: run.context, mediaDevices, isCurrent: () => attached(run) && !run.bodyStarted,
         onSpeech: () => { if (!attached(run)) return; stopFiller(run, 'barge_in'); void cancel(); },
         onUnavailable: () => { run.fillerInvalidated = true; stopFiller(run); }});
       if (!monitor) return;
@@ -463,7 +463,7 @@ export function mountVoiceInteraction({
       operationRequested: !preparing,
       readinessState: '',
       timing: createTimingObserver(now), fillerLedger: {used: false}, filler: null, bargeIn: null,
-      fillerAttempted: false, fillerSetupDone: false, fillerSample: null, bodyVisible: false, bodyReady: false,
+      fillerAttempted: false, fillerSetupDone: false, fillerSample: null, bodyVisible: false, bodyReady: false, bodyStarted: false,
       fillerInvalidated: false,
     };
     run.resolveIdentity = ready;
@@ -721,13 +721,15 @@ export function mountVoiceInteraction({
       item.bytes = null;
       if (!live(run) || epoch !== run.playbackEpoch) return;
       if (!await run.contextReady || !live(run) || epoch !== run.playbackEpoch) return;
-      // Body owns the output immediately after decode．No filler ACK，natural
-      // ending or network trip is allowed between this mute and source.start．
+      // Measure readiness before waiting，so calibration cannot learn the delay
+      // introduced by finishing a filler．Keep the microphone active until then．
       if (!run.bodyReady) {
-        run.filler?.answerReady(); run.bargeIn?.stop(); run.bargeIn = null;
-        if (!live(run) || epoch !== run.playbackEpoch) return;
         run.bodyReady = true;
         run.fillerSample = run.timing.ready(); recordFillerSample(run);
+        const boundary = run.filler?.answerReady();
+        if (boundary) await boundary;
+        if (!live(run) || epoch !== run.playbackEpoch) return;
+        run.bargeIn?.stop(); run.bargeIn = null;
       }
       const source = run.context.createBufferSource();
       source.buffer = decoded;
@@ -753,6 +755,8 @@ export function mountVoiceInteraction({
         })();
       };
       source.start();
+      run.bodyStarted = true;
+      run.filler?.answerStarted();
       item.started = Promise.resolve(bridge.InteractionPlayback(run.snapshot.operation_id, item.sequence, 'started'));
       await item.started;
     } catch {

@@ -23,9 +23,11 @@ const fillerSetup = () => ({enabled: true, assets: [{kind: 'hesitation', audio_b
   samples: Array.from({length: 100}, () => ({llm_request_ms: 20, llm_first_ms: 900, tts_request_ms: 1100,
     tts_chunk_ms: 4970, answer_ready_ms: 5000, llm_ttft_ms: 880, tts_latency_ms: 3870}))});
 
-test('real interaction trace lifecycle arms filler and body preempts its separate audio handle', async () => {
-  let time = 0; const telemetry = [], samples = [];
-  const h = harness({now: () => time, startBargeIn: async () => ({stop() {}}),
+test('body waits for filler end with microphone active and readiness measured before the wait', async () => {
+  let time = 0, monitor, monitoring = false; const telemetry = [], samples = [];
+  const h = harness({now: () => time, startBargeIn: async options => {
+    monitor = options; monitoring = true; return {stop() { monitoring = false; }};
+  },
     bridge: {GetInteractionFiller: async () => fillerSetup(), RecordInteractionFillerTrace: async (...a) => telemetry.push(a),
       RecordInteractionFillerTiming: async (...a) => samples.push(a)}});
   await h.controller.adopt(snapshot(1, 'THINKING'));
@@ -38,16 +40,54 @@ test('real interaction trace lifecycle arms filler and body preempts its separat
   for (const item of [...h.timeouts.values()]) item.callback();
   assert.equal(h.contexts[0].sources.length, 1);
   const filler = h.contexts[0].sources[0]; assert.equal(filler.started, true);
-  trace('tts_first_chunk', 4970); time = 5000; h.audio(1, 1);
+  trace('tts_first_chunk', 4000); time = 4050; h.audio(1, 1);
   await tick();
-  assert.equal(filler.stopped, true);
-  assert.equal(h.contexts[0].sources[1].started, true);
+  assert.equal(filler.stopped, false);
+  assert.equal(h.contexts[0].sources.length, 1);
+  assert.equal(monitoring && monitor.isCurrent(), true);
+  assert.deepEqual(h.calls.playback, []);
   assert.equal(samples.length, 1);
-  assert.equal(samples[0][2].answer_ready_ms, 5000);
+  assert.equal(samples[0][2].answer_ready_ms, 4050);
+  time = 4850; filler.end(); await tick();
+  assert.equal(h.contexts[0].sources[1].started, true);
+  assert.equal(monitoring, false);
+  assert.equal(telemetry.find(e => e[2].kind === 'filler_answer_wait')[2].latency_ms, 800);
+  assert.equal(telemetry.find(e => e[2].kind === 'filler_gap')[2].latency_ms, 0);
   assert.deepEqual(h.calls.output, []); assert.deepEqual(h.calls.token, []); assert.deepEqual(h.calls.transcript, []);
   assert.equal(telemetry[0][2].kind, 'filler_started');
   assert.ok(telemetry.every(e => Object.keys(e[2]).sort().join() === 'kind,latency_ms'));
   await h.controller.cancel();
+});
+
+test('cancel and microphone barge-in stop filler immediately and discard the waiting body', async () => {
+  for (const reason of ['cancel', 'barge_in']) {
+    let time = 0, monitor, stopped = false;
+    const h = harness({now: () => time, startBargeIn: async options => {
+      monitor = options; return {stop() { stopped = true; }};
+    }, bridge: {GetInteractionFiller: async () => fillerSetup()}});
+    await h.controller.adopt(snapshot(1, 'THINKING'));
+    h.contexts[0].decode = async () => ({duration: 1});
+    const trace = (name, at) => { time = at; h.event(1, 'trace', {trace: {name, monotonic_ms: at}}); };
+    trace('endpoint_commit', 0); trace('llm_requested', 20); trace('llm_identity_ready', 30);
+    await tick(); await tick();
+    trace('llm_first_token', 900); trace('tts_requested', 1100);
+    time = 3850; for (const item of [...h.timeouts.values()]) item.callback();
+    const context = h.contexts[0], filler = context.sources[0], lateEnd = filler.onended;
+    time = 4050; h.audio(1, 1); await tick();
+    assert.equal(monitor.isCurrent(), true);
+    if (reason === 'barge_in') monitor.onSpeech();
+    else void h.controller.cancel();
+    assert.equal(filler.stopped, true);
+    assert.equal(stopped, true);
+    lateEnd(); await tick(); await tick();
+    assert.equal(context.sources.length, 1);
+    assert.deepEqual(h.calls.playback, []);
+    assert.deepEqual(h.calls.cancel, ['op-1']);
+    await h.controller.adopt(snapshot(2, 'THINKING'));
+    lateEnd(); h.audio(1, 2); await tick();
+    assert.equal(h.contexts[1].sources.length, 0);
+    await h.controller.cancel();
+  }
 });
 
 test('late filler setup cannot open microphone or play after body arrival or cancellation', async () => {

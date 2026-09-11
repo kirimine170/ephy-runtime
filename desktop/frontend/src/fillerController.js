@@ -2,13 +2,15 @@ import {predictFiller} from './fillerTiming.js';
 
 export const FILLER_TRACE_KINDS = new Set(['filler_started', 'filler_ended', 'filler_disabled', 'filler_expired',
   'filler_suppressed_fast', 'filler_stopped_answer', 'filler_stopped_cancel', 'filler_stopped_barge_in',
-  'filler_stopped_invalidated', 'filler_failed', 'filler_watchdog', 'filler_gap', 'filler_gap_exceeded']);
+  'filler_stopped_invalidated', 'filler_failed', 'filler_watchdog', 'filler_gap', 'filler_gap_exceeded', 'filler_answer_wait']);
 
 // The lifetime is one user turn，not one generation attempt．Ports are synchronous
 // because assets must already be decoded before arming．No speech text is accepted．
 export function createFillerController({samples, durationMS, ledger, play, stop, isCurrent,
   now = () => performance.now(), timers = globalThis, onTrace = () => {}, onUnsafeStop = () => {}}) {
   let state = 'DISABLED', origin = null, timer = null, epoch = 0, started = null, ended = null, marks = {};
+  let answerGate = null, releaseAnswer = null, answerPreparedAt = null;
+  const release = () => { const done = releaseAnswer; releaseAnswer = null; done?.(); };
   const emit = (kind, latency) => {
     if (FILLER_TRACE_KINDS.has(kind)) {
       try { onTrace({kind, latency_ms: Math.max(0, Math.round(latency || 0))}); } catch { /* Telemetry cannot block audio． */ }
@@ -23,6 +25,8 @@ export function createFillerController({samples, durationMS, ledger, play, stop,
     if (previous === 'PLAYING') { try { stop(); } catch { onUnsafeStop(); } }
     if (previous === 'PLAYING') emit(kind, now() - started);
     else if (previous === 'ARMED') emit(kind === 'filler_stopped_answer' ? 'filler_suppressed_fast' : kind, now() - origin);
+    // Cancel also wakes a waiting caller，which must recheck its turn fence．
+    release();
   }
   function schedule(delay) {
     clear();
@@ -50,6 +54,11 @@ export function createFillerController({samples, durationMS, ledger, play, stop,
       play(() => {
         if (version !== epoch || state !== 'PLAYING') return;
         ended = now(); clear(); state = 'SPENT'; emit('filler_ended', ended - started);
+        if (releaseAnswer) {
+          state = 'CLOSED';
+          emit('filler_answer_wait', ended - answerPreparedAt);
+          release();
+        }
       });
       emit('filler_started', started - origin);
       timer = timers.setTimeout(() => {
@@ -68,11 +77,21 @@ export function createFillerController({samples, durationMS, ledger, play, stop,
     // Displayed text suppresses new fillers but never cuts a playing clip．
     answerVisible() { if (state === 'ARMED' || state === 'DISABLED') close('filler_stopped_answer'); },
     answerReady() {
+      if (answerGate) return answerGate;
+      if (state === 'PLAYING') {
+        // The entire approved clip is the phrase boundary．Keep its watchdog
+        // and barge-in live while holding only the first decoded body chunk．
+        answerPreparedAt = now();
+        answerGate = new Promise(resolve => { releaseAnswer = resolve; });
+        return answerGate;
+      }
+      close('filler_stopped_answer');
+    },
+    answerStarted() {
       if (ended !== null) {
         const gap = now() - ended;
         emit(gap > 300 ? 'filler_gap_exceeded' : 'filler_gap', gap); ended = null;
       }
-      close('filler_stopped_answer');
     },
     cancel(reason = 'cancel') { close(reason === 'barge_in' ? 'filler_stopped_barge_in' : reason === 'cancel' ? 'filler_stopped_cancel' : 'filler_stopped_invalidated'); },
   };
