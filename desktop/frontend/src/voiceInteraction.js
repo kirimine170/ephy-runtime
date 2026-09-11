@@ -351,7 +351,7 @@ export function mountVoiceInteraction({
     if (status) {
       status.setAttribute('role', 'status');
       status.setAttribute('aria-live', 'polite');
-      status.textContent = handoff ? '割込みを受け止める短い応答を再生中です．' : current?.permissionPending && !current.cancelRequested
+      status.textContent = handoff ? '短い返しで，話を譲ります．' : current?.permissionPending && !current.cancelRequested
         ? 'マイクの許可を確認しています．'
         : current?.asrOpenPending && !current.cancelRequested
           ? '音声認識を開始しています．必要な場合は音声認識の許可を確認してください．'

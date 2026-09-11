@@ -126,35 +126,44 @@ export function createFillerPlayer(context, buffer) {
 // Ownership of the already-running context transfers from the canceled turn．
 export function createFillerBackchannel({context, buffer, isCurrent, now = () => performance.now(),
   timers = globalThis, onTrace = () => {}, onEnd = () => {}}) {
-  let state = 'READY', timer = null, started = 0;
+  let state = 'READY', timer = null, started = 0, detected = 0;
   const player = createFillerPlayer(context, buffer);
   const emit = (kind, latency) => { try { onTrace({kind, latency_ms: Math.max(0, Math.round(latency))}); } catch {} };
   const finish = kind => {
     if (state === 'CLOSED') return;
-    const playing = state === 'PLAYING'; state = 'CLOSED';
+    const playing = state === 'PLAYING', owned = state !== 'READY'; state = 'CLOSED';
     if (timer !== null) timers.clearTimeout(timer);
     try { player.stop(); } catch { /* Closing the owned context is the final mute． */ }
-    if (playing) emit(kind, now() - started);
+    if (owned) emit(kind, now() - (playing ? started : detected));
     // An unused preparation shares the answer context and must not close it．
-    if (playing) { try { Promise.resolve(context.close()).catch(() => {}); } catch {} }
+    if (owned) { try { Promise.resolve(context.close()).catch(() => {}); } catch {} }
     onEnd();
   };
   const guard = () => {
-    if (state !== 'PLAYING') return;
+    if (state !== 'WAITING' && state !== 'PLAYING') return;
     if (!isCurrent()) return finish('backchannel_stopped');
-    if (now() - started >= buffer.duration * 1000 + 100) return finish('backchannel_watchdog');
-    timer = timers.setTimeout(guard, 25);
+    if (state === 'WAITING') {
+      const elapsed = now() - detected;
+      // A short conversational pause，not another inference request．Never
+      // replay a delayed acknowledgement after a suspended event loop．
+      if (elapsed > 400) return finish('backchannel_stopped');
+      if (elapsed < 300) { timer = timers.setTimeout(guard, Math.min(25, 300 - elapsed)); return; }
+      state = 'PLAYING'; started = now();
+      try {
+        player.play(() => finish('backchannel_ended'));
+        emit('backchannel_started', now() - detected);
+      } catch { finish('backchannel_failed'); return; }
+    }
+    if (state === 'PLAYING') {
+      if (now() - started >= buffer.duration * 1000 + 100) return finish('backchannel_watchdog');
+      timer = timers.setTimeout(guard, 25);
+    }
   };
   return {
     play(detectedAt = now()) {
       if (state !== 'READY') return;
-      state = 'PLAYING'; started = now();
-      if (!isCurrent()) return finish('backchannel_stopped');
-      try {
-        player.play(() => finish('backchannel_ended'));
-        emit('backchannel_started', now() - detectedAt);
-        guard();
-      } catch { finish('backchannel_failed'); }
+      state = 'WAITING'; detected = detectedAt;
+      guard();
     },
     stop() { finish('backchannel_stopped'); },
   };

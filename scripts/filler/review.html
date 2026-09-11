@@ -12,6 +12,7 @@
 <section><h2>2．待ち時間と本文への切替</h2>
 <label>候補 <select id="candidate"></select></label>
 <label>割込みへの返し <select id="backchannel"><option value="">音声なし</option></select></label>
+<p class="muted">割込みを検出してから0.3秒待って，短い返しを再生します．待機中も停止できます．</p>
 <label>試験条件 <select id="scenario"><option value="normal">通常 · フィラーから本文へ接続</option><option value="fast">速い応答 · フィラーなし</option><option value="preempt">本文が早着 · フィラーの終わりを待つ</option><option value="gap">予測より遅延 · 追加フィラーなし</option></select></label>
 <label><input id="headphones" type="checkbox">ヘッドホンを使用しています</label>
 <label><input id="microphone" type="checkbox">マイクによる割込みも試す · 録音・転写・保存はしません</label>

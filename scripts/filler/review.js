@@ -24,7 +24,7 @@ function interrupt() {
   if (t.answer) { t.answer.onended = null; try { t.answer.stop(); } catch {} }
   $('interrupt').disabled = true;
   if (!t.backchannel) { stop('barge_in'); return; }
-  setStatus('短い応答で，話を譲ります．');
+  setStatus('少し間を置いて，短い応答で話を譲ります．');
   t.backchannel.play(detected);
 }
 $('interrupt').onclick = interrupt;
