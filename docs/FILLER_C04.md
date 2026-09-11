@@ -8,11 +8,11 @@
 - `fillerController.js`は`DISABLED → ARMED → PLAYING → SPENT／CLOSED`の独立状態機械である．本文readyが発火前ならtimerを失効させ，再生中なら有限clipの自然終了を待つ．cancel，barge-in，identity／device変更は即時停止してtimerを失効させる．最大1回で，再生失敗も回数を消費する．continuationのrevision 2以降は無効である．
 - `voiceInteraction.js`は本文audioのdecode中にもフィラーを独立再生できる．本文readyでは最初のdecode済みchunkを保持し，再生中のフィラーが自然終了した直後に本文を開始する．有限clip全体を文節境界として扱い，途中では切らない．追加のbridge ACKや接続用timerは待たない．割込み検知は本文開始直前まで続け，cancel後に待機が解けてもturn／playback epochを再検証して旧本文を捨てる．本文のfirst-audio traceをフィラーで置き換えない．
 - 生の音声，本文，候補IDをC0.4 traceに残さない．追加traceのschemaは`kind`と`latency_ms`だけである．calibration fileは数値の対応sample，設定のopaque digest，retention時刻を別に保持する．32条件，各200 samples，各256 trace，7日を上限とする．
-- 有声音の相槌は発話終了後の中立フィラーだけである．「はい」「うん」「なるほど」「確認しています」「覚えています」等は集合にない．
+- 待ち時間のフィラーは「えっと」「ええと」のみである．割込み専用の短い返しは「うん」「はい」とし，ユーザーへ話を譲る用途だけに限定する．待ち時間や回答の先頭には使わない．「なるほど」「確認しています」「覚えています」はどちらの集合にもない．
 
 ## 有限assetとidentity
 
-`scripts/filler/prepare.py`は「えっと」「ええと」だけを採用profileで生成する．追加の合成文は人間の本文接続確認用で，live fillerには使わない．生成後はすべて`approved=false`，`enabled=false`である．生成音声はGit外のprivate directoryへ保存する．
+`scripts/filler/prepare.py`は「えっと」「ええと」と割込み用の「うん」「はい」を採用profileで生成する．追加の合成文は人間の本文接続確認用で，live fillerには使わない．新規生成後はすべて`approved=false`，`enabled=false`である．`--base-bundle`を指定した場合は同一profileかつ同一checksumの既存候補と承認だけをコピーし，新しい候補の承認を流用しない．生成音声はGit外のprivate directoryへ保存する．
 
 live読込はprofile，model revision，reference group，provenance，言語，synthesis設定digestを照合する．source／codec／watermark revision，seed，steps，CFG，device等が変わるとdigestが変わる．本文TTS requestにもdigestをpinし，service側で変更を拒否する．旧serviceのdigestなしprofileは本文TTSの互換性を維持するが，fillerを有効化できない．
 
@@ -32,7 +32,7 @@ timer時点で未完了の対応sampleを抽出し，未到着stage，直近stag
 
 ## barge-inと失敗時
 
-初期のマイク入力はヘッドホン使用を確認した構成専用である．発話活動を検出する小さなWeb Audio経路だけを使い，ASR，転写，録音file作成を行わない．RMS 0.02以上が32 ms継続するとuser barge-inを通知する．認識finalを待たず，Frontendで停止してから旧turnをcancelする．この閾値は実機UATで静音発話・雑音を含めて確認する必要があり，汎用VADやspeaker使用時のAEC合格を主張しない．
+初期のマイク入力はヘッドホン使用を確認した構成専用である．発話活動を検出する小さなWeb Audio経路だけを使い，ASR，転写，録音file作成を行わない．RMS 0.02以上が32 ms継続するとuser barge-inを通知する．認識finalを待たず，Frontendで元の音声を停止して旧turnをcancelし，準備済みの割込み用音声があれば即座に1回だけ再生する．Goのcancel応答や新たなTTS／LLM生成は待たない．この閾値は実機UATで静音発話・雑音を含めて確認する必要があり，汎用VADやspeaker使用時のAEC合格を主張しない．
 
 マイク拒否，track終了，device変更，遅延permission応答ではfillerを無効化する．microphone monitorが準備できなければ発火しない．監視中であることはRuntimeの状態表示へ明記する．通常のendpoint自動検出へ範囲を広げない．
 
@@ -71,3 +71,13 @@ synthetic testは時刻境界，1turnの回数，late decode，cancel，本文�
 実機の声質，マイク割込み，実speaker停止p95 100 ms，接続gap p95 300 ms，reasoningと本文readyの非劣性は人間・実機UATの受入れ項目である．synthetic合格だけで達成済みと扱わない．
 
 本文first-audioには意図的なフィラー終了待ちが加わり得る．通常時は残りclip長以内（asset上限1500 ms），異常時はwatchdogまでである．この追加時間を本文readyやLLM／TTS latencyの悪化と混同せず，接続の自然さと併せて評価する．
+
+## 割込みへの短い返し
+
+本文readyはフィラーの自然終了を待つ．一方，user barge-inでは元の音声を取り消して短い受け止めへ切り替える．初期版の回数は待ち時間フィラー1回／turnに加え，割込み時の返し最大1回である．明示cancel，device変更，session変更，disposeでは返しを出さずに停止する．返しの再生中でも停止ボタンは有効で，次のturn開始時も直ちに停止する．
+
+`createFillerBackchannel`は`READY → PLAYING → CLOSED`で，再生済みclipを再開しない．準備時にdecodeを完了し，割込み時に元のturnの稼働済みAudioContextを引き継ぐ．元の音声source／timer／待機本文とマイク監視は先に停止する．contextは返し終了時に閉じる．非再生の準備を捨てるだけなら本文contextを閉じない．session identityは再生開始時と25 msごとのguardで照合する．自然終了通知が欠ければ音声長＋100 msのwatchdogで停止する．
+
+割込み用assetも同一profile，digest，checksum，承認，150〜1500 ms制限に従う．未承認／decode失敗なら従来の無音停止へfallbackし，別の声や自由生成で埋めない．複数承認時はmanifest順の先頭を使用する．traceは`backchannel_started`（発話検出からsource開始），`backchannel_ended`／`backchannel_stopped`／`backchannel_failed`／`backchannel_watchdog`（再生開始からの時間）の種類とlatencyだけで，本文・音声・候補IDは保存しない．失敗とwatchdogも同じ条件の品質停止件数に含める．
+
+試聴画面では「割込みへの返し」を選び，「割込みを再現」でマイクなしでも切替を確認できる．その後ヘッドホン＋マイクで，返しの開始p50／p95，ユーザーの続きを遮らない短さ，内容への賛成に聞こえない抑揚，停止，再割込みでの重複なし，旧本文の再開なしを評価する．この短い返しは発話検出の受け止めであり，入力内容を理解したことを表さない．発話の自動転写や次turnへの自動投入は追加しない．

@@ -106,6 +106,58 @@ test('late filler setup cannot open microphone or play after body arrival or can
   }
 });
 
+test('barge-in replaces canceled filler with one predecoded acknowledgement without waiting for Go', async () => {
+  for (const end of ['natural', 'cancel', 'new_turn', 'session', 'dispose', 'failed_stop', 'explicit_cancel']) {
+    let time = 0, monitor, session = 'session', decodes = 0;
+    const canceled = deferred(), telemetry = [];
+    const h = harness({now: () => time, getSessionID: () => session,
+      startBargeIn: async options => { monitor = options; return {stop() {}}; },
+      bridge: {GetInteractionFiller: async () => ({...fillerSetup(), assets: [...fillerSetup().assets,
+        {kind: 'backchannel', audio_base64: wav(), duration_ms: 800}]}),
+      CancelInteraction: () => canceled.promise, RecordInteractionFillerTrace: async (...a) => telemetry.push(a)}});
+    await h.controller.adopt(snapshot(1, 'THINKING'));
+    const context = h.contexts[0]; context.decode = async () => ({duration: ++decodes === 2 ? .8 : 1});
+    const trace = (name, at) => { time = at; h.event(1, 'trace', {trace: {name, monotonic_ms: at}}); };
+    trace('endpoint_commit', 0); trace('llm_requested', 20); trace('llm_identity_ready', 30);
+    await tick(); await tick(); trace('llm_first_token', 900); trace('tts_requested', 1100);
+    time = 3850; for (const t of [...h.timeouts.values()]) t.callback();
+    const filler = context.sources[0];
+    time = 4050; h.audio(1, 1); await tick();
+    if (end === 'explicit_cancel') {
+      const pending = h.controller.cancel();
+      assert.equal(context.sources.length, 1); assert.equal(filler.stopped, true); assert.equal(context.closed, true);
+      canceled.resolve(snapshot(1, 'CANCELED')); await pending;
+      assert.equal(telemetry.filter(e => e[2].kind === 'backchannel_started').length, 0);
+      await h.controller.dispose(); continue;
+    }
+    if (end === 'failed_stop') filler.stop = () => { throw new Error('device'); };
+    monitor.onSpeech(); monitor.onSpeech();
+    if (end === 'failed_stop') {
+      await tick();
+      assert.equal(context.sources.length, 1); assert.equal(context.closed, true);
+      assert.equal(h.controller.lastSnapshot.state, 'FAILED');
+      await h.controller.dispose(); continue;
+    }
+    const ack = context.sources[1];
+    assert.equal(filler.stopped, true); assert.equal(ack.started, true);
+    assert.equal(context.closed, false); assert.equal(context.sources.length, 2);
+    assert.equal(h.nodes['voice-cancel'].disabled, false);
+    await tick(); assert.equal(context.sources.length, 2); assert.deepEqual(h.calls.playback, []);
+    canceled.resolve(snapshot(1, 'CANCELED')); await tick();
+    assert.equal(ack.stopped, false); assert.equal(h.nodes['voice-cancel'].disabled, false);
+    if (end === 'natural') { time = 4850; ack.end(); }
+    if (end === 'cancel') await h.controller.cancel();
+    if (end === 'dispose') await h.controller.dispose();
+    if (end === 'new_turn') await h.controller.adopt(snapshot(2, 'THINKING'));
+    if (end === 'session') { session = 'other'; time = 4075; for (const t of [...h.timeouts.values()]) t.callback(); }
+    assert.equal(ack.stopped, true); assert.equal(context.closed, true);
+    assert.equal(telemetry.filter(e => e[2].kind === 'backchannel_started').length, 1);
+    assert.deepEqual(h.calls.output, []); assert.deepEqual(h.calls.token, []); assert.deepEqual(h.calls.transcript, []);
+    h.audio(1, 2); await tick(); assert.equal(context.sources.length, 2);
+    await h.controller.dispose();
+  }
+});
+
 function button() {
   const handlers = new Map();
   return {

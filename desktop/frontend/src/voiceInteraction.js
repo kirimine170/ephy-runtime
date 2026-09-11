@@ -1,5 +1,5 @@
 import {createTimingObserver} from './fillerTiming.js';
-import {createFillerController, createFillerPlayer} from './fillerController.js';
+import {createFillerController, createFillerPlayer, createFillerBackchannel} from './fillerController.js';
 import {startFillerBargeIn} from './fillerBargeIn.js';
 
 const TERMINAL = new Set(['COMPLETED', 'INCOMPLETE', 'CANCELED', 'FAILED']);
@@ -238,10 +238,15 @@ export function mountVoiceInteraction({
   let current = null;
   let disposed = false;
   let nextFiller = 0;
+  let handoff = null;
+  function stopHandoff() {
+    const old = handoff; handoff = null; old?.stop(); if (old) render();
+  }
 
   function stopFiller(run, reason = 'invalidated') {
     run.filler?.cancel(reason);
     run.bargeIn?.stop(); run.bargeIn = null;
+    run.backchannel?.stop(); run.backchannel = null;
   }
   function recordFillerSample(run) {
     if (!run.fillerSample || !run.fillerSetupDone || !attached(run)) return;
@@ -256,16 +261,49 @@ export function mountVoiceInteraction({
       const setup = await bridge.GetInteractionFiller(run.snapshot.operation_id, 1);
       if (!attached(run)) return;
       run.fillerSetupDone = true; recordFillerSample(run);
-      if (setup?.enabled !== true || run.fillerInvalidated || run.bodyVisible || run.bodyReady || !Array.isArray(setup.assets) || !setup.assets.length || setup.assets.length > 2
+      if (setup?.enabled !== true || run.fillerInvalidated || run.bodyVisible || run.bodyReady || !Array.isArray(setup.assets) || !setup.assets.length || setup.assets.length > 4
           || !Array.isArray(setup.samples) || setup.samples.length > 200 || !await run.contextReady) return;
-      const asset = setup.assets[nextFiller++ % setup.assets.length];
+      const fillers = setup.assets.filter(a => a.kind === 'hesitation');
+      if (!fillers.length || fillers.length > 2) return;
+      const asset = fillers[nextFiller++ % fillers.length];
       if (asset.kind !== 'hesitation' || typeof asset.audio_base64 !== 'string' || asset.audio_base64.length > 210000
           || !Number.isFinite(asset.duration_ms) || asset.duration_ms < 150 || asset.duration_ms > 1500) return;
       const buffer = await run.context.decodeAudioData(decodeBase64(asset.audio_base64));
       if (!attached(run) || run.bodyVisible || run.bodyReady || !Number.isFinite(buffer.duration) || Math.abs(buffer.duration * 1000 - asset.duration_ms) > 2) return;
       const available = () => attached(run) && !run.fillerInvalidated && !run.bodyReady && !run.bodyVisible;
+      const trace = event => {
+        try { Promise.resolve(bridge.RecordInteractionFillerTrace?.(run.snapshot.operation_id, 1, event)).catch(() => {}); } catch { /* Optional telemetry． */ }
+      };
+      const acknowledgements = setup.assets.filter(a => a.kind === 'backchannel');
+      const acknowledgement = acknowledgements[0];
+      if (acknowledgements.length <= 2 && acknowledgement && typeof acknowledgement.audio_base64 === 'string'
+          && acknowledgement.audio_base64.length <= 210000 && Number.isFinite(acknowledgement.duration_ms)
+          && acknowledgement.duration_ms >= 150 && acknowledgement.duration_ms <= 1500) {
+        try {
+          const ackBuffer = await run.context.decodeAudioData(decodeBase64(acknowledgement.audio_base64));
+          if (!available()) return;
+          if (Number.isFinite(ackBuffer.duration) && Math.abs(ackBuffer.duration * 1000 - acknowledgement.duration_ms) <= 2) {
+            let ack;
+            ack = createFillerBackchannel({context: run.context, buffer: ackBuffer, now, timers, onTrace: trace,
+              isCurrent: () => !disposed && current === run && (!getSessionID || getSessionID() === run.snapshot.session_id),
+              onEnd: () => { if (handoff === ack) { handoff = null; render(); } }});
+            run.backchannel = ack;
+          }
+        } catch { /* A failed optional acknowledgement cannot block the answer． */ }
+      }
+      if (!available()) { run.backchannel?.stop(); run.backchannel = null; return; }
       const monitor = await startBargeIn({context: run.context, mediaDevices, isCurrent: () => attached(run) && !run.bodyStarted,
-        onSpeech: () => { if (!attached(run)) return; stopFiller(run, 'barge_in'); void cancel(); },
+        onSpeech: () => {
+          if (!attached(run)) return;
+          const detected = now(), ack = run.backchannel; run.backchannel = null;
+          stopFiller(run, 'barge_in');
+          if (!attached(run)) { ack?.stop(); return; }
+          // Cancel owns the old output，but the acknowledgement inherits its
+          // running context so it needs neither TTS nor another resume gesture．
+          if (ack) run.context = null;
+          void cancel();
+          if (ack) { handoff = ack; ack.play(detected); render(); }
+        },
         onUnavailable: () => { run.fillerInvalidated = true; stopFiller(run); }});
       if (!monitor) return;
       if (!available()) { monitor.stop(); return; }
@@ -275,9 +313,7 @@ export function mountVoiceInteraction({
       run.filler = createFillerController({samples: setup.samples, durationMS: asset.duration_ms, ledger: run.fillerLedger,
         play: player.play, stop: player.stop, isCurrent: available, now, timers,
         onUnsafeStop: () => { void fail(run, 'playback_failed'); },
-        onTrace: event => {
-          try { Promise.resolve(bridge.RecordInteractionFillerTrace?.(run.snapshot.operation_id, 1, event)).catch(() => {}); } catch { /* Optional telemetry． */ }
-        }});
+        onTrace: trace});
       run.filler.progress(run.timing.marks);
       if (run.timing.origin !== null) run.filler.arm(run.timing.origin);
     } catch { /* Missing or failed filler setup cannot fail the answer． */ }
@@ -309,13 +345,13 @@ export function mountVoiceInteraction({
       record.setAttribute('aria-pressed', String(!!recording));
     }
     if (cancelButton) {
-      cancelButton.disabled = !active() || current.cancelRequested;
+      cancelButton.disabled = !handoff && (!active() || current.cancelRequested);
       cancelButton.setAttribute('aria-label', '音声対話をキャンセル');
     }
     if (status) {
       status.setAttribute('role', 'status');
       status.setAttribute('aria-live', 'polite');
-      status.textContent = current?.permissionPending && !current.cancelRequested
+      status.textContent = handoff ? '割込みを受け止める短い応答を再生中です．' : current?.permissionPending && !current.cancelRequested
         ? 'マイクの許可を確認しています．'
         : current?.asrOpenPending && !current.cancelRequested
           ? '音声認識を開始しています．必要な場合は音声認識の許可を確認してください．'
@@ -444,6 +480,7 @@ export function mountVoiceInteraction({
 
   function begin(expected = {}, preparing = false) {
     if (active() || disposed) return null;
+    stopHandoff();
     let ready;
     const run = {
       snapshot: {state: preparing ? 'PREPARING' : 'RECORDING', operation_id: ''},
@@ -464,7 +501,7 @@ export function mountVoiceInteraction({
       readinessState: '',
       timing: createTimingObserver(now), fillerLedger: {used: false}, filler: null, bargeIn: null,
       fillerAttempted: false, fillerSetupDone: false, fillerSample: null, bodyVisible: false, bodyReady: false, bodyStarted: false,
-      fillerInvalidated: false,
+      fillerInvalidated: false, backchannel: null,
     };
     run.resolveIdentity = ready;
     current = run;
@@ -689,6 +726,7 @@ export function mountVoiceInteraction({
   }
 
   function cancel() {
+    stopHandoff();
     const run = current;
     if (!active(run)) return Promise.resolve(run?.snapshot);
     if (run.cancelPromise) return run.cancelPromise;
@@ -730,6 +768,7 @@ export function mountVoiceInteraction({
         if (boundary) await boundary;
         if (!live(run) || epoch !== run.playbackEpoch) return;
         run.bargeIn?.stop(); run.bargeIn = null;
+        run.backchannel?.stop(); run.backchannel = null;
       }
       const source = run.context.createBufferSource();
       source.buffer = decoded;
@@ -913,6 +952,7 @@ export function mountVoiceInteraction({
 
   const onRecord = () => { void (current?.recording ? stop() : start()); };
   const onDeviceChange = () => {
+    stopHandoff();
     if (current && active()) { current.fillerInvalidated = true; stopFiller(current); }
   };
   mediaDevices?.addEventListener?.('devicechange', onDeviceChange);

@@ -8,15 +8,16 @@
 <span class="badge">C0.4 · 人間による動作確認</span>
 <h1>同じ声で，待ち時間をつなぐ</h1>
 <p class="muted">採用済みIrodori profileで生成した有限候補を確認します．ここでの待ち時間は試験用の設定値です．LLMの実測値やlive採用の合格判定には使いません．</p>
-<section><h2>1．候補の声と表現</h2><p>同意や感情判断に聞こえず，声質と発音に問題がない候補だけ承認してください．承認はこの音声assetにだけ適用されます．</p><div id="candidates"></div><p id="votes" role="status"></p></section>
+<section><h2>1．候補の声と表現</h2><p>待ち時間のフィラーは，同意や感情判断に聞こえないかを確認してください．割込みへの返しは，発言内容への賛成ではなく，話を譲る短い受け止めとして自然かを確認してください．承認はこの音声assetにだけ適用されます．</p><div id="candidates"></div><p id="votes" role="status"></p></section>
 <section><h2>2．待ち時間と本文への切替</h2>
 <label>候補 <select id="candidate"></select></label>
+<label>割込みへの返し <select id="backchannel"><option value="">音声なし</option></select></label>
 <label>試験条件 <select id="scenario"><option value="normal">通常 · フィラーから本文へ接続</option><option value="fast">速い応答 · フィラーなし</option><option value="preempt">本文が早着 · フィラーの終わりを待つ</option><option value="gap">予測より遅延 · 追加フィラーなし</option></select></label>
 <label><input id="headphones" type="checkbox">ヘッドホンを使用しています</label>
 <label><input id="microphone" type="checkbox">マイクによる割込みも試す · 録音・転写・保存はしません</label>
-<button class="primary" id="start">試験を開始</button><button class="stop" id="stop" disabled>停止</button>
+<button class="primary" id="start">試験を開始</button><button id="interrupt" disabled>割込みを再現</button><button class="stop" id="stop" disabled>停止</button>
 <p id="status" role="status" aria-live="polite">準備中です．</p>
-<p class="muted">本文は「三角形の内角の和は，百八十度です．」です．停止操作や発話の後に音声が残らないか，切替時に重ならないかを確認してください．通常会話のhistoryやKarteには追加されません．</p>
+<p class="muted">本文は「三角形の内角の和は，百八十度です．」です．割込みでは元の応答を取り消し，選んだ短い返しを1回だけ再生します．停止ボタンはすべての音声を止めます．返しがユーザーの続きを遮らないかも確認してください．通常会話のhistoryやKarteには追加されません．</p>
 <details><summary>種類とlatencyだけの試験trace</summary><pre id="trace"></pre></details>
 </section>
 <p class="muted">この画面はdefault voiceやliveのフィラー設定を変更しません．マイク割込みはヘッドホン環境向けの初期実装です．</p>

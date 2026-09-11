@@ -86,3 +86,33 @@ func TestFillerAssetsRejectLinksPermissionsAndUnknownFields(t *testing.T) {
 		t.Fatal("unknown field accepted")
 	}
 }
+
+func TestBackchannelAssetsRequireSeparateApprovalAndKeepTheirKind(t *testing.T) {
+	root, speech, manifest := fillerFixture(t)
+	ack := manifest.Assets[0]
+	ack.Candidate, ack.File, ack.Approved = "backchannel_hai", "backchannel_hai.wav", false
+	audio, err := os.ReadFile(filepath.Join(root, "hesitation_etto.wav"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ack.File), audio, 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Assets = append(manifest.Assets, ack)
+	writeFillerManifest(t, root, manifest)
+	assets, err := loadFillerAssets(root, speech)
+	if err != nil || len(assets) != 1 {
+		t.Fatal("unapproved acknowledgement was not isolated")
+	}
+	manifest.Assets[1].Approved = true
+	writeFillerManifest(t, root, manifest)
+	assets, err = loadFillerAssets(root, speech)
+	if err != nil || len(assets) != 2 || assets[1].Kind != "backchannel" {
+		t.Fatal("approved acknowledgement missing")
+	}
+	manifest.Assets[1].SHA256 = strings.Repeat("0", 64)
+	writeFillerManifest(t, root, manifest)
+	if _, err := loadFillerAssets(root, speech); err == nil {
+		t.Fatal("changed acknowledgement accepted")
+	}
+}

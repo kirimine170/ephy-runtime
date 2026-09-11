@@ -80,7 +80,7 @@ func loadFillerAssets(root string, speech *preparedSpeech) ([]FillerAudio, error
 	}
 	body, err := readFillerPrivate(filepath.Join(root, "manifest.json"), 64<<10)
 	var manifest fillerManifest
-	if err != nil || decodeSpeechJSON(body, &manifest) != nil || manifest.SchemaVersion != 1 || !manifest.Enabled || !manifest.HeadphonesConfirmed || len(manifest.Assets) < 1 || len(manifest.Assets) > 2 {
+	if err != nil || decodeSpeechJSON(body, &manifest) != nil || manifest.SchemaVersion != 1 || !manifest.Enabled || !manifest.HeadphonesConfirmed || len(manifest.Assets) < 1 || len(manifest.Assets) > 4 {
 		return nil, invalid
 	}
 	p, expected := manifest.Profile, speech.profile
@@ -90,7 +90,14 @@ func loadFillerAssets(root string, speech *preparedSpeech) ([]FillerAudio, error
 	assets := []FillerAudio{}
 	seen := map[string]bool{}
 	for _, asset := range manifest.Assets {
-		if (asset.Candidate != "hesitation_etto" && asset.Candidate != "hesitation_eeto") || seen[asset.Candidate] || asset.File != asset.Candidate+".wav" {
+		kind := ""
+		switch asset.Candidate {
+		case "hesitation_etto", "hesitation_eeto":
+			kind = "hesitation"
+		case "backchannel_un", "backchannel_hai":
+			kind = "backchannel"
+		}
+		if kind == "" || seen[asset.Candidate] || asset.File != asset.Candidate+".wav" {
 			return nil, invalid
 		}
 		seen[asset.Candidate] = true
@@ -104,7 +111,7 @@ func loadFillerAssets(root string, speech *preparedSpeech) ([]FillerAudio, error
 		if err != nil || !valid || actual < 150 || actual > 1500 || asset.DurationMS < actual-1 || asset.DurationMS > actual+1 || hex.EncodeToString(digest[:]) != asset.SHA256 {
 			return nil, invalid
 		}
-		assets = append(assets, FillerAudio{Kind: "hesitation", AudioBase64: base64.StdEncoding.EncodeToString(audio), DurationMS: actual})
+		assets = append(assets, FillerAudio{Kind: kind, AudioBase64: base64.StdEncoding.EncodeToString(audio), DurationMS: actual})
 	}
 	if len(assets) == 0 {
 		return nil, invalid
