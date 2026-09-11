@@ -15,17 +15,14 @@ export function createFillerController({samples, durationMS, ledger, play, stop,
     }
   };
   const clear = () => { if (timer !== null) timers.clearTimeout(timer); timer = null; epoch++; };
-  const halt = () => {
-    if (state !== 'PLAYING') return;
-    try { stop(); } catch { onUnsafeStop(); }
-  };
   function close(kind) {
     if (state === 'CLOSED') return;
-    clear();
-    halt();
-    if (state === 'PLAYING') emit(kind, now() - started);
-    else if (state === 'ARMED') emit(kind === 'filler_stopped_answer' ? 'filler_suppressed_fast' : kind, now() - origin);
+    const previous = state;
     state = 'CLOSED';
+    clear();
+    if (previous === 'PLAYING') { try { stop(); } catch { onUnsafeStop(); } }
+    if (previous === 'PLAYING') emit(kind, now() - started);
+    else if (previous === 'ARMED') emit(kind === 'filler_stopped_answer' ? 'filler_suppressed_fast' : kind, now() - origin);
   }
   function schedule(delay) {
     clear();

@@ -35,7 +35,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     plutil -insert NSHighResolutionCapable -bool true "${INFO_PLIST}"
   fi
   # Wails WebKit capture and the on-device ASR helper are attributed to this app．
-  plutil -replace NSMicrophoneUsageDescription -string "録音ボタンを押した間だけ，Ephyとの音声会話にマイクを使います．" "${INFO_PLIST}"
+  plutil -replace NSMicrophoneUsageDescription -string "音声入力と，有効にしたフィラーの割込み検出にマイクを使います．音声は保存しません．" "${INFO_PLIST}"
   plutil -replace NSSpeechRecognitionUsageDescription -string "録音した発話を端末内で文字に変換します．" "${INFO_PLIST}"
   install -m 0755 "${BINARY_PATH}" "${APP_BINARY}"
   touch "${APP_BUNDLE}"

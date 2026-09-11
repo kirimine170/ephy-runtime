@@ -19,7 +19,11 @@ if [[ "$(uname -s)" == "Darwin" && -n "${EPHY_DESKTOP_APP}" ]]; then
   # LaunchServices makes the app bundle the responsible TCC process．Running
   # Contents/MacOS/ephy-runtime directly attributes Speech permission to the
   # invoking terminal or automation host，whose plist we do not control．
-  exec open -W -n --env EPHY_START_CONVERSATION=1 "${EPHY_DESKTOP_APP}" --args "$@"
+  filler_env=()
+  for filler_name in EPHY_FILLER_BUNDLE EPHY_FILLER_CONDITION EPHY_FILLER_SHADOW; do
+    if [[ -n "${!filler_name:-}" ]]; then filler_env+=(--env "${filler_name}=${!filler_name}"); fi
+  done
+  exec open -W -n --env EPHY_START_CONVERSATION=1 "${filler_env[@]}" "${EPHY_DESKTOP_APP}" --args "$@"
 fi
 export EPHY_START_CONVERSATION=1
 exec "${EPHY_DESKTOP_EXECUTABLE}" "$@"
