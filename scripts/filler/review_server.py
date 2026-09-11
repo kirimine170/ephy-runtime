@@ -14,7 +14,7 @@ import threading
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from packages.speech_assets import read_private_json_file
-from scripts.filler.prepare import CANDIDATES, candidate_kind
+from scripts.filler.prepare import CANDIDATES, candidate_kind, candidate_max_duration_ms
 
 
 def serve(bundle: Path, port: int) -> None:
@@ -79,7 +79,7 @@ def serve(bundle: Path, port: int) -> None:
                     for asset in manifest["assets"]:
                         if asset["candidate"] == vote["candidate"]:
                             digest = hashlib.sha256(audio_paths[asset["file"]].read_bytes()).hexdigest()
-                            if digest != asset["sha256"] or not 150 <= asset["duration_ms"] <= 1500:
+                            if digest != asset["sha256"] or not 150 <= asset["duration_ms"] <= candidate_max_duration_ms(asset["candidate"]):
                                 return self.reply(409)
                             asset["approved"] = vote["approved"]
                     # Review never changes live enablement or default voice．

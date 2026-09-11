@@ -80,7 +80,7 @@ func loadFillerAssets(root string, speech *preparedSpeech) ([]FillerAudio, error
 	}
 	body, err := readFillerPrivate(filepath.Join(root, "manifest.json"), 64<<10)
 	var manifest fillerManifest
-	if err != nil || decodeSpeechJSON(body, &manifest) != nil || manifest.SchemaVersion != 1 || !manifest.Enabled || !manifest.HeadphonesConfirmed || len(manifest.Assets) < 1 || len(manifest.Assets) > 4 {
+	if err != nil || decodeSpeechJSON(body, &manifest) != nil || manifest.SchemaVersion != 1 || !manifest.Enabled || !manifest.HeadphonesConfirmed || len(manifest.Assets) < 1 || len(manifest.Assets) > 5 {
 		return nil, invalid
 	}
 	p, expected := manifest.Profile, speech.profile
@@ -94,7 +94,7 @@ func loadFillerAssets(root string, speech *preparedSpeech) ([]FillerAudio, error
 		switch asset.Candidate {
 		case "hesitation_etto", "hesitation_eeto":
 			kind = "hesitation"
-		case "backchannel_un", "backchannel_hai":
+		case "backchannel_un", "backchannel_hai", "backchannel_gomen_iiyo":
 			kind = "backchannel"
 		}
 		if kind == "" || seen[asset.Candidate] || asset.File != asset.Candidate+".wav" {
@@ -104,11 +104,18 @@ func loadFillerAssets(root string, speech *preparedSpeech) ([]FillerAudio, error
 		if !asset.Approved {
 			continue
 		}
-		audio, err := readFillerPrivate(filepath.Join(root, asset.File), 150<<10)
+		maxDuration := 1500.0
+		maxBytes := int64(150 << 10)
+		maxSeconds := 2
+		if kind == "backchannel" {
+			maxDuration, maxBytes = 3000, 300<<10
+			maxSeconds = 3
+		}
+		audio, err := readFillerPrivate(filepath.Join(root, asset.File), maxBytes)
 		digest := sha256.Sum256(audio)
-		duration, valid := voiceWAVDuration(audio, 2)
+		duration, valid := voiceWAVDuration(audio, maxSeconds)
 		actual := float64(duration) / float64(time.Millisecond)
-		if err != nil || !valid || actual < 150 || actual > 1500 || asset.DurationMS < actual-1 || asset.DurationMS > actual+1 || hex.EncodeToString(digest[:]) != asset.SHA256 {
+		if err != nil || !valid || actual < 150 || actual > maxDuration || asset.DurationMS < actual-1 || asset.DurationMS > actual+1 || hex.EncodeToString(digest[:]) != asset.SHA256 {
 			return nil, invalid
 		}
 		assets = append(assets, FillerAudio{Kind: kind, AudioBase64: base64.StdEncoding.EncodeToString(audio), DurationMS: actual})

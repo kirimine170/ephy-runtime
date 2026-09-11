@@ -11,14 +11,14 @@ import wave
 import pytest
 
 
-@pytest.mark.parametrize("candidate", ["hesitation_etto", "backchannel_hai"])
-def test_human_review_is_local_and_never_enables_live_voice(tmp_path, candidate):
+@pytest.mark.parametrize("candidate,duration_ms", [("hesitation_etto", 500), ("backchannel_hai", 500), ("backchannel_gomen_iiyo", 2400)])
+def test_human_review_is_local_and_never_enables_live_voice(tmp_path, candidate, duration_ms):
     with io.BytesIO() as out:
         with wave.open(out, "wb") as audio:
             audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(16000)
-            audio.writeframes(b"\x00\x00" * 8000)
+            audio.writeframes(b"\x00\x00" * (16 * duration_ms))
         body = out.getvalue()
-    asset = {"candidate": candidate, "file": candidate + ".wav", "duration_ms": 500,
+    asset = {"candidate": candidate, "file": candidate + ".wav", "duration_ms": duration_ms,
              "sha256": hashlib.sha256(body).hexdigest(), "approved": False}
     manifest = {"schema_version": 1, "enabled": False, "headphones_confirmed": False,
                 "profile": {"synthetic": True}, "assets": [asset]}
@@ -86,7 +86,7 @@ def test_prepare_preserves_only_existing_asset_approvals(tmp_path, monkeypatch):
     output = tmp_path / 'output'
     module.prepare(config, output, base)
     saved = json.loads((output / 'manifest.json').read_text())
-    assert calls == ['ええと', 'うん', 'はい']
+    assert calls == ['ええと', 'うん', 'はい', 'ごめんごめん，いいよ？']
     assert saved['assets'][0] == existing
     assert all(not a['approved'] for a in saved['assets'][1:])
     assert not saved['enabled'] and not saved['headphones_confirmed']

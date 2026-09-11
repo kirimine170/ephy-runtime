@@ -19,11 +19,16 @@ from packages.speech_assets import read_private_json_file
 from scripts.voice_ab.worker import _irodori, _write_private
 from scripts.voice_ab.common import wav_duration
 
-CANDIDATES = {"hesitation_etto": "えっと", "hesitation_eeto": "ええと", "backchannel_un": "うん", "backchannel_hai": "はい"}
+CANDIDATES = {"hesitation_etto": "えっと", "hesitation_eeto": "ええと", "backchannel_un": "うん", "backchannel_hai": "はい",
+              "backchannel_gomen_iiyo": "ごめんごめん，いいよ？"}
 
 
 def candidate_kind(candidate: str) -> str:
     return "backchannel" if candidate.startswith("backchannel_") else "hesitation"
+
+
+def candidate_max_duration_ms(candidate: str) -> int:
+    return 3000 if candidate_kind(candidate) == "backchannel" else 1500
 
 
 def prepare(config: Path, output: Path, base_bundle: Path | None = None) -> None:
@@ -56,7 +61,7 @@ def prepare(config: Path, output: Path, base_bundle: Path | None = None) -> None
                            "duration_ms": round(wav_duration(audio) * 1000, 3), "approved": False})
             print(json.dumps({"kind": "candidate_generated", "duration_ms": assets[-1]["duration_ms"]}), flush=True)
         # A synthetic transition sentence supports human voice／handoff checks．
-        answer = (base_bundle / "review_answer.wav").read_bytes() if base_bundle else adapter.synthesize(request("三角形の内角の和は，百八十度です．", 5), raw)
+        answer = (base_bundle / "review_answer.wav").read_bytes() if base_bundle else adapter.synthesize(request("三角形の内角の和は，百八十度です．", len(CANDIDATES) + 1), raw)
         _write_private(output / "review_answer.wav", answer)
     manifest = {"schema_version": 1, "enabled": False, "headphones_confirmed": False, "profile": profile, "assets": assets}
     _write_private(output / "manifest.json", (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode())

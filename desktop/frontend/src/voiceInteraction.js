@@ -238,6 +238,7 @@ export function mountVoiceInteraction({
   let current = null;
   let disposed = false;
   let nextFiller = 0;
+  let nextBackchannel = 0;
   let handoff = null;
   function stopHandoff() {
     const old = handoff; handoff = null; old?.stop(); if (old) render();
@@ -261,7 +262,7 @@ export function mountVoiceInteraction({
       const setup = await bridge.GetInteractionFiller(run.snapshot.operation_id, 1);
       if (!attached(run)) return;
       run.fillerSetupDone = true; recordFillerSample(run);
-      if (setup?.enabled !== true || run.fillerInvalidated || run.bodyVisible || run.bodyReady || !Array.isArray(setup.assets) || !setup.assets.length || setup.assets.length > 4
+      if (setup?.enabled !== true || run.fillerInvalidated || run.bodyVisible || run.bodyReady || !Array.isArray(setup.assets) || !setup.assets.length || setup.assets.length > 5
           || !Array.isArray(setup.samples) || setup.samples.length > 200 || !await run.contextReady) return;
       const fillers = setup.assets.filter(a => a.kind === 'hesitation');
       if (!fillers.length || fillers.length > 2) return;
@@ -275,10 +276,10 @@ export function mountVoiceInteraction({
         try { Promise.resolve(bridge.RecordInteractionFillerTrace?.(run.snapshot.operation_id, 1, event)).catch(() => {}); } catch { /* Optional telemetry． */ }
       };
       const acknowledgements = setup.assets.filter(a => a.kind === 'backchannel');
-      const acknowledgement = acknowledgements[0];
-      if (acknowledgements.length <= 2 && acknowledgement && typeof acknowledgement.audio_base64 === 'string'
-          && acknowledgement.audio_base64.length <= 210000 && Number.isFinite(acknowledgement.duration_ms)
-          && acknowledgement.duration_ms >= 150 && acknowledgement.duration_ms <= 1500) {
+      const acknowledgement = acknowledgements[nextBackchannel % acknowledgements.length];
+      if (acknowledgements.length <= 3 && acknowledgement && typeof acknowledgement.audio_base64 === 'string'
+          && acknowledgement.audio_base64.length <= 420000 && Number.isFinite(acknowledgement.duration_ms)
+          && acknowledgement.duration_ms >= 150 && acknowledgement.duration_ms <= 3000) {
         try {
           const ackBuffer = await run.context.decodeAudioData(decodeBase64(acknowledgement.audio_base64));
           if (!available()) return;
@@ -302,7 +303,7 @@ export function mountVoiceInteraction({
           // running context so it needs neither TTS nor another resume gesture．
           if (ack) run.context = null;
           void cancel();
-          if (ack) { handoff = ack; ack.play(detected); render(); }
+          if (ack) { nextBackchannel++; handoff = ack; ack.play(detected); render(); }
         },
         onUnavailable: () => { run.fillerInvalidated = true; stopFiller(run); }});
       if (!monitor) return;

@@ -111,6 +111,7 @@ try {
     const selector = row.kind === 'backchannel' ? $('backchannel') : $('candidate');
     selector.append(option);
     if (row.kind === 'backchannel' && selector.options.length === 2) selector.value = row.candidate;
+    if (row.candidate === 'backchannel_gomen_iiyo') selector.value = row.candidate;
   }
   setStatus('候補音声と試験条件を選べます．');
 } catch { setStatus('候補音声を読み込めませんでした．'); $('start').disabled = true; }
