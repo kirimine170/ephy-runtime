@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>C0.3.2 Blind Listening Test</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Developer Evaluation · C0.3.2</p>
+      <h1>Blind Listening Test</h1>
+      <p>同じ参照声と発話本文で作った候補A／Bです．provider名と速度計測は，回答が終わるまで表示しません．</p>
+      <div class="reference">
+        <div><strong>参照音声</strong><span>一致度を判断するときに，必要な回数だけ確認してください．</span></div>
+        <audio id="reference-audio" controls preload="metadata"></audio>
+      </div>
+      <div class="progress"><div id="progress-bar"></div></div>
+      <p id="progress-label" aria-live="polite">準備中です．</p>
+    </header>
+
+    <section id="review" hidden>
+      <div class="case-heading">
+        <div><span id="case-number" class="pill"></span><span id="case-category" class="pill subtle"></span></div>
+        <h2 id="case-text"></h2>
+      </div>
+      <div class="candidates">
+        <article><h3>候補A</h3><audio id="audio-a" controls preload="metadata"></audio></article>
+        <article><h3>候補B</h3><audio id="audio-b" controls preload="metadata"></audio></article>
+      </div>
+      <p class="scale-help">各軸で，どちらが良いかを同じ5段階で選びます．</p>
+      <div id="axes" class="axes"></div>
+      <fieldset class="overall">
+        <legend>A／B総合選好</legend>
+        <div class="choice-row" data-choice="overall"></div>
+      </fieldset>
+      <label class="note"><span>メモ（任意）</span><textarea id="note" maxlength="2000" rows="3" placeholder="発音や間など，後で確認したい点"></textarea></label>
+      <p id="status" role="status" aria-live="polite"></p>
+      <nav>
+        <button id="previous" type="button">前へ</button>
+        <button id="save" class="primary" type="button">保存して次へ</button>
+      </nav>
+    </section>
+
+    <section id="complete" hidden>
+      <h2>24件の回答を保存しました</h2>
+      <p>providerの対応表はまだ表示していません．この画面を閉じず，Codexへ「評価完了」と伝えてください．</p>
+      <button id="return" type="button">回答を見直す</button>
+    </section>
+  </main>
+  <script type="module" src="review.js"></script>
+</body>
+</html>

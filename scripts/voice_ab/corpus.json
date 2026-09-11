@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "suite_id": "c0-3-2-voice-provider-ab-v1",
+  "cases": [
+    {
+      "id": "ack-short-01",
+      "category": "短い相槌",
+      "units": ["うん，そうだね．"],
+      "generation_condition": "cold"
+    },
+    {
+      "id": "ack-short-02",
+      "category": "短い相槌",
+      "units": ["なるほど，そこが気になったんだね．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "conversation-01",
+      "category": "通常会話",
+      "units": ["おかえり．今日はどんな一日だった？"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "conversation-02",
+      "category": "通常会話",
+      "units": ["それなら，先に温かい飲み物を用意してから始めようか．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "conversation-03",
+      "category": "通常会話",
+      "units": ["急がなくて大丈夫．ひとつずつ一緒に整理していこう．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "question-01",
+      "category": "質問",
+      "units": ["今いちばん困っているのは，時間と手順のどちら？"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "question-02",
+      "category": "質問",
+      "units": ["もし明日の予定をひとつだけ減らせるなら，何を選びたい？"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "question-03",
+      "category": "質問",
+      "units": ["この説明で分かりにくかったところ，もう一度たしかめようか？"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "emotion-joy-01",
+      "category": "感情表現",
+      "units": ["わあ，できた！　本当にうれしい．一緒に試してきた甲斐があったね．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "emotion-concern-01",
+      "category": "感情表現",
+      "units": ["それは心配だったね．今は少し落ち着いて話せそう？"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "emotion-surprise-01",
+      "category": "感情表現",
+      "units": ["えっ，もう終わったの？　思っていたよりずっと早かったね．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "emotion-soft-01",
+      "category": "感情表現",
+      "units": ["今日はもう十分がんばったと思う．ゆっくり休もうね．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "proper-noun-01",
+      "category": "固有名詞",
+      "units": ["Ephy RuntimeとQwenの結果を，GitHubの記録で確認します．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "proper-noun-02",
+      "category": "固有名詞",
+      "units": ["御厨さんは四条畷から日本橋へ向かい，名取さんと合流します．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "difficult-reading-01",
+      "category": "難読語",
+      "units": ["進捗は滞りなく，脆弱性の暫定措置も概ね妥当です．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "difficult-reading-02",
+      "category": "難読語",
+      "units": ["凡例を参照し，閾値を超えた箇所だけ逐次確認してください．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "numbers-01",
+      "category": "日本語発音",
+      "units": ["二千二十六年九月十一日，午後三時十五分に，二・五キログラムの商品を三個受け取ります．"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "long-explanation-01",
+      "category": "長い説明",
+      "units": [
+        "まず，設定ファイルを読み込み，指定された音声profileとmodel revisionが一致しているか確認します．",
+        "次に，同じ発話本文を順番どおりに合成し，各chunkの到着時刻と音声の長さを記録します．",
+        "最後に，欠落や重複がないことを確かめてから，provider名を隠した評価画面へ渡します．"
+      ],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "long-explanation-02",
+      "category": "長い説明",
+      "units": [
+        "この比較では，音声の印象と処理速度を別々に扱います．",
+        "聞き手には候補Aと候補Bだけを示し，可愛さ，自然さ，発音，疲れにくさを同じ尺度で選んでもらいます．",
+        "機械側では，最初の音声が届くまでの時間，発話全体の完了時間，memory，cancel後の停止を記録します．",
+        "すべての回答が終わるまでは対応表を開かず，先入観が評価へ混ざらないようにします．"
+      ],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "ending-pause-01",
+      "category": "文末の間",
+      "units": ["答えを急がなくても，いいと思う……"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "ending-pause-02",
+      "category": "文末の間",
+      "units": ["大丈夫．わたしはここにいるから……"],
+      "generation_condition": "warm"
+    },
+    {
+      "id": "filler-01",
+      "category": "フィラー候補",
+      "units": ["えっと，順番を確認するね．まずは一つ目から．"],
+      "generation_condition": "warm",
+      "stability_group": "repeat-01"
+    },
+    {
+      "id": "filler-02",
+      "category": "フィラー候補",
+      "units": ["うーん，どちらも良さがあるけれど，今回はこっちかな．"],
+      "generation_condition": "warm",
+      "stability_group": "repeat-01"
+    },
+    {
+      "id": "turn-stability-01",
+      "category": "連続turn",
+      "units": ["わかった．次の手順も一緒に確認するね．"],
+      "generation_condition": "warm",
+      "stability_group": "repeat-01"
+    }
+  ]
+}
