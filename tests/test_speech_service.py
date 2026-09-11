@@ -16,6 +16,27 @@ from apps.speech.schemas import (DEFAULT_STYLE, IRODORI_CAPABILITIES, QWEN_CAPAB
 from apps.speech.service import ProcessWorker, SpeechService, create_app
 
 
+def test_filler_synthesis_pin_changes_with_controls_without_exposing_private_paths():
+    from apps.speech.service import synthesis_config_digest
+    config = {"providers": {"irodori-tts": {"source_revision": "revision", "seed": 420, "num_steps": 40,
+               "model_path": "/private/model", "cfg": {"speaker": 5.0}}}}
+    first = synthesis_config_digest(config, "irodori-tts")
+    config["providers"]["irodori-tts"]["model_path"] = "/another/private/model"
+    assert synthesis_config_digest(config, "irodori-tts") == first
+    config["providers"]["irodori-tts"]["seed"] = 421
+    assert synthesis_config_digest(config, "irodori-tts") != first
+    assert len(first) == 64
+
+
+def test_speech_service_rejects_stale_filler_synthesis_pin():
+    config = {"profiles": [IRODORI_PROFILE], "providers": {"irodori-tts": {"seed": 420}}}
+    service = SpeechService(config, available=True, worker=FakeWorker())
+    pin = service.profiles["anime-voice"]["synthesis_config_digest"]
+    assert service.profile(irodori_request(synthesis_config_digest=pin))
+    with pytest.raises(SpeechError, match="voice_profile_changed"):
+        service.profile(irodori_request(synthesis_config_digest="f" * 64))
+
+
 TOKEN = "synthetic-bearer-" + "s" * 32
 AUTH = {"Authorization": "Bearer " + TOKEN}
 

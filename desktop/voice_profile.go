@@ -39,18 +39,19 @@ type VoiceCapabilities struct {
 	Interruptible bool                    `json:"interruptible"`
 }
 type VoiceProfile struct {
-	VoiceProfileID       string            `json:"voice_profile_id"`
-	DisplayName          string            `json:"display_name"`
-	Provider             string            `json:"provider"`
-	ModelRevision        string            `json:"model_revision"`
-	Language             string            `json:"language"`
-	ClonePromptDigest    string            `json:"clone_prompt_digest"`
-	ReferenceGroupDigest string            `json:"reference_group_digest"`
-	ProvenanceID         string            `json:"provenance_id"`
-	DefaultStyle         SpeechStyle       `json:"default_style"`
-	Capabilities         VoiceCapabilities `json:"capabilities"`
-	Available            bool              `json:"available"`
-	ErrorCode            string            `json:"error_code,omitempty"`
+	VoiceProfileID        string            `json:"voice_profile_id"`
+	DisplayName           string            `json:"display_name"`
+	Provider              string            `json:"provider"`
+	ModelRevision         string            `json:"model_revision"`
+	Language              string            `json:"language"`
+	ClonePromptDigest     string            `json:"clone_prompt_digest"`
+	ReferenceGroupDigest  string            `json:"reference_group_digest"`
+	SynthesisConfigDigest string            `json:"synthesis_config_digest,omitempty"`
+	ProvenanceID          string            `json:"provenance_id"`
+	DefaultStyle          SpeechStyle       `json:"default_style"`
+	Capabilities          VoiceCapabilities `json:"capabilities"`
+	Available             bool              `json:"available"`
+	ErrorCode             string            `json:"error_code,omitempty"`
 }
 type VoiceProfileCatalog struct {
 	DefaultProfileID string         `json:"default_profile_id"`
@@ -145,6 +146,12 @@ func validateSpeechStyle(style SpeechStyle, profile VoiceProfile) error {
 	return nil
 }
 func validateVoiceProfile(p VoiceProfile) error {
+	if p.SynthesisConfigDigest != "" {
+		b, err := hex.DecodeString(p.SynthesisConfigDigest)
+		if err != nil || len(b) != 32 {
+			return errors.New("invalid_voice_profile")
+		}
+	}
 	if !interactionIdentifier.MatchString(p.VoiceProfileID) || !interactionIdentifier.MatchString(p.Provider) || !interactionMetadataID.MatchString(p.ModelRevision) || !voiceLocalePattern.MatchString(p.Language) || !utf8.ValidString(p.DisplayName) || strings.TrimSpace(p.DisplayName) == "" || utf8.RuneCountInString(p.DisplayName) > 80 || strings.ContainsAny(p.DisplayName, "\r\n\x00") || !p.Capabilities.Interruptible || !p.Capabilities.Streaming || p.Capabilities.StreamingMode != "phrase" || len(p.Capabilities.Controls) > 6 {
 		return errors.New("invalid_voice_profile")
 	}

@@ -77,9 +77,10 @@ class SpeechRequest(SpeechStyle):
     model_revision: str = Field(pattern=ID_PATTERN)
     clone_prompt_digest: str = ""
     reference_group_digest: str = ""
+    synthesis_config_digest: str = ""
     speech_text: str = Field(min_length=1, max_length=180)
 
-    @field_validator("clone_prompt_digest", "reference_group_digest")
+    @field_validator("clone_prompt_digest", "reference_group_digest", "synthesis_config_digest")
     @classmethod
     def validate_optional_digest(cls, value: str) -> str:
         if value and not re.fullmatch(DIGEST_PATTERN, value):
