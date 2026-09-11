@@ -107,7 +107,8 @@ test('late filler setup cannot open microphone or play after body arrival or can
 });
 
 test('barge-in replaces canceled filler with one predecoded acknowledgement without waiting for Go', async () => {
-  for (const end of ['natural', 'cancel', 'new_turn', 'session', 'dispose', 'failed_stop', 'explicit_cancel']) {
+  for (const end of ['natural', 'cancel', 'new_turn', 'session', 'dispose', 'failed_stop', 'explicit_cancel',
+    'waiting_cancel', 'waiting_session', 'waiting_new_turn', 'waiting_dispose']) {
     let time = 0, monitor, session = 'session', decodes = 0;
     const canceled = deferred(), telemetry = [];
     const h = harness({now: () => time, getSessionID: () => session,
@@ -138,6 +139,21 @@ test('barge-in replaces canceled filler with one predecoded acknowledgement with
       assert.equal(h.controller.lastSnapshot.state, 'FAILED');
       await h.controller.dispose(); continue;
     }
+    assert.equal(filler.stopped, true); assert.equal(context.sources.length, 1);
+    assert.equal(context.closed, false); assert.equal(h.nodes['voice-cancel'].disabled, false);
+    if (end.startsWith('waiting_')) {
+      canceled.resolve(snapshot(1, 'CANCELED')); await tick();
+      if (end === 'waiting_cancel') await h.controller.cancel();
+      if (end === 'waiting_dispose') await h.controller.dispose();
+      if (end === 'waiting_new_turn') await h.controller.adopt(snapshot(2, 'THINKING'));
+      if (end === 'waiting_session') { session = 'other'; time = 4075; for (const t of [...h.timeouts.values()]) t.callback(); }
+      assert.equal(context.closed, true);
+      time = 4350; for (const t of [...h.timeouts.values()]) t.callback();
+      assert.equal(context.sources.length, 1);
+      assert.equal(telemetry.filter(e => e[2].kind === 'backchannel_started').length, 0);
+      await h.controller.dispose(); continue;
+    }
+    time = 4350; for (const t of [...h.timeouts.values()]) t.callback();
     const ack = context.sources[1];
     assert.equal(filler.stopped, true); assert.equal(ack.started, true);
     assert.equal(context.closed, false); assert.equal(context.sources.length, 2);
@@ -145,13 +161,14 @@ test('barge-in replaces canceled filler with one predecoded acknowledgement with
     await tick(); assert.equal(context.sources.length, 2); assert.deepEqual(h.calls.playback, []);
     canceled.resolve(snapshot(1, 'CANCELED')); await tick();
     assert.equal(ack.stopped, false); assert.equal(h.nodes['voice-cancel'].disabled, false);
-    if (end === 'natural') { time = 4850; ack.end(); }
+    if (end === 'natural') { time = 5150; ack.end(); }
     if (end === 'cancel') await h.controller.cancel();
     if (end === 'dispose') await h.controller.dispose();
     if (end === 'new_turn') await h.controller.adopt(snapshot(2, 'THINKING'));
-    if (end === 'session') { session = 'other'; time = 4075; for (const t of [...h.timeouts.values()]) t.callback(); }
+    if (end === 'session') { session = 'other'; time = 4375; for (const t of [...h.timeouts.values()]) t.callback(); }
     assert.equal(ack.stopped, true); assert.equal(context.closed, true);
     assert.equal(telemetry.filter(e => e[2].kind === 'backchannel_started').length, 1);
+    assert.equal(telemetry.find(e => e[2].kind === 'backchannel_started')[2].latency_ms, 300);
     assert.deepEqual(h.calls.output, []); assert.deepEqual(h.calls.token, []); assert.deepEqual(h.calls.transcript, []);
     h.audio(1, 2); await tick(); assert.equal(context.sources.length, 2);
     await h.controller.dispose();
