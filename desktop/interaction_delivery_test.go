@@ -202,6 +202,73 @@ func TestInteractionSpeechUnitRequiresProducerSealAndEveryNaturalEnd(t *testing.
 	h.checkPlayback(t)
 }
 
+func TestInteractionSuccessfulSpeechSealSurvivesCancellationLockRace(t *testing.T) {
+	for _, interrupted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "all_natural", true: "partial_interrupted"}[interrupted], func(t *testing.T) {
+			e := NewInteractionEngine(testVoiceASR{}, testVoiceTTS{}, testVoiceChat, nil, t.TempDir())
+			defer e.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			turn := &interactionTurn{ctx: ctx, cancel: cancel, created: time.Now(),
+				snapshot: InteractionSnapshot{OperationID: "op_seal", SessionID: "session", TurnID: "turn", GenerationRevision: 1, State: "PLAYING"},
+				chunks:   map[int]*playbackChunk{1: {started: true, stopped: true}, 2: {started: true, stopped: !interrupted, interrupted: interrupted}},
+			}
+			e.mu.Lock()
+			e.turns[turn.snapshot.OperationID] = turn
+			unitID := e.registerSpeechUnitLocked(turn, 1, "自然終了を確認する合成文．")
+			turn.snapshot.SpeechUnits[0].AudioSequences = []int{1, 2}
+			// The producer has returned successfully，but its bookkeeping waits
+			// for the engine lock while cancellation wins that same lock．
+			waiting, sealed := make(chan struct{}), make(chan struct{})
+			go func() {
+				close(waiting)
+				e.sealSpeechUnit(turn, 1, unitID)
+				close(sealed)
+			}()
+			<-waiting
+			e.cancelTurnLocked(turn)
+			e.mu.Unlock()
+			interactionGenerationReceive(t, sealed)
+			got, err := e.Snapshot(turn.snapshot.OperationID)
+			if err != nil || got.State != "CANCELED" || ctx.Err() != context.Canceled || !got.SpeechUnits[0].SynthesisComplete {
+				t.Fatalf("successful producer close lost after cancel: %+v / %v", got, err)
+			}
+			want := "completed"
+			if interrupted {
+				want = "interrupted"
+			}
+			if got.SpeechUnits[0].State != want {
+				t.Fatalf("producer close invented playback: %+v", got.SpeechUnits)
+			}
+		})
+	}
+}
+
+func TestInteractionSpeechSealRejectsStaleTurnRevisionAndUnit(t *testing.T) {
+	for _, stale := range []string{"turn", "revision", "unit_revision", "unit_id"} {
+		t.Run(stale, func(t *testing.T) {
+			turn := &interactionTurn{snapshot: InteractionSnapshot{OperationID: "op_seal", GenerationRevision: 2, State: "CANCELED",
+				SpeechUnits: []InteractionSpeechUnit{{UnitID: "unit_current", GenerationRevision: 2}}}, chunks: map[int]*playbackChunk{}}
+			e := &InteractionEngine{turns: map[string]*interactionTurn{"op_seal": turn}}
+			revision, id := 2, "unit_current"
+			switch stale {
+			case "turn":
+				e.turns["op_seal"] = &interactionTurn{}
+			case "revision":
+				revision = 1
+			case "unit_revision":
+				turn.snapshot.SpeechUnits[0].GenerationRevision = 1
+			case "unit_id":
+				id = "unit_old"
+			}
+			e.sealSpeechUnit(turn, revision, id)
+			if turn.snapshot.SpeechUnits[0].SynthesisComplete {
+				t.Fatal("stale producer close reached another unit or revision")
+			}
+		})
+	}
+}
+
 type delayedASRCancelProvider struct {
 	*c02EngineProvider
 	cancelStarted chan struct{}

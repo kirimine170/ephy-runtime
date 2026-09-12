@@ -490,6 +490,11 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 				} else {
 					err = provider.Stream(ttsCtx, text, emit)
 				}
+				if err == nil {
+					// Record the provider result before the stage wrapper can choose
+					// cancellation over an already successful synthesis result．
+					e.sealSpeechUnit(t, revision, unitID)
+				}
 				return err == nil, err
 			})
 			remaining -= time.Since(started)
@@ -500,7 +505,6 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 				speechDone <- speechResult{units: units, err: err}
 				return
 			}
-			e.sealSpeechUnit(t, revision, ctx, unitID)
 			units++
 		}
 	}()

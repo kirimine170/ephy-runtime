@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"math"
 )
@@ -46,14 +45,17 @@ func (e *InteractionEngine) registerSpeechUnitLocked(t *interactionTurn, revisio
 	t.snapshot.SpeechUnits = append(t.snapshot.SpeechUnits, InteractionSpeechUnit{UnitID: id, Text: text, GenerationRevision: revision, State: "unknown", AudioSequences: []int{}})
 	return id
 }
-func (e *InteractionEngine) sealSpeechUnit(t *interactionTurn, revision int, ctx context.Context, id string) {
+func (e *InteractionEngine) sealSpeechUnit(t *interactionTurn, revision int, id string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !e.generationLiveLocked(t, revision, ctx) {
+	// A successful producer close remains an observation of this old unit even
+	// if cancellation took the lock first．It never authorizes new audio，and
+	// an evicted/replaced turn or a later generation must not receive it．
+	if e.turns[t.snapshot.OperationID] != t || t.snapshot.GenerationRevision != revision {
 		return
 	}
 	for i := range t.snapshot.SpeechUnits {
-		if t.snapshot.SpeechUnits[i].UnitID == id {
+		if t.snapshot.SpeechUnits[i].UnitID == id && t.snapshot.SpeechUnits[i].GenerationRevision == revision {
 			t.snapshot.SpeechUnits[i].SynthesisComplete = true
 		}
 	}
