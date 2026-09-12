@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted for implementation，2026-09-12．Step 0の設計判断．C1〜C3の本体は未実装である．
+Accepted，2026-09-12．Step 1のsession分離と，先行Step 3のKarte policy採用・復旧を実装した．Step 1の実機受入は未確認，Step 2・4以降は未着手である．
 
 ## Context
 
-現行C0.xはoperation配下でASR，LLM，TTS，再生を扱い，cancelが入力も終了させる．C0.4のmicrophone monitorは本文開始前までの活動検知であり，ASRへの内容引継ぎはない．会話候補の自動送信はKarteのhuman review待ちまでであり，確定user eventの永続保全でも自動採用でもない．
+設計時のC0.xはoperation配下でASR，LLM，TTS，再生を扱い，cancelが入力も終了させていた．C0.4のmicrophone monitorは本文開始前までの活動検知であり，ASRへの内容引継ぎはない．会話候補の自動送信はKarteのhuman review待ちまでであり，確定user eventの永続保全でも自動採用でもない．
 
 ## Decision
 
@@ -27,6 +27,10 @@ Karteを唯一の正本ownerとし，Runtimeは未配送outboxと有限cacheだ�
 - 古いtraceや評価exportを会話本文の保存先へ転用しない．pending，local durable，canonical savedをUIで区別する．
 - 記録OFFは以後の保存停止であり，削除とは別である．訂正・権限変更・削除は検索，cache，未配送，Job，派生物に適用する．
 - Fast音声がnon-thinkingである現行仕様を記録し，Workのthinkingを維持した実機受入を別gateにする．
+
+## Step 3の実装境界
+
+Karteがv2のcreate／append／derivation更新とsearch／readを提供し，RuntimeはKarte正本の44 JSONと署名・ID・原文保持・再送の共通fixtureを照合する．Runtimeに別のcanonical writerやv2記録経路はまだ追加していない．scope登録は既定OFFであり，旧Developer Modeから記録同意を作らない．音声eventの有効化はStep 2の中断・再生契約とStep 4のv2 reader・direct index除外を待つ．人向け訂正・削除・制限と自動purgeはStep 6へ残す．
 
 ## Verification
 

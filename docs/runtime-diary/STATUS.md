@@ -1,8 +1,63 @@
 # Runtime会話・日記 C1〜C3 状況
 
-最終更新：2026-09-12．**Step 1の実装・自動検証・署名済みbuild作成まで完了．実マイク／実機UI受入は未確認**．Macがロック中でUI操作できず，ロック解除を依頼済みである．Step 2へは進んでいない．Step 0の元checkoutの未commit文書，model／voice，private設定，既存appを保全した．
+最終更新：2026-09-12．**指定されたStep 3を先行し，Karteのpolicy自動採用・安全な保存・復旧を実装，自動検証した**．C1 Step 1は実機受入待ち，Step 2・4以降は未着手である．実設定・実データへの記録は有効化していない．
 
 次の担当は[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)，[Runtime ADR-0014](../adr/ADR-0014-runtime-conversation-diary-boundaries.md)，[Karte保存契約 v2](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)を読み，ユーザーが指定したStepだけを進める．全Stepを一括実行するgoalは設定しない．
+
+## Step 3／C2 Karteの現在結果
+
+| 区分 | 状態 |
+|---|---|
+| 実装済み | Karteの共通writer，限定grant，typed event／派生物の採用，復旧，v2 search／read，human revision，source stale判定 |
+| 自動検証済み | 隔離したroot・合成データで非破壊保存，現在policy，ID再利用拒否，同一event再送，各停止境界の復旧，CLIの保存・読戻し・取消 |
+| native／利用者受入 | Karte UIでの新機能受入は未実施．実CLI試験は合成rootで実施したが，実ユーザーデータや音声記録の受入ではない |
+| Runtime側 | v1/v2の44 JSONをmirrorし，共通fixtureの署名・ID・原文・source参照をPythonで検査．Step 4の記録経路は未実装 |
+| 新記録の有効化 | 既定OFF．producer登録・scope・記録同意は人が明示する．既存Developer Modeを同意へ変換しない |
+
+### 対応版と契約
+
+- Karte：[PR #307](https://github.com/kirimine170/Karte/pull/307)．2026-09-12にCI 6件成功・PR時の公開job 1件skipを確認し，squash統合済み．対応mainは**`e426db4222db39654c87524e45437280aa403210`**．検証したPR headは`97a49e509390d7843d1fb63fc8b392e2dbfb17d6`，機能sourceは`591e767a5eee374fb170a2d66fcae39bd1100190`である．
+- C1：[Runtime PR #79](https://github.com/kirimine170/ephy-runtime/pull/79)をCI 6件成功後にsquash統合済み．main `338bd92dfbe1593000bc1e8c8e1ee9e87add6ebc`．下記の受入build source／binary hashは変わらない．
+- 保存契約：record schema／context protocol **2.0**．v1の既存15 JSONは維持し，v2の29 JSONを追加した合計44 JSONをKarteとbyte照合する．不明版をv1やdirect filesystemへfallbackしない．
+- ownerと設定：[Karte保存契約](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)，[Step 3設定・復旧手順](../../../karte/architecture/RUNTIME_RECORDS_V2_SETUP.md)，[ADR-0005](../../../karte/architecture/adr/ADR-0005-scoped-runtime-diary-adoption.md)．Runtimeはcanonical Markdownを独自生成しない．
+
+Karteの合成試験用CLIは上記機能sourceのclean tree `6c7d006f4e08e72a65371cb812f458962d7a9555`からGo 1.25.3／darwin arm64でbuildした．binary SHA-256は`b942680b354eeed664f6d2c505d9626f87601cd6c14f52251d4a28ffc3227065`．Desktop UIの実行版や受入の証明へ流用しない．
+
+### 保存・認可・復旧の確認
+
+共通writerはKarteのUI保存，v2採用，policy更新をプロセス間で直列化する．旧SaveFileが競合検出前に正本へ書いていた処理を除き，base hash，temp／fsync／replaceを使う．PR #268の`fc05c405085eed5ca566f630e78945db51575a79`から競合検出と回帰検査に必要な部分だけを照合・再利用した．同名の既存文書，人の編集，replace失敗では元bytesを保持する．v2の人による保存は新revisionを作り，以後の自動上書きを停止する．
+
+exact actor／producer／scopeの登録とMACを検査し，受信時・commit時に現在grantと共有privacy policyで再認可する．検索・読取り・過去revisionにも現在policyを適用し，取消時に古いcontext応答を破棄する．source revision／hashが変わった派生物はstaleとなり，既定検索から外れる．AI解釈は利用者の発言と区別する．
+
+`prepared → canonical → revision/event ledger → saved → receipt → archive`の各境界で停止を注入し，再起動・再送で1回の保存結果へ収束することを確認した．保存後receipt前に停止しても二重追記しない．既に保存済みの内容を後から人が変更しても，旧receiptの復旧で現在本文を上書きしない．同じeventを別candidateで再送しても同じeffectとなり，異なる本文へのcandidate／event ID再利用を拒否する．receipt詳細を除いた後も最小ledgerが再送を防ぐ．
+
+### 自動検証
+
+| gate | 結果 |
+|---|---|
+| Karte backend CI相当のroot＋cmd／internal対象22 package | PASS．GitHub Backend CIも成功．変更しないASR／audioの専用gateは別管理 |
+| Karte Desktop CI | darwin-arm64／darwin-amd64／Linux／Windowsすべて成功 |
+| canonical／v2 records／context／outbox／Gitのrace | PASS |
+| 別プロセスwriter，CAS，collision，人編集，停止6境界，旧review，UI read／site／Git除外 | PASS |
+| 実CLIのconfigure→採用→再送→ID再利用拒否→read-back→取消 | PASS．一時rootのみ．1文書・revision 1のまま，hash `33d8a0d76e4b9b1b27596e5fa95c1c7892cf3b74b5433b8178f8daad281ef85c` |
+| Karte frontend | Node 22.13.0で50 tests，typecheck，production build PASS．Node 25では既存localStorage testが失敗したため指定版へ合わせた |
+| Windows amd64 | クロスコンパイルに加え，CI上のroot／canonical／v2 recordsの回帰検査とDesktop buildがPASS．native電源断耐性は未確認 |
+| v2 schema／共通fixture | PASS．strict JSON，canonical bytes／MAC，stable ID，8 events，再送，解釈とsource refs，中断unitの自然終了を推定しないことを検査 |
+| Runtime側Python | 契約同期とv2 fixtureの16 tests PASS．44 JSON byte一致 |
+
+最初のWindows CIではUnix mode bitによる資格情報判定が失敗した．Windows用に利用者本人のowner／ACL検査・設定と置換時のACL保持を実装し，専用回帰検査を追加した．続くWindows実行では機能検査が通り，共有fixtureのcheckout時のCRLF変換だけが残ったため，Karteのcontract JSONをLF固定にした．Runtimeは既存のLF設定を維持し，44 JSONがautocrlf有効時にもbyte一致することを確認した．
+
+macOS／Linuxのdirectory fsyncと異なり，Windowsはfile fsync・replaceを行いdirectory flushは行わない．非協調の外部editorとOSレベルで完全なCASを保証しない．これらの限界を設定手順に明記した．自動purge，tombstone，削除・制限のhuman intent UIは未実装であり，Step 6へ残る．
+
+### 未統合・未commit変更の整理
+
+ユーザーのcommit／push／PR／merge許可を引き継ぎ，C1と今回のStep 3を独立したPRにした．元checkoutのStep 0文書は開始時hashと一致を確認し，元bytesを保全してからcleanにした．Karte mainは`e426db4`へfast-forward済みでclean，Runtime mainはC1統合済みでcleanと確認した．Karteの同名末尾「2」の4ファイルは各対応元とbyte一致を確認し，ローカルrecoveryへ保全後に元checkoutの重複だけを取り除いた．古いC0.1の11ファイルの試行差分はpatchとして保全し，今回のmainへ混ぜない．
+
+Runtimeのdraft PR #7／#8／#9／#12はbenchmark，reranker，Wails E2E，SearXNGの独立backlogとして維持する．Karte #268と#271→#270→#268→#269→#277のstackも維持し，未完のCIを新しいStep 3の故障と同一視しない．旧Karte／Renderer checkoutのprivate・tool・生成物は公開commitへ加えていない．詳細はローカルのrepository inventoryと保全patchで追跡する．古いbranchのahead数を未実装の証拠にせず，既存squash・patch同等性を優先する．
+
+### 次の指示対象
+
+C1 Step 1の既存手順による受入と，Step 2のpre-roll・割込み・新入力ASR・中断履歴・SpeechUnitの再生開始／自然終了／不明状態を先に確定する．今回Step 4へは進まない．Step 4の開始時は本節のKarte版をpinし，v2 readerと旧direct reader／generic RAG除外，記録ON／OFFと同意，永続queue，event配送・receipt・読戻し・restartを実装する．これらが揃う前に実会話の記録を有効にしない．具体的な旧経路は`packages/karte_core/source.py`の`scan`／`read_document`と，`packages/rag_core/service.py`の`_iter_files`／`_copy_ingest_source`，既存chunk storeである．Step 4では新規ingestだけでなく，既存copy・cached chunk・source表示からの再読取りも遮断し，現在policyに従うKarte v2 readへ統一する．今回これらのRuntime本体は変更していない．
 
 ## Step 1／C1の結果
 
@@ -19,7 +74,7 @@
 | build対象tree | `c70ad925c362426a0bdd15647255612bffc61fc9`．ビルド前後でsource一致，`source_dirty=false` |
 | 署名後の実行ファイルSHA-256 | `778670fe65aaa399636fefbe803b111e3805bb84191ae4b98c75b431bd5258fa` |
 | build | Go 1.25.3，darwin/arm64，production tags，ad-hoc署名．`desktop/build/bin/runtime-build-provenance.json`で対応付け |
-| 外部操作 | push／PR作成／mergeなし．Karte本体変更なし |
+| 外部操作 | PR #79をCI成功後に統合済み．上のStep 3節の更新を優先 |
 
 本STATUSを追記した文書commitとbuildのsource SHAは別である．受入対象は上表の機能sourceとbinary hashで固定する．build scriptは作成前後のsource不一致を拒否し，dirty buildを明記する．署名直後の検査はPASS．File Providerが後からbundleへFinderInfoを付けた際にstrict検査が1回失敗したため，当該属性だけを除去して再検査PASS，同じbinary hashを確認した．受入launcherにも同じ属性除去と署名・hash検査を用意した．
 
@@ -57,16 +112,16 @@ Pythonは既存Runtimeのvenvを利用し，Go cacheは一時ディレクトリ�
 | 項目 | 現在 |
 |---|---|
 | source SHAと署名後binary hashの対応 | **確認済み**．上表とprovenance JSON |
-| native UI起動・表示・状態遷移 | **未確認**．CUAがMacロックを報告し，アプリUIへ到達していない |
+| native UI起動・表示・状態遷移 | **新buildは未確認**．後の確認で既存buildのUIへ到達したが，C1受入の証明には数えない |
 | ヘッドホンで開始1回→4往復→pause／resume→終了 | **未確認**．人の発話・聴感確認は未実施 |
 | 実音声でのfirst partial／endpoint／finalization／回答開始 | **未測定**．synthetic境界値を実測欄へ転記しない |
 | 実音声での誤送信・二重送信なし，短い相槌とためらいの自然さ | **未確認** |
 
-ロック解除後，既存Runtimeを通常終了してから受入用bundleを起動する．単一instance制約により，旧appが動いたままの起動を新buildの確認と数えない．ローカルrecoveryに置いた`launch-c1-acceptance.command`は既存instance検査，hash／署名検査，導入済みASR helper指定を行う．既存loopback Gateway／TTSを利用し，model／private設定を変更しない．
+UI操作可能な状態で既存Runtimeを通常終了してから受入用bundleを起動する．単一instance制約により，旧appが動いたままの起動を新buildの確認と数えない．ローカルrecoveryに置いた`launch-c1-acceptance.command`は既存instance検査，hash／署名検査，導入済みASR helper指定を行う．既存loopback Gateway／TTSを利用し，model／private設定を変更しない．
 
 人の必要操作は，ヘッドホン装着→「会話を開始」→「はい」「うん」と，途中に短い間を入れた発話，「えっと……」から続く発話で4往復→「一時停止」→「会話を再開」→「会話を終了」である．各turnの本文なしtraceでlatencyとendpoint／finalが各1回であることを照合し，聴感と誤送信の有無は別に記録する．人の確認がないまま実機合格へ更新しない．
 
-rollbackは受入sessionを終了して元bundleへ戻す．元checkout，Step 0の未commit文書，既存app，モデル・音声assetは保持している．次の一手は上記Step 1実機受入であり，Step 2はユーザーの別指示後に開始する．
+rollbackは受入sessionを終了して元bundleへ戻す．Step 0文書の元bytesはrecoveryへ保全し，sourceのmainは統合版へ更新する．既存app，モデル・音声assetは保持している．次の一手は上記Step 1実機受入であり，Step 2はユーザーの別指示後に開始する．
 
 ## 1．Step 0時点の版と作業状態
 
