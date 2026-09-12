@@ -6269,6 +6269,14 @@ func appendBounded(lines []string, line string) []string {
 }
 
 func detectWorkspaceRoot() string {
+	// A verified bundle can be staged outside a synchronized workspace．Keep
+	// its settings and data attached to the explicitly selected runtime root．
+	if configured := strings.TrimSpace(os.Getenv("EPHY_RUNTIME_ROOT")); filepath.IsAbs(configured) {
+		configured = filepath.Clean(configured)
+		if findRuntimeRoot(configured) == configured {
+			return configured
+		}
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		wd = "."

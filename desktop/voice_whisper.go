@@ -613,7 +613,7 @@ func (s *whisperASRSession) Append(ctx context.Context, sequence int, pcm []byte
 func (s *whisperASRSession) Finish(ctx context.Context) (ASRUpdate, error) {
 	s.inputMu.Lock()
 	s.mu.Lock()
-	if !s.terminal && !s.finishing && !s.canceled {
+	if !s.terminal && s.pending == nil && !s.finishing && !s.canceled {
 		if s.bytes == 0 {
 			s.mu.Unlock()
 			s.inputMu.Unlock()

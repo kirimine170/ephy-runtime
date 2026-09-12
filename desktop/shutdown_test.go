@@ -29,6 +29,31 @@ func TestPackagedAppFindsRuntimeRoot(t *testing.T) {
 	}
 }
 
+func TestDetachedAppUsesExplicitRuntimeWithoutChangingDataRoot(t *testing.T) {
+	t.Setenv("EPHY_RUNTIME_ROOT", "")
+	fallback := detectWorkspaceRoot()
+	root := filepath.Join(t.TempDir(), "runtime with spaces")
+	for _, name := range []string{"configs/models.yaml", "scripts/start_gateway.sh"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("EPHY_RUNTIME_ROOT", root+string(filepath.Separator))
+	if got := detectWorkspaceRoot(); got != root {
+		t.Fatal("detached bundle lost its explicit settings and data root", got)
+	}
+	for _, invalid := range []string{"relative/root", t.TempDir(), filepath.Join(root, "missing-child")} {
+		t.Setenv("EPHY_RUNTIME_ROOT", invalid)
+		if got := detectWorkspaceRoot(); got != fallback {
+			t.Fatal("invalid override selected an unrelated or ancestor directory", got)
+		}
+	}
+}
+
 func TestShutdownStopsOwnedProcessesAndRejectsNewStarts(t *testing.T) {
 	a := newTestAppWithWorkspace(t)
 	owned, external := exec.Command("sleep", "60"), exec.Command("sleep", "60")

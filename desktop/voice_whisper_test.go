@@ -318,6 +318,7 @@ func TestWhisperAssetsAndProviderConfigurationFailClosed(t *testing.T) {
 func TestWhisperDecoderFailureNotifiesRecordingBeforeFinish(t *testing.T) {
 	p, f := whisperTestProvider(t)
 	whisperReady(t, p, f)
+	unexpectedFinish := make(chan struct{}, 1)
 	go f.receive(func(frame map[string]json.RawMessage) {
 		u := whisperUpdate(p, nativeStreamRequest(), 1, "failure", "")
 		u.ErrorCode = "asr_empty_result"
@@ -327,10 +328,23 @@ func TestWhisperDecoderFailureNotifiesRecordingBeforeFinish(t *testing.T) {
 		case "audio":
 			whisperEmit(f, whisperFrame{Type: "update", ASRUpdate: u})
 			whisperEmit(f, whisperFrame{Type: "done", ASRUpdate: u})
+		case "finish":
+			unexpectedFinish <- struct{}{}
 		}
 	})
 	events := make(chan ASRUpdate, 1)
-	s, err := p.OpenSession(context.Background(), nativeStreamRequest(), func(u ASRUpdate) { events <- u })
+	callbackRelease := make(chan struct{})
+	defer func() {
+		select {
+		case <-callbackRelease:
+		default:
+			close(callbackRelease)
+		}
+	}()
+	s, err := p.OpenSession(context.Background(), nativeStreamRequest(), func(u ASRUpdate) {
+		events <- u
+		<-callbackRelease
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +359,20 @@ func TestWhisperDecoderFailureNotifiesRecordingBeforeFinish(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("failure hidden until endpoint")
 	}
-	if _, err = s.Finish(context.Background()); err == nil || err.Error() != "asr_empty_result" {
-		t.Fatal(err)
+	finished := make(chan error, 1)
+	go func() { _, err := s.Finish(context.Background()); finished <- err }()
+	select {
+	case <-unexpectedFinish:
+		t.Fatal("Finish wrote into an already terminating worker session")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(callbackRelease)
+	select {
+	case err = <-finished:
+		if err == nil || err.Error() != "asr_empty_result" {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("decoder failure did not complete Finish")
 	}
 }
