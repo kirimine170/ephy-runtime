@@ -6,6 +6,7 @@ export function createVoiceInputBuffer(sampleRate) {
   return {
     get holding() { return holding; },
     get samples() { return samples; },
+    snapshot() { return frames.map(frame => new Float32Array(frame)); },
     push(data) {
       if (holding && samples + data.length > maximum) return false;
       frames.push(new Float32Array(data)); samples += data.length;

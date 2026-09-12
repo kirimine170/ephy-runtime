@@ -48,6 +48,40 @@ export namespace main {
 	        this.sample_rate = source["sample_rate"];
 	    }
 	}
+	export class ASRUpdate {
+	    operation_id: string;
+	    session_id: string;
+	    turn_id: string;
+	    segment_id: string;
+	    revision: number;
+	    phase: string;
+	    transcript?: string;
+	    stable_prefix?: string;
+	    provider: string;
+	    model_revision: string;
+	    monotonic_ms: number;
+	    error_code?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ASRUpdate(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.operation_id = source["operation_id"];
+	        this.session_id = source["session_id"];
+	        this.turn_id = source["turn_id"];
+	        this.segment_id = source["segment_id"];
+	        this.revision = source["revision"];
+	        this.phase = source["phase"];
+	        this.transcript = source["transcript"];
+	        this.stable_prefix = source["stable_prefix"];
+	        this.provider = source["provider"];
+	        this.model_revision = source["model_revision"];
+	        this.monotonic_ms = source["monotonic_ms"];
+	        this.error_code = source["error_code"];
+	    }
+	}
 	export class ApplyLocalModelRequest {
 	    role: string;
 	    model_id: string;
@@ -883,6 +917,7 @@ export namespace main {
 	    }
 	}
 	export class InteractionInterruption {
+	    candidate_ms?: number;
 	    local_stop_ms: number;
 	    voice_session_id: string;
 	    voice_session_epoch: number;
@@ -898,6 +933,7 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.candidate_ms = source["candidate_ms"];
 	        this.local_stop_ms = source["local_stop_ms"];
 	        this.voice_session_id = source["voice_session_id"];
 	        this.voice_session_epoch = source["voice_session_epoch"];
@@ -928,6 +964,7 @@ export namespace main {
 	}
 	export class InteractionInterruptionTiming {
 	    local_stop_ms: number;
+	    candidate_ms?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new InteractionInterruptionTiming(source);
@@ -936,6 +973,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.local_stop_ms = source["local_stop_ms"];
+	        this.candidate_ms = source["candidate_ms"];
 	    }
 	}
 	export class InteractionPlaybackObservation {
@@ -1094,6 +1132,42 @@ export namespace main {
 	        this.generation = this.convertValues(source["generation"], GenerationMetadata);
 	        this.generation_revision = source["generation_revision"];
 	        this.asr = this.convertValues(source["asr"], ASRMetadata);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class InterruptionCandidateSnapshot {
+	    candidate_id: string;
+	    request: ASRSessionRequest;
+	    update?: ASRUpdate;
+	    error_code?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new InterruptionCandidateSnapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.candidate_id = source["candidate_id"];
+	        this.request = this.convertValues(source["request"], ASRSessionRequest);
+	        this.update = this.convertValues(source["update"], ASRUpdate);
+	        this.error_code = source["error_code"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

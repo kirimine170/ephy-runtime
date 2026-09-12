@@ -23,6 +23,7 @@ type InteractionPlaybackObservation struct {
 }
 type InteractionInterruptionTiming struct {
 	LocalStopMS float64 `json:"local_stop_ms"`
+	CandidateMS int     `json:"candidate_ms,omitempty"`
 }
 type InteractionInputHandoffTiming struct {
 	ASRReadyMS      int `json:"asr_ready_ms"`
@@ -30,6 +31,7 @@ type InteractionInputHandoffTiming struct {
 	BufferedAudioMS int `json:"buffered_audio_ms"`
 }
 type InteractionInterruption struct {
+	CandidateMS        int                              `json:"candidate_ms,omitempty"`
 	LocalStopMS        float64                          `json:"local_stop_ms"`
 	VoiceSessionID     string                           `json:"voice_session_id"`
 	VoiceSessionEpoch  uint64                           `json:"voice_session_epoch"`
@@ -97,7 +99,7 @@ func (e *InteractionEngine) Interrupt(r InteractionInterruption) (InteractionSna
 	if t == nil || r.SessionID != t.snapshot.SessionID || r.TurnID != t.snapshot.TurnID || r.GenerationRevision != t.snapshot.GenerationRevision || r.VoiceSessionID != t.request.VoiceSessionID || r.VoiceSessionEpoch != t.request.VoiceSessionEpoch || !e.validVoiceSessionLocked(t.request) {
 		return InteractionSnapshot{}, errors.New("stale_interruption")
 	}
-	if len(r.Playback) > 64 || math.IsNaN(r.LocalStopMS) || math.IsInf(r.LocalStopMS, 0) || r.LocalStopMS < 0 || r.LocalStopMS > 5000 {
+	if len(r.Playback) > 64 || math.IsNaN(r.LocalStopMS) || math.IsInf(r.LocalStopMS, 0) || r.LocalStopMS < 0 || r.LocalStopMS > 5000 || r.CandidateMS < 0 || r.CandidateMS > 2000 {
 		return InteractionSnapshot{}, errors.New("invalid_playback_observation")
 	}
 	seen := map[int]bool{}
@@ -118,7 +120,7 @@ func (e *InteractionEngine) Interrupt(r InteractionInterruption) (InteractionSna
 			c.interrupted = o.State == "interrupted"
 		}
 	}
-	t.snapshot.Interruption = &InteractionInterruptionTiming{LocalStopMS: r.LocalStopMS}
+	t.snapshot.Interruption = &InteractionInterruptionTiming{LocalStopMS: r.LocalStopMS, CandidateMS: r.CandidateMS}
 	e.traceLocked(t, "user_barge_in", "")
 	e.cancelTurnLocked(t)
 	return cloneInteractionSnapshot(t.snapshot), nil

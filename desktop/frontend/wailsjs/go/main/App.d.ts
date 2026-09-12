@@ -4,11 +4,15 @@ import {main} from '../models';
 
 export function AppendInteractionAudio(arg1:string,arg2:number,arg3:string):Promise<void>;
 
+export function AppendInteractionInterruptionCandidate(arg1:string,arg2:string,arg3:number,arg4:string):Promise<main.InterruptionCandidateSnapshot>;
+
 export function ApplyLocalModel(arg1:main.ApplyLocalModelRequest):Promise<main.LocalModelCatalog>;
 
 export function ApproveWebSearch(arg1:string):Promise<Record<string, any>>;
 
 export function BeginInteractionASR(arg1:string,arg2:number):Promise<main.ASRSessionRequest>;
+
+export function BeginInteractionInterruptionCandidate(arg1:string,arg2:string,arg3:number,arg4:number):Promise<main.InterruptionCandidateSnapshot>;
 
 export function BrowseIndex(arg1:main.IndexBrowseRequest):Promise<Record<string, any>>;
 
@@ -17,6 +21,8 @@ export function CancelBatchWorkflow():Promise<main.BatchWorkflowState>;
 export function CancelInteraction(arg1:string):Promise<main.InteractionSnapshot>;
 
 export function CancelInteractionComparison(arg1:string):Promise<void>;
+
+export function CancelInteractionInterruptionCandidate(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function ChangeVoiceSession(arg1:string,arg2:number,arg3:string):Promise<main.VoiceSessionSnapshot>;
 

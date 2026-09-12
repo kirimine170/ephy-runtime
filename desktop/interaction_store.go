@@ -58,6 +58,9 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 		}
 		if event.Interruption != nil {
 			validation.LatenciesMS["local_stop"] = int64(event.Interruption.LocalStopMS)
+			if event.Interruption.CandidateMS > 0 {
+				validation.LatenciesMS["interruption_candidate"] = int64(event.Interruption.CandidateMS)
+			}
 		}
 	}
 	required := []string{"user_speech_start"}

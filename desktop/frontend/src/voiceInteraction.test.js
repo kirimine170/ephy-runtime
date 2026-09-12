@@ -255,6 +255,8 @@ function harness(options = {}) {
   let identity = 0;
   const nodes = Object.fromEntries(['voice-session', 'voice-pause', 'voice-end', 'voice-record', 'voice-cancel', 'voice-status', 'voice-fallback', 'voice-live-transcript', 'voice-transcript-stable', 'voice-transcript-revisable'].map((id) => [id, button()]));
   const calls = {start: [], readiness: [], begin: [], append: [], end: [], commit: [], cancel: [], interrupts: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
+  calls.candidateBegin = []; calls.candidateAppend = []; calls.candidateCancel = [];
+  const candidateRequest = op => ({operation_id: op, session_id: 'session', turn_id: `turn-${op.slice(3)}`, segment_id: `candidate-segment-${op}`, sample_rate: 16000});
   const contexts = [];
   const streams = [];
   const timeouts = new Map();
@@ -269,6 +271,15 @@ function harness(options = {}) {
     },
     async AppendInteractionAudio(...args) { calls.append.push(args); },
     async EndInteractionASR(...args) { calls.end.push(args); },
+    async BeginInteractionInterruptionCandidate(op, id, revision, sampleRate) {
+      calls.candidateBegin.push([op, id, revision, sampleRate]);
+      return {candidate_id: id, request: candidateRequest(op)};
+    },
+    async AppendInteractionInterruptionCandidate(op, id, sequence, bytes) {
+      calls.candidateAppend.push([op, id, sequence, bytes]);
+      return {candidate_id: id, request: candidateRequest(op), update: {...candidateRequest(op), revision: 1, phase: 'final', transcript: '待って', stable_prefix: '待って'}};
+    },
+    async CancelInteractionInterruptionCandidate(...args) { calls.candidateCancel.push(args); },
     async CommitInteraction(...args) { calls.commit.push(args); },
     async CancelInteraction(op) {
       calls.cancel.push(op);
@@ -1448,6 +1459,8 @@ function tickContinuous(h) {
   for (const [id, timer] of [...h.timeouts]) if (timer.milliseconds === 20) { h.timeouts.delete(id); timer.callback(); }
 }
 const speechFrame = () => new Float32Array(512).fill(.1);
+const interruptionFrame = () => new Float32Array(4800).fill(.1);
+async function interruptSpeech(h) { h.contexts[0].capture(interruptionFrame()); await tick(); await tick(); }
 
 test('C1 four completed turns share one capture and output context，history is refreshed before relisten', async () => {
   let time = 0, completed = 0;
@@ -1601,10 +1614,11 @@ for (const phase of ['llm_wait', 'filler', 'tts_wait', 'body']) {
     if (phase === 'tts_wait') h.state(1, 'SYNTHESIZING');
     if (phase === 'body') { h.state(1, 'SYNTHESIZING'); h.audio(1, 1); await tick(); }
     const oldSource = output.sources[0], oldEnd = oldSource?.onended;
-    const before = new Float32Array(128), onset1 = new Float32Array(256).fill(.0625), onset2 = new Float32Array(256).fill(.125);
+    const before = new Float32Array(128), onset1 = new Float32Array(1280).fill(.0625), onset2 = new Float32Array(1600).fill(.125);
     input.capture(before); input.capture(onset1);
     assert.equal(requests.length, 0);
     input.capture(onset2);
+    await tick();
     assert.equal(requests.length, 1);
     assert.equal(requests[0].operation_id, 'op-1');
     assert.equal(requests[0].generation_revision, 1);
@@ -1619,7 +1633,7 @@ for (const phase of ['llm_wait', 'filler', 'tts_wait', 'body']) {
     opened.resolve(asrSession(2)); await tick(); await tick();
     const bytes = Buffer.concat(h.calls.append.filter(([op]) => op === 'op-2').map(([, , data]) => Buffer.from(data, 'base64')));
     const actual = Array.from({length: bytes.length / 2}, (_, i) => bytes.readInt16LE(i * 2));
-    assert.deepEqual(actual, [...Array(128).fill(0), ...Array(256).fill(2048), ...Array(256).fill(4096), ...Array(256).fill(6144), ...Array(256).fill(8192)]);
+    assert.deepEqual(actual, [...Array(128).fill(0), ...Array(1280).fill(2048), ...Array(1600).fill(4096), ...Array(256).fill(6144), ...Array(256).fill(8192)]);
     oldEnd?.(); h.audio(1, 2); h.event(1, 'token', {text: 'old answer'});
     h.asr(1, 8, '旧final', {phase: 'final', stable_prefix: '旧final'}); h.event(1, 'transcript', {text: '旧canonical'});
     h.asr(2, 1, 'いや，冬の話だけ聞きたい', {phase: 'final', stable_prefix: 'いや，冬の話だけ聞きたい'});
@@ -1639,7 +1653,7 @@ test('C1 Step2 repeated interruptions keep one capture and distinct ASRs，witho
   for (let id = 1; id <= 3; id++) {
     h.contexts[0].capture(speechFrame()); await h.controller.stop();
     h.event(id, 'transcript', {text: `確定${id}`}); h.state(id, 'SYNTHESIZING'); h.audio(id, 1); await tick();
-    h.contexts[0].capture(speechFrame()); await tick(); await tick();
+    await interruptSpeech(h);
     assert.equal(h.controller.lastSnapshot.operation_id, `op-${id + 1}`);
     assert.equal(h.calls.interrupts.length, id);
     assert.equal(h.calls.begin.length, id + 1);
@@ -1655,7 +1669,7 @@ test('C1 Step2 a full handoff buffer pauses instead of discarding the onset', as
   const canceled = deferred();
   const h = harness({bridge: {InterruptInteraction: () => canceled.promise}});
   await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
-  h.state(1, 'THINKING'); h.contexts[0].capture(speechFrame());
+  h.state(1, 'THINKING'); await interruptSpeech(h);
   h.contexts[0].capture(new Float32Array(32000).fill(.1));
   assert.ok(h.streams[0].tracks.every(track => track.stopped));
   assert.equal(h.controller.sessionSnapshot.state, 'paused');
@@ -1673,7 +1687,7 @@ test('C1 Step2 local natural ending survives a delayed started ACK during interr
   }});
   await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
   h.state(1, 'SYNTHESIZING'); h.audio(1, 1); await tick();
-  h.contexts[1].sources[0].end(); h.contexts[0].capture(speechFrame());
+  h.contexts[1].sources[0].end(); await interruptSpeech(h);
   assert.deepEqual(reports[0].playback, [{sequence: 1, state: 'completed'}]);
   await tick(); started.resolve(); await tick();
   assert.equal(h.controller.lastSnapshot.operation_id, 'op-2');
@@ -1694,7 +1708,7 @@ test('C1 Step2 next Work request inherits settings and only the proven spoken pr
   });
   await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
   h.event(1, 'transcript', {text: '四季を説明して'}); h.state(1, 'THINKING');
-  h.contexts[0].capture(speechFrame()); await tick(); await tick();
+  await interruptSpeech(h);
   const next = h.calls.start[1];
   assert.deepEqual(next.speech, settings.speech);
   for (const [key, value] of Object.entries(settings.chat)) assert.deepEqual(next.chat[key], value);
@@ -1718,7 +1732,7 @@ test('C1 Step2 failed source.stop still mutes body and keeps the next ASR indepe
   output.createBufferSource = () => { const source = originalSource(); source.connect = target => gains.push(target); return source; };
   h.contexts[0].capture(speechFrame()); await h.controller.stop(); h.state(1, 'SYNTHESIZING'); h.audio(1, 1); await tick();
   output.sources[0].stop = () => { throw new Error('device stop failed'); };
-  h.contexts[0].capture(speechFrame());
+  await interruptSpeech(h);
   assert.equal(gains[0].gain.value, 0);
   assert.equal(gains[0].disconnected, true);
   await tick(); await tick();
@@ -1740,7 +1754,7 @@ test('C1 Step2 provider final before handoff drain pauses without accepting a tr
   }});
   await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
   h.event(1, 'transcript', {text: '四季を説明して'}); h.state(1, 'THINKING');
-  h.contexts[0].capture(speechFrame()); h.contexts[0].capture(speechFrame());
+  await interruptSpeech(h); h.contexts[0].capture(speechFrame());
   pending.resolve(snapshot(1, 'CANCELED', {interruption: {local_stop_ms: 0}})); await tick(); await tick();
   assert.equal(h.controller.lastSnapshot.state, 'FAILED');
   assert.equal(h.controller.lastSnapshot.error_code, 'asr_protocol_error');
@@ -1749,5 +1763,63 @@ test('C1 Step2 provider final before handoff drain pauses without accepting a tr
   assert.equal(h.calls.transcript.length, 1);
   assert.equal(h.calls.end.filter(([op]) => op === 'op-2').length, 0);
   assert.equal(h.controller.lastSnapshot.preview, 'いや');
+  await h.controller.endSession();
+});
+
+for (const phase of ['THINKING', 'SYNTHESIZING', 'PLAYING']) test(`noise bursts preserve ${phase} and later output events`, async () => {
+  const h = harness({endpointConfig: {onsetMS: 1, rms: .001}});
+  await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
+  h.event(1, 'transcript', {text: '説明して'}); h.state(1, phase === 'PLAYING' ? 'SYNTHESIZING' : phase);
+  if (phase === 'PLAYING') { h.audio(1, 1); await tick(); }
+  for (let i = 0; i < 15; i++) { h.contexts[0].capture(new Float32Array(640).fill(.8)); h.contexts[0].capture(new Float32Array(960)); }
+  await tick();
+  assert.equal(h.calls.candidateBegin.length, 0); assert.equal(h.calls.interrupts.length, 0);
+  assert.equal(h.calls.cancel.length, 0); assert.equal(h.streams[0].tracks[0].stopped, false);
+  h.event(1, 'token', {text: '継続する返答'}); assert.equal(h.calls.token.at(-1)[1], '継続する返答');
+  if (phase === 'PLAYING') assert.equal(h.contexts[1].sources[0].stopped, false);
+  await h.controller.endSession();
+});
+
+for (const reason of ['asr_failure', 'acknowledgement', 'missing_recognition']) test(`${reason} restores playback without canceling its producer or opening a new turn`, async () => {
+  const h = harness({bridge: {async AppendInteractionInterruptionCandidate(op, id) {
+    if (reason === 'asr_failure') throw new Error('asr_failed');
+    const request = {operation_id: op, session_id: 'session', turn_id: 'turn-1', segment_id: `candidate-segment-${op}`, sample_rate: 16000};
+    return {candidate_id: id, request, ...(reason === 'acknowledgement' ? {update: {...request, revision: 1, phase: 'final', transcript: 'うん'}} : {})};
+  }}});
+  await h.controller.startSession(); const output = h.contexts[1]; let gain;
+  const originalSource = output.createBufferSource.bind(output);
+  output.createBufferSource = () => { const source = originalSource(); source.connect = target => { gain = target; }; return source; };
+  h.contexts[0].capture(speechFrame()); await h.controller.stop(); h.state(1, 'SYNTHESIZING'); h.audio(1, 1); await tick();
+  h.contexts[0].capture(interruptionFrame()); await tick();
+  if (reason !== 'asr_failure') { assert.equal(gain.gain.value, .3); for (const timer of [...h.timeouts.values()]) if (timer.milliseconds === 1200) timer.callback(); }
+  await tick();
+  assert.equal(gain.gain.value, 1); assert.equal(output.sources[0].stopped, false);
+  assert.equal(h.calls.interrupts.length, 0); assert.equal(h.calls.cancel.length, 0);
+  assert.equal(h.calls.failure.length, 0); assert.equal(h.calls.start.length, 1);
+  assert.ok(h.streams[0].tracks.every(t => !t.stopped));
+  h.event(1, 'token', {text: '元の返答を継続'}); assert.equal(h.calls.token.at(-1)[1], '元の返答を継続');
+  await h.controller.endSession();
+});
+
+test('reply completing during candidate recognition preserves onset for the next ordinary input', async () => {
+  const opened = deferred(); const h = harness({bridge: {BeginInteractionInterruptionCandidate: () => opened.promise}});
+  await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop(); h.state(1, 'SYNTHESIZING');
+  h.contexts[0].capture(interruptionFrame()); await tick(); h.state(1, 'COMPLETED'); await tick(); await tick();
+  assert.equal(h.calls.interrupts.length, 0); assert.equal(h.calls.start.length, 2);
+  assert.equal(h.calls.begin.length, 2); assert.ok(h.calls.append.some(([op]) => op === 'op-2'));
+  const bytes = Buffer.concat(h.calls.append.filter(([op]) => op === 'op-2').map(([, , body]) => Buffer.from(body, 'base64')));
+  assert.equal(bytes.length, 4800 * 2); assert.equal(bytes.readInt16LE(0), 3277);
+  opened.resolve({candidate_id: 'late-candidate', request: {operation_id: 'op-1', session_id: 'session', turn_id: 'turn-1', segment_id: 'late', sample_rate: 16000}}); await tick();
+  assert.equal(h.calls.candidateCancel.at(-1)[2], 'completed'); assert.equal(h.calls.cancel.length, 0);
+  await h.controller.endSession();
+});
+
+test('pause and resume fence a late candidate startup without reactivating its microphone', async () => {
+  const opened = deferred(); const h = harness({bridge: {BeginInteractionInterruptionCandidate: () => opened.promise}});
+  await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop(); h.state(1, 'THINKING');
+  h.contexts[0].capture(interruptionFrame()); await tick(); await h.controller.pauseSession(); await h.controller.startSession();
+  opened.resolve({candidate_id: 'old-candidate', request: {operation_id: 'op-1', session_id: 'session', turn_id: 'turn-1', segment_id: 'old', sample_rate: 16000}}); await tick();
+  assert.equal(h.calls.interrupts.length, 0); assert.equal(h.calls.candidateCancel.at(-1)[2], 'detached');
+  assert.ok(h.streams[0].tracks.every(t => t.stopped)); assert.ok(h.streams[1].tracks.every(t => !t.stopped));
   await h.controller.endSession();
 });

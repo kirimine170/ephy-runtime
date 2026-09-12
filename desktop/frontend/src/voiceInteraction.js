@@ -1,5 +1,6 @@
 import {createVoiceInputBuffer} from './voiceInputBuffer.js';
 import {createVoiceEndpoint, endpointSettings} from './voiceEndpoint.js';
+import {createVoiceInterruption, interruptionSettings} from './voiceInterruption.js';
 import {createTimingObserver} from './fillerTiming.js';
 import {createFillerController, createFillerPlayer, createFillerBackchannel} from './fillerController.js';
 import {startFillerBargeIn} from './fillerBargeIn.js';
@@ -233,8 +234,10 @@ export function mountVoiceInteraction({
   now = () => performance.now(),
   startBargeIn = startFillerBargeIn,
   endpointConfig = {},
+  interruptionConfig = {},
 } = {}) {
   const config = endpointSettings(endpointConfig);
+  const interruptionConfigResolved = interruptionSettings(interruptionConfig);
   const sessionButton = root?.querySelector('#voice-session');
   const pauseButton = root?.querySelector('#voice-pause');
   const endButton = root?.querySelector('#voice-end');
@@ -379,7 +382,7 @@ export function mountVoiceInteraction({
       if (continuous) status.textContent = voice.state === 'paused' ? (voice.reason || '会話を一時停止しました．マイクは停止しています．')
         : voice.permissionPending ? 'マイクの許可を確認しています．'
         : recording ? (current.endpoint?.candidate ? '発話の区切りを確認しています．' : current.endpoint?.speech ? '聞いています．話し終えると自動で送信します．' : '次の発話を待っています．')
-        : live(current) && !['PREPARING', 'RECORDING'].includes(current.snapshot.state) ? voiceStatusText(current.snapshot) + ' ヘッドホンでは，話しかけると応答を止めて聞き直します．' : '連続会話を準備しています．';
+        : live(current) && !['PREPARING', 'RECORDING'].includes(current.snapshot.state) ? voiceStatusText(current.snapshot) + (current.interruptionGuard?.pending ? ' 呼びかけを確認しています．' : ' ヘッドホンでは，「待って」や訂正の発話で応答を止められます．') : '連続会話を準備しています．';
       if (current?.bargeIn && live(current)) status.textContent += ' ヘッドホン用の割込み検出中です．';
     }
     if (fallback) {
@@ -429,6 +432,7 @@ export function mountVoiceInteraction({
   }
 
   function release(run) {
+    run.interruptionGuard?.stop();
     stopCapture(run);
     stopPlayback(run);
     run.inputQueue = [];
@@ -462,6 +466,9 @@ export function mountVoiceInteraction({
     run.snapshot = {...run.snapshot, ...snapshot};
     if (run.voice && snapshot.state === 'FAILED' && !run.snapshot.transcript) run.snapshot.preview = run.liveTranscript;
     notifyTranscript(run, run.snapshot.transcript);
+    if (run.voice && snapshot.state === 'COMPLETED' && run.interruptionGuard?.transfer()) {
+      run.voice.handoffAt = now();
+    }
     run.finished = true;
     release(run);
     render();
@@ -531,7 +538,7 @@ export function mountVoiceInteraction({
       liveTranscript: '', stablePrefix: '', endPromise: null, endRequested: false,
       timer: null, context: null, contextReady: null,
       outputGain: null, observedPlayback: new Map(), interrupted: false,
-      responseEndpoint: continuous ? createVoiceEndpoint({now, settings: config}) : null,
+      interruptionGuard: null,
       queue: [], queueBytes: 0, playing: null, decoding: false, ending: false, playbackEpoch: 0,
       lastSequence: 0, playbackBytesReceived: 0, earlyEvents: [], earlyBytes: 0, earlyOverflow: false,
       identityReady: new Promise((resolve) => { ready = resolve; }),
@@ -546,6 +553,23 @@ export function mountVoiceInteraction({
     };
     run.resolveIdentity = ready;
     current = run;
+    if (continuous) run.interruptionGuard = createVoiceInterruption({
+      bridge, identity: () => run.snapshot, sampleRate: run.voice.inputContext.sampleRate,
+      buffer: run.voice.pcm, createEncoder: createPCM16StreamEncoder, encodeBase64, now, timers,
+      settings: interruptionConfigResolved, isCurrent: () => attached(run),
+      phase: () => run.playing ? 'PLAYING' : run.snapshot.state,
+      onDuck: duck => { if (run.outputGain) run.outputGain.gain.value = duck ? interruptionConfigResolved.duckVolume : 1; render(); },
+      onConfirm: ({candidateMS}) => {
+        const v = run.voice;
+        if (!attached(run)) return;
+        run.relisten = true; run.interrupted = true; run.interruptionCandidateMS = candidateMS;
+        run.interruptionAt = now(); v.handoffAt = run.interruptionAt;
+        v.handoffTimer = timers.setTimeout(() => {
+          if (voice === v && v.running && v.pcm.holding) void changeSession('pause', FAILURES.input_handoff_overflow);
+        }, 5000);
+        void cancelRun();
+      },
+    });
     // Create and resume during the user gesture，before any awaited bridge call．
     try {
       run.context = run.voice ? run.voice.output : createAudioContext();
@@ -671,7 +695,7 @@ export function mountVoiceInteraction({
         const data = event.inputBuffer.getChannelData(0), rate = v.inputContext.sampleRate;
         for (const callback of [...v.monitors]) callback(data, rate);
         const run = current;
-        if (v.pcm.holding) {
+        if (v.pcm.holding && !run?.interruptionGuard?.pending) {
           if (!v.pcm.push(data)) void changeSession('pause', FAILURES.input_handoff_overflow);
           return;
         }
@@ -690,14 +714,7 @@ export function mountVoiceInteraction({
         // Monitoring belongs to the continuous capture，including LLM wait，
         // optional filler，TTS wait and body playback．No second ASR is opened．
         if (run.endPromise || ['THINKING', 'SYNTHESIZING', 'PLAYING'].includes(run.snapshot.state)) {
-          v.pcm.push(data); run.responseEndpoint.audio(data, rate);
-          if (run.responseEndpoint.speech) {
-            v.pcm.hold(); run.relisten = true; run.interrupted = true; run.interruptionAt = now(); v.handoffAt = run.interruptionAt;
-            v.handoffTimer = timers.setTimeout(() => {
-              if (voice === v && v.running && v.pcm.holding) void changeSession('pause', FAILURES.input_handoff_overflow);
-            }, 5000);
-            void cancelRun();
-          }
+          run.interruptionGuard.audio(data);
         }
       };
       for (const track of stream.getTracks()) track.onended = () => { if (valid()) void changeSession('pause', 'マイクが停止したため会話を一時停止しました．'); };
@@ -954,6 +971,7 @@ export function mountVoiceInteraction({
       try {
         const snapshot = operationID ? await (run.interrupted ? bridge.InterruptInteraction({
           local_stop_ms: run.localStopMS, voice_session_id: run.voice.snapshot.id, voice_session_epoch: run.voice.snapshot.epoch,
+          candidate_ms: run.interruptionCandidateMS || 0,
           session_id: run.snapshot.session_id, turn_id: run.snapshot.turn_id, operation_id: operationID,
           generation_revision: run.snapshot.generation_revision || 1,
           playback: [...run.observedPlayback].map(([sequence, state]) => ({sequence, state})),

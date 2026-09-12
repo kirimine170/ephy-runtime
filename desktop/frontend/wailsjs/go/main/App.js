@@ -6,6 +6,10 @@ export function AppendInteractionAudio(arg1, arg2, arg3) {
   return window['go']['main']['App']['AppendInteractionAudio'](arg1, arg2, arg3);
 }
 
+export function AppendInteractionInterruptionCandidate(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['AppendInteractionInterruptionCandidate'](arg1, arg2, arg3, arg4);
+}
+
 export function ApplyLocalModel(arg1) {
   return window['go']['main']['App']['ApplyLocalModel'](arg1);
 }
@@ -16,6 +20,10 @@ export function ApproveWebSearch(arg1) {
 
 export function BeginInteractionASR(arg1, arg2) {
   return window['go']['main']['App']['BeginInteractionASR'](arg1, arg2);
+}
+
+export function BeginInteractionInterruptionCandidate(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['BeginInteractionInterruptionCandidate'](arg1, arg2, arg3, arg4);
 }
 
 export function BrowseIndex(arg1) {
@@ -32,6 +40,10 @@ export function CancelInteraction(arg1) {
 
 export function CancelInteractionComparison(arg1) {
   return window['go']['main']['App']['CancelInteractionComparison'](arg1);
+}
+
+export function CancelInteractionInterruptionCandidate(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CancelInteractionInterruptionCandidate'](arg1, arg2, arg3);
 }
 
 export function ChangeVoiceSession(arg1, arg2, arg3) {

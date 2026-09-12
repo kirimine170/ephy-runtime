@@ -1,6 +1,6 @@
 # C1 Step 2の実機受入
 
-人の発話・聴感による本手順は未実施である．初回buildの継続会話UI表示までは確認したが，review修正後の最終buildはMacのロックにより未起動である．初期化完了・声の選択状態も未確認である．合成テスト，Goのplayback ACK，WAV生成だけを聴感の合格にしない．対応するsource SHA／binary hashと検証状況は[STATUS](STATUS.md)を参照する．実会話の自動記録はOFFのままにする．
+2026-09-13の実機試行で過敏な割込みとASR失敗を確認し，候補認識を追加した．最新のノイズ・相づち・明確な割込みの再試験は[C1_INTERRUPTION_GUARD.md](C1_INTERRUPTION_GUARD.md)を先に行う．以下の一般的なStep 2確認項目も維持する．source／binary hashは対応するローカル受入成果物と照合し，合成テストだけを聴感の合格にしない．実会話の自動記録はOFFのままにする．
 
 ## 起動と版の確認
 
@@ -31,7 +31,8 @@
 
 Developer表示のmetadata traceをturnごとに取得する．userの発話本文・生成本文・reasoning・WAVを受入logへ貼り付けず，source SHA，binary hash，model／voice ID，時刻，状態，次の区間を記録する．
 
-- `local_stop`：発話検出から端末のmute／stopまで．Web Audio制御の値であり，耳で確認した停止時間そのものではない．
+- `interruption_candidate`：割込み候補の開始から発話確認まで．
+- `local_stop`：発話確認後から端末のmute／stopまで．Web Audio制御の値であり，耳で確認した停止時間そのものではない．
 - `input_handoff_asr_ready`／`input_handoff_drained`：検出から次ASR準備完了／保持PCM排出完了まで．
 - `speech_first_partial`，`speech_to_endpoint`，`asr_finalization`：ASRとendpointを分ける．引継ぎPCMの到着後のbackend clockと，検出側のclockを混同しない．
 - `llm_ttft`，generationのfirst raw delta／first visible content，`tts_ttfc`，`first_audio`：thinking待ち・表示待ち・合成待ち・再生開始を分ける．取得できないreasoning token数を0にしない．

@@ -109,6 +109,8 @@ type interactionTurn struct {
 	source                 string
 	requestConfigurationID string
 	asr                    *interactionASRSession
+	interruptionCandidate  *interactionInterruptionCandidate
+	interruptionTraceCount int
 	speech                 *preparedSpeech
 }
 type InteractionEngine struct {

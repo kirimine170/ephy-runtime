@@ -177,6 +177,25 @@ func (a *App) AppendInteractionAudio(operationID string, sequence int, pcmBase64
 func (a *App) EndInteractionASR(operationID string) error {
 	return a.interactionEngine().EndASR(operationID)
 }
+
+func (a *App) BeginInteractionInterruptionCandidate(operationID, candidateID string, revision, sampleRate int) (InterruptionCandidateSnapshot, error) {
+	return a.interactionEngine().BeginInterruptionCandidate(operationID, candidateID, revision, sampleRate)
+}
+
+func (a *App) AppendInteractionInterruptionCandidate(operationID, candidateID string, sequence int, pcmBase64 string) (InterruptionCandidateSnapshot, error) {
+	if len(pcmBase64) > (maxASRPCMChunkBytes+2)/3*4 {
+		return InterruptionCandidateSnapshot{}, fmt.Errorf("invalid_audio")
+	}
+	pcm, err := base64.StdEncoding.DecodeString(pcmBase64)
+	if err != nil {
+		return InterruptionCandidateSnapshot{}, fmt.Errorf("invalid_audio")
+	}
+	return a.interactionEngine().AppendInterruptionCandidate(operationID, candidateID, sequence, pcm)
+}
+
+func (a *App) CancelInteractionInterruptionCandidate(operationID, candidateID, reason string) error {
+	return a.interactionEngine().CancelInterruptionCandidate(operationID, candidateID, reason)
+}
 func (a *App) CancelInteraction(operationID string) (InteractionSnapshot, error) {
 	return a.interactionEngine().Cancel(operationID)
 }
