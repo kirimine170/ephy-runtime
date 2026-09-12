@@ -28,11 +28,16 @@ bash scripts/build_conversation_app.sh
 python3 scripts/asr/configure.py \
   --helper "$PWD/desktop/build/bin/ephy-runtime.app/Contents/Helpers/ephy-whisper" \
   --model-dir "$ASR_ASSETS" --output "$ASR_CONFIG"
-EPHY_ASR_PROVIDER=whisper-cpp EPHY_ASR_CONFIG="$ASR_CONFIG" \
-  open -W -n "$PWD/desktop/build/bin/ephy-runtime.app"
+open -W -n \
+  --env EPHY_ASR_PROVIDER=whisper-cpp \
+  --env "EPHY_ASR_CONFIG=$ASR_CONFIG" \
+  --env "EPHY_RUNTIME_ROOT=$PWD" \
+  "$PWD/desktop/build/bin/ephy-runtime.app"
 ```
 
-既存のGateway・TTS起動設定も併用する．TTSの選択はASRと独立している．Appleへ明示的に戻す場合は，アプリ終了後に`EPHY_ASR_PROVIDER=macos-speech`で既存Apple helper設定を使って起動する．モデル切替はアプリ再起動時に行う．署名後のbundle helperが変わった場合は設定を再生成する．`runtime-build-provenance.json`はsource revision／dirty状態／最終実行ファイル／bundle helperのhashを記録する．helperのビルド情報とライセンスはbundle Resourcesへ含める．モデルはbundleへ同梱しない．
+既存のGateway・TTS起動設定も併用する．TTSの選択はASRと独立している．`open`の呼出し元の環境変数はLaunchServicesへ自動転送されないため，公開設定は上記の`--env`で渡す．認証情報はcommand引数にせず，既存の安全なlauncherで渡す．Whisper選択時はアプリ起動でモデルの非同期warmupを始め，Conversation画面を開くまで読み込みを遅延させない．この処理はマイクを開かない．Appleへ明示的に戻す場合は，アプリ終了後に`--env EPHY_ASR_PROVIDER=macos-speech`と既存Apple helper設定を使って起動する．モデル切替はアプリ再起動時に行う．署名後のbundle helperが変わった場合は設定を再生成する．`runtime-build-provenance.json`はsource revision／dirty状態／最終実行ファイル／bundle helperのhashを記録する．helperのビルド情報とライセンスはbundle Resourcesへ含める．モデルはbundleへ同梱しない．
+
+同期フォルダがFinder情報を再付与して署名確認を妨げる場合は，bundleをローカル領域へコピーし，そこで署名・hashを確認して起動する．その場合は`--env "EPHY_RUNTIME_ROOT=/absolute/path/to/ephy-runtime"`で既存Runtime repositoryの絶対pathを渡し，設定・dataの参照先を保つ．`configs/models.yaml`と`scripts/start_gateway.sh`を持つrootだけを採用し，不正な指定で祖先directoryへ移動しない．ASR設定のhelper pathは実際に起動するbundle内へ合わせる．
 
 モデルの提供元revision・サイズ・SHA-256・licenseは[scripts/asr/assets.json](../scripts/asr/assets.json)が正本である．[Whisper](https://github.com/openai/whisper)と[Silero VAD](https://github.com/snakers4/silero-vad)はMIT，比較用[Kotobaモデル](https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml)はApache-2.0として提供されている．
 

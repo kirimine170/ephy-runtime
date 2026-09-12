@@ -735,6 +735,11 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.ctxMu.Unlock()
 	a.workspaceRoot = detectWorkspaceRoot()
+	if strings.TrimSpace(os.Getenv("EPHY_ASR_PROVIDER")) == "whisper-cpp" {
+		// Start asynchronous model warmup before the Conversation view is opened．
+		// This does not open a microphone or start a voice session．
+		a.interactionEngine()
+	}
 	if os.Getenv("EPHY_START_CONVERSATION") == "1" {
 		go func() {
 			if _, err := a.startConversation(); err != nil {
@@ -6269,6 +6274,14 @@ func appendBounded(lines []string, line string) []string {
 }
 
 func detectWorkspaceRoot() string {
+	// A verified bundle can be staged outside a synchronized workspace．Keep
+	// its settings and data attached to the explicitly selected runtime root．
+	if configured := strings.TrimSpace(os.Getenv("EPHY_RUNTIME_ROOT")); filepath.IsAbs(configured) {
+		configured = filepath.Clean(configured)
+		if findRuntimeRoot(configured) == configured {
+			return configured
+		}
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		wd = "."
