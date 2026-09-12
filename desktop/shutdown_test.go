@@ -54,6 +54,50 @@ func TestDetachedAppUsesExplicitRuntimeWithoutChangingDataRoot(t *testing.T) {
 	}
 }
 
+func TestStartupPreparesSelectedWhisperWithoutOpeningVoiceInput(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"configs/models.yaml", "scripts/start_gateway.sh"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("EPHY_RUNTIME_ROOT", root)
+	t.Setenv("EPHY_START_CONVERSATION", "")
+	t.Setenv("EPHY_ASR_CONFIG", filepath.Join(root, "missing-asr.json"))
+	for _, provider := range []string{"whisper-cpp", "macos-speech", ""} {
+		t.Run(provider, func(t *testing.T) {
+			t.Setenv("EPHY_ASR_PROVIDER", provider)
+			a := NewApp()
+			a.startup(context.Background())
+			defer a.shutdown(context.Background())
+			if provider != "whisper-cpp" {
+				if a.interaction != nil {
+					t.Fatal("default ASR unexpectedly initialized during startup")
+				}
+				return
+			}
+			if a.interaction == nil {
+				t.Fatal("Whisper preparation waited for the Conversation view")
+			}
+			asr, ok := a.interaction.asr.(*WhisperVoiceASR)
+			if !ok {
+				t.Fatal("selected Whisper provider was not prepared")
+			}
+			readiness, err := asr.Readiness(context.Background())
+			if err == nil || readiness.ErrorCode != "invalid_voice_config" {
+				t.Fatal("missing config must stay blocked without a fallback", readiness, err)
+			}
+			if asr.active != nil || asr.process != nil {
+				t.Fatal("startup opened an input or launched with invalid assets")
+			}
+		})
+	}
+}
+
 func TestShutdownStopsOwnedProcessesAndRejectsNewStarts(t *testing.T) {
 	a := newTestAppWithWorkspace(t)
 	owned, external := exec.Command("sleep", "60"), exec.Command("sleep", "60")
