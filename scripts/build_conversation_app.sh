@@ -46,6 +46,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     # Weights remain in the explicitly configured external asset directory．
     mkdir -p "${APP_BUNDLE}/Contents/Helpers" "${APP_BUNDLE}/Contents/Resources/whisper-notices"
     install -m 0755 "${EPHY_RUNTIME_ROOT}/bin/ephy-whisper" "${APP_BUNDLE}/Contents/Helpers/ephy-whisper"
+    codesign --verify --strict "${APP_BUNDLE}/Contents/Helpers/ephy-whisper"
     install -m 0644 "${EPHY_RUNTIME_ROOT}/bin/whisper-build-provenance.json" "${APP_BUNDLE}/Contents/Resources/whisper-build-provenance.json"
     cp -R -X "${EPHY_RUNTIME_ROOT}/bin/whisper-notices/." "${APP_BUNDLE}/Contents/Resources/whisper-notices/"
   fi
@@ -56,7 +57,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   # File Provider can leave root FinderInfo behind even after recursive cleanup．
   # Signing still verifies the complete bundle and fails on other detritus．
   xattr -d com.apple.FinderInfo "${APP_BUNDLE}" 2>/dev/null || true
-  codesign --force --deep --sign - --identifier com.wails.ephy-runtime "${APP_BUNDLE}"
+  # Sign inside out．A forced deep signature would re-sign the ASR helper
+  # with the outer identifier and invalidate its recorded build hash．
+  codesign --force --sign - --identifier com.wails.ephy-runtime "${APP_BUNDLE}"
   codesign --verify --strict --deep "${APP_BUNDLE}"
   echo "Updated ${APP_BUNDLE}"
 fi
