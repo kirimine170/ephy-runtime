@@ -1,10 +1,74 @@
 # Runtime会話・日記 C1〜C3 状況
 
-最終更新：2026-09-12．**Step 0完了，Step 1未着手**．本体の機能，稼働schema，model／voice，private設定，実行中appは変更していない．
+最終更新：2026-09-12．**Step 1の実装・自動検証・署名済みbuild作成まで完了．実マイク／実機UI受入は未確認**．Macがロック中でUI操作できず，ロック解除を依頼済みである．Step 2へは進んでいない．Step 0の元checkoutの未commit文書，model／voice，private設定，既存appを保全した．
 
 次の担当は[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)，[Runtime ADR-0014](../adr/ADR-0014-runtime-conversation-diary-boundaries.md)，[Karte保存契約 v2](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)を読み，ユーザーが指定したStepだけを進める．全Stepを一括実行するgoalは設定しない．
 
-## 1．照合した版と作業状態
+## Step 1／C1の結果
+
+下記の第1〜6節はStep 0時点の照合記録として維持する．現在の実装差分と受入状態は本節を優先する．
+
+### 版と保全
+
+| 区分 | 版／状態 |
+|---|---|
+| 作業branch | `feat/c1-continuous-session`．既存dirty checkoutを変更せず，専用worktreeで実装 |
+| Step 0文書保全commit | `b70684a`．元checkoutの4文書は作業開始時のSHA-256と全件一致 |
+| endpoint設計差分commit | `0b7b401`．provider保証とpartial不変時間，猶予，ためらい，early finalを明確化 |
+| 機能実装source | `ca9d90a7f904430af66fc1d7f79bf227df5465f3` |
+| build対象tree | `c70ad925c362426a0bdd15647255612bffc61fc9`．ビルド前後でsource一致，`source_dirty=false` |
+| 署名後の実行ファイルSHA-256 | `778670fe65aaa399636fefbe803b111e3805bb84191ae4b98c75b431bd5258fa` |
+| build | Go 1.25.3，darwin/arm64，production tags，ad-hoc署名．`desktop/build/bin/runtime-build-provenance.json`で対応付け |
+| 外部操作 | push／PR作成／mergeなし．Karte本体変更なし |
+
+本STATUSを追記した文書commitとbuildのsource SHAは別である．受入対象は上表の機能sourceとbinary hashで固定する．build scriptは作成前後のsource不一致を拒否し，dirty buildを明記する．署名直後の検査はPASS．File Providerが後からbundleへFinderInfoを付けた際にstrict検査が1回失敗したため，当該属性だけを除去して再検査PASS，同じbinary hashを確認した．受入launcherにも同じ属性除去と署名・hash検査を用意した．
+
+### 実装した動作
+
+- 「会話を開始」で1つのMediaStream／入力AudioContextを保持する．発話ごとにASRを閉じ，回答の正常完了後に同じcaptureから次の発話を受け付ける．出力AudioContextも開始gesture内でresumeし，session内で再利用する．
+- 「一時停止」「会話を再開」「会話を終了」，マイク許可待ち，発話待ち，認識中，endpoint候補，回答中，停止理由を表示する．pause／終了／device変更・track終了はcaptureと出力を直ちに止める．
+- Goのvoice session ID／epochと会話IDを分け，旧epochの開始・停止要求を拒否する．ASR contextはsession配下とし，旧回答の取消は次のASRを取消さない．Step 1では同時active operationは1つである．
+- providerが保証する`stable_prefix`だけを確定寄りの表示に使う．Apple ASRのfinal前stable通知は不要．partialが300 ms不変という観測からstable prefixを作らず，endpoint補助判定にだけ使用する．
+- RMS 0.02／活動32 ms，partial不変300 ms＋無音900 ms，partialなし／ためらいだけなら1800 ms，取消可能な猶予100 ms，poll 20 msを初期値とした．実装は`voiceEndpoint.js`の設定を注入して調整でき，実機最適値とは主張しない．32 ms未満の活動だけで自動送信せず，150 ms未満という理由だけで短い相槌を捨てない．
+- early finalはprovider endpointとしてdrain→End→Finish一致検査へ進む．発話活動がなければ破棄して再待機する．会話・記録候補・LLMへ入るのはendpoint後のcanonical finalだけである．callbackとFinishの二重finalを1件にする既存backendを維持する．
+- PCMは発話60秒／8 MiB，chunk 64 KiB，送信待ちqueueは128 KiB以下かつ1秒相当，finalization 30秒以下．継続発話が上限へ達した場合は`utterance_limit`でpauseし，途中のpartialを自動送信しない．previewは明示操作でtext入力へ戻して編集できる．
+- 無発話時は60秒ごとにASRを更新し，累積5分の無活動でマイクを解放してpauseする．無音からChat turn／LLM requestを作らない．許可待ちの取消後は，古い許可要求が返るまで新しいcapture要求を重ねない．
+- C0.4の活動monitorは同じcaptureのPCMを購読する．連続modeでは割込み時ACKを重ねない．本文再生中の発言内容引継ぎとpre-rollはStep 2のままである．手動録音とtext fallbackを残した．
+- traceの`listening_started`と最初の活動PCMの`user_speech_start`を分離した．`speech_first_partial`，`speech_to_endpoint`，`asr_finalization`，`first_audio`を別に確認できる．これらはcallback／bridge時計による計測であり，音響的な発話・再生の実測と同一視しない．
+
+### 自動検証
+
+| 検証 | 結果 |
+|---|---|
+| Frontend `npm test` | **248 passed**．追加42件を含む |
+| endpoint境界 | 900／1800 msの直前・一致・直後・猶予内再開，300／600 msの間，ためらいからの続き，短い「うん」「はい」，early final，partial変更を固定時計で検査 |
+| session統合fixture | 開始1回で4 user turns，capture最大1，履歴更新後の再待機，無音0送信，pause／resume／終了，pending permission，device終了，旧callback，PCM drain／backpressure，60秒上限を検査 |
+| Go `go test ./... -count=1` | **PASS**．opt-inの実機testは実施証明に含めない |
+| Go race `go test -race ./... -run 'TestVoiceSession\|TestInteraction\|TestStreamingASR\|TestFiller' -count=1` | **PASS**．既存macOS linkerのLC_DYSYMTAB warningあり，race検出なし |
+| Python build provenance／launcher／voice AB／filler | **22 passed** |
+| Python Karte conversation／API回帰 | **21 passed**．既存Starlette／httpx deprecation warning 1件 |
+| bindings再生成，Frontend production build，native production build，署名検査 | **PASS** |
+| `python3 scripts/validate_repository.py`，`git diff --check` | **PASS** |
+
+Pythonは既存Runtimeのvenvを利用し，Go cacheは一時ディレクトリへ指定した．最初のツール呼出しではcache権限，未生成のFrontend embed，未導入のworktree依存，system Pythonのpytest不足を検出したため，専用cache・`npm ci`・既存venvで解消して上記gateを完了した．失敗した呼出しをPASSへ数えていない．
+
+### 実機受入と残る操作
+
+| 項目 | 現在 |
+|---|---|
+| source SHAと署名後binary hashの対応 | **確認済み**．上表とprovenance JSON |
+| native UI起動・表示・状態遷移 | **未確認**．CUAがMacロックを報告し，アプリUIへ到達していない |
+| ヘッドホンで開始1回→4往復→pause／resume→終了 | **未確認**．人の発話・聴感確認は未実施 |
+| 実音声でのfirst partial／endpoint／finalization／回答開始 | **未測定**．synthetic境界値を実測欄へ転記しない |
+| 実音声での誤送信・二重送信なし，短い相槌とためらいの自然さ | **未確認** |
+
+ロック解除後，既存Runtimeを通常終了してから受入用bundleを起動する．単一instance制約により，旧appが動いたままの起動を新buildの確認と数えない．ローカルrecoveryに置いた`launch-c1-acceptance.command`は既存instance検査，hash／署名検査，導入済みASR helper指定を行う．既存loopback Gateway／TTSを利用し，model／private設定を変更しない．
+
+人の必要操作は，ヘッドホン装着→「会話を開始」→「はい」「うん」と，途中に短い間を入れた発話，「えっと……」から続く発話で4往復→「一時停止」→「会話を再開」→「会話を終了」である．各turnの本文なしtraceでlatencyとendpoint／finalが各1回であることを照合し，聴感と誤送信の有無は別に記録する．人の確認がないまま実機合格へ更新しない．
+
+rollbackは受入sessionを終了して元bundleへ戻す．元checkout，Step 0の未commit文書，既存app，モデル・音声assetは保持している．次の一手は上記Step 1実機受入であり，Step 2はユーザーの別指示後に開始する．
+
+## 1．Step 0時点の版と作業状態
 
 両repoで`git fetch origin`を実施し，remote main，local main，HEADを照合した．pull／reset／cleanはしていない．
 
@@ -36,7 +100,7 @@
 
 他の古いlocal branchは名称やahead数だけで未実装と判定せず，今回の関係箇所とopen PRへ絞って照合した．全branch全履歴の監査はStep 0の成果に含めない．
 
-## 2．現行実装と差分
+## 2．Step 0時点の実装と差分
 
 | 領域 | 確認した実装 | C1〜C3で必要な差分 |
 |---|---|---|
@@ -91,7 +155,7 @@
 
 数値の初期値は計画・Karte契約へ集約した．日記はtimezoneに従う日付変更後のアイドル時，未稼働なら次回起動で生成する．raw audioは保持しない．外部知識検証，多Worker，自由探索，Worker本体は範囲外である．
 
-## 5．今回実行した検証
+## 5．Step 0で実行した検証
 
 実行基準は上記mainのsourceである．docs-onlyのStep 0に必要な対象回帰を行い，実音声の収録・LLM生成・既存private canonical writeは行っていない．KarteのGo検証は未追跡重複を含まない同一HEADの一時worktreeを使用した．
 
@@ -108,9 +172,9 @@
 
 pytest初回はcase表記`Tests/`によるcollection errorでtest未実行だったため，Gitの正規path`tests/`へ修正して上記55件を完了した．新しい機能の修正往復は0回であり，本体実装はしていない．全Python／Go suite，frontend build，app build，native cross-app UATはdocs-only範囲のため今回は再実行していない．
 
-## 6．成果，承認，未確認，次の一手
+## 6．Step 0完了時の成果と引継ぎ
 
-変更したのは次の文書だけである．
+Step 0で変更したのは次の文書だけである．
 
 - Runtime：本STATUS，IMPLEMENTATION_PLAN，ADR-0014，ADR index．
 - Karte：`architecture/KARTE_RUNTIME_DIARY_V2.md`，ADR-0005，ADR index．
@@ -126,4 +190,4 @@ pytest初回はcase表記`Tests/`によるcollection errorでtest未実行だっ
 3．C1の連続発話，本文割込み冒頭，Work thinking音声一周，C2の自動採用・crash復旧，C3の日記自然さ・翌日想起は未実施である．既存単turn・合成結果を合格に流用しない．
 4．Karte #268の未統合writer改善をStep 3開始時に再確認する．既存の重複ファイルと古いRuntime worktreeは保全したままである．
 
-**次の一手は，ユーザーがStep 1を指定した後の，Runtimeの継続音声session・単一capture・endpoint・自動再待機とテストである．Step 0で停止する．**
+Step 0はこの状態で停止し，ユーザーからのStep 1指定を受けて冒頭の実装・自動検証まで進めた．現在の次の一手は冒頭のStep 1実機受入である．
