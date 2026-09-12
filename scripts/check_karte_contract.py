@@ -47,6 +47,7 @@ CONTRACT_SPECS = {
         Path('fixtures/interrupted-answer.record.json'),
         Path('fixtures/raw-text.proposal.json'),
         Path('fixtures/raw-text.record.json'),
+        Path('fixtures/runtime-delivery.scenario.json'),
         Path('fixtures/strict-json.cases.json'),
         Path('grant.schema.json'),
         Path('proposal.schema.json'),

@@ -20,6 +20,7 @@ export function resumeVoiceEntry(entry, snapshot) {
     text: snapshot.response_plan?.text || '',
     pendingText: '',
     completionPrefix: '',
+    voiceDelivery: null,
   };
 }
 
@@ -43,14 +44,36 @@ export function settleVoiceEntry(entry, snapshot) {
     CANCELED: '音声 · 停止',
     FAILED: '音声 · 完了できませんでした · 文字入力で続行できます',
   }[state] || '音声 · 未完了';
+  const text = snapshot.response_plan?.text || '';
+  const units = Array.isArray(snapshot.speech_units) ? snapshot.speech_units : [];
+  let playedPrefix = '';
+  for (const unit of units) {
+    if (unit.state !== 'completed' || !unit.synthesis_complete) break;
+    playedPrefix += unit.text || '';
+  }
+  // A displayed sentence is not proof that its audio was heard．Keep the
+  // generation，rendered text and observed unit boundaries as separate facts．
+  const delivery = snapshot.interruption || Array.isArray(snapshot.speech_units) ? {
+    generation: snapshot.generation?.complete === true ? 'completed' : state === 'CANCELED' ? 'canceled' : 'failed',
+    display: !text ? 'none' : snapshot.generation?.complete === true ? 'confirmed_full' : 'confirmed_prefix',
+    displayedText: text,
+    playback: units.some(u => u.state === 'interrupted') ? 'interrupted'
+      : units.length && units.every(u => u.state === 'completed') && snapshot.generation?.complete === true ? 'completed'
+      : snapshot.interruption && units.length ? 'interrupted'
+      : units.some(u => u.playback_started) ? 'unknown' : 'not_started',
+    speechUnits: units.map(({unit_id, state}) => ({unit_id, state})),
+    playedPrefix,
+    interrupted: !!snapshot.interruption,
+  } : null;
   return {
     ...entry,
-    text: snapshot.response_plan?.text || '',
+    text,
+    voiceDelivery: delivery,
     pendingText: '',
     streaming: false,
     terminalState: state,
     finishReason: snapshot.generation?.finish_reason || (state === 'CANCELED' ? 'canceled' : 'unknown'),
     canContinue: state === 'INCOMPLETE',
-    meta,
+    meta: state === 'CANCELED' && snapshot.generation?.complete === true ? '音声 · 再生を停止 · 文章の生成は完了' : meta,
   };
 }

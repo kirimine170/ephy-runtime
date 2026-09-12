@@ -16,4 +16,4 @@
 
 JSON Schemaは単一documentの構造を検証する．既存Identity Manifestからのimmutable field変更，timestamp間の前後関係，`instance_id`の重複稼働及びhashの再計算は，application layerで検証する．
 
-v1の15 JSONを維持し，v2の29 JSONを加えた合計44 JSONをKarteとbyte照合する．`scripts/verify_runtime_record_fixtures.py`はstrict JSON，canonical bytes，MAC，stable ID，原文とsource refs，再送の期待結果を検査する．Runtimeのv2記録・reader実装を意味しない．対応するKarte版は[STATUS](../docs/runtime-diary/STATUS.md)を参照する．
+v1の15 JSONを維持し，v2の30 JSONを加えた合計45 JSONをKarteとbyte照合する．`scripts/verify_runtime_record_fixtures.py`はstrict JSON，canonical bytes，MAC，stable ID，原文とsource refs，再送，C1 Step 2の生成・表示・再生の期待結果を検査する．Runtimeのv2記録・reader実装を意味しない．対応するKarte版は[STATUS](../docs/runtime-diary/STATUS.md)を参照する．

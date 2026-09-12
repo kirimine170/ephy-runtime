@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted，2026-09-12．Step 1のsession分離と，先行Step 3のKarte policy採用・復旧を実装した．Step 1の実機受入は未確認，Step 2・4以降は未着手である．
+Accepted，2026-09-12．Step 1のsession分離，Step 2の本文割込み・有限入力引継ぎ，先行Step 3のKarte policy採用・復旧を実装した．Step 1・2の人による実機受入は未確認，Step 4以降は未着手である．
 
 ## Context
 
@@ -28,9 +28,15 @@ Karteを唯一の正本ownerとし，Runtimeは未配送outboxと有限cacheだ�
 - 記録OFFは以後の保存停止であり，削除とは別である．訂正・権限変更・削除は検索，cache，未配送，Job，派生物に適用する．
 - Fast音声がnon-thinkingである現行仕様を記録し，Workのthinkingを維持した実機受入を別gateにする．
 
+## Step 2の実装境界
+
+同一captureの500 ms pre-rollと2秒の引継ぎqueueを使い，端末のmute／stopをprovider取消より先に実行する．SpeechUnitはassembler確定時に登録し，複数WAVの全自然終了とproducer closeを揃えて完了とする．生成完了は音声中断で取り消さない．次requestへは確実に終了した単位の連続接頭部分と中断の事実だけを渡す．v2 wireを拡張せず，共通scenarioで既存enumへ対応付ける．
+
+Workのcompletion guidanceは先頭system群の末尾へ配置し，会話末尾のsystemを拒否するtemplateにも対応する．persona／thinking／予算を変えない．詳細と実機未確認はSTATUSへ集約する．
+
 ## Step 3の実装境界
 
-Karteがv2のcreate／append／derivation更新とsearch／readを提供し，RuntimeはKarte正本の44 JSONと署名・ID・原文保持・再送の共通fixtureを照合する．Runtimeに別のcanonical writerやv2記録経路はまだ追加していない．scope登録は既定OFFであり，旧Developer Modeから記録同意を作らない．音声eventの有効化はStep 2の中断・再生契約とStep 4のv2 reader・direct index除外を待つ．人向け訂正・削除・制限と自動purgeはStep 6へ残す．
+Karteがv2のcreate／append／derivation更新とsearch／readを提供し，RuntimeはKarte正本の45 JSONと署名・ID・原文保持・再送の共通fixtureを照合する．Runtimeに別のcanonical writerやv2記録経路はまだ追加していない．scope登録は既定OFFであり，旧Developer Modeから記録同意を作らない．音声eventの有効化はStep 2の中断・再生契約とStep 4のv2 reader・direct index除外を待つ．人向け訂正・削除・制限と自動purgeはStep 6へ残す．
 
 ## Verification
 

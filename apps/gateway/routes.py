@@ -297,11 +297,16 @@ def build_router() -> APIRouter:
                 "metadata": metadata.model_copy(update={"resolved_mode": decision.mode}),
             })
             if metadata.completion_guidance:
-                # Add bounded per-segment guidance after the existing mode/persona
-                # policies，so continuation cannot suppress those policies．
+                # Keep guidance after the leading mode/persona policies and
+                # before conversation messages．Qwen3.8 rejects a trailing system
+                # message；neither routing history nor thinking policy changes．
+                messages = list(effective_payload.messages)
+                system_end = 0
+                while system_end < len(messages) and messages[system_end].role == "system":
+                    system_end += 1
+                messages.insert(system_end, ChatMessage(role="system", content=metadata.completion_guidance))
                 effective_payload = effective_payload.model_copy(update={
-                    "messages": [*effective_payload.messages,
-                                 ChatMessage(role="system", content=metadata.completion_guidance)],
+                    "messages": messages,
                 })
             if local_sources or web_context:
                 effective_payload = prompt_manager.apply_untrusted_context(

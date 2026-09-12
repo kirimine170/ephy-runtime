@@ -56,6 +56,19 @@ type interactionASRSession struct {
 	metadata                      ASRMetadata
 }
 
+// A canceled ASR must release its provider session before another one opens．
+// Input remains in the finite frontend handoff queue while this gate is held．
+// This gate never waits for cancellation of LLM or TTS providers．
+type exclusiveASRSession struct {
+	VoiceASRSession
+	once    sync.Once
+	release func()
+}
+
+func (s *exclusiveASRSession) Cancel() {
+	s.once.Do(func() { defer s.release(); s.VoiceASRSession.Cancel() })
+}
+
 func (e *InteractionEngine) BeginASR(op string, sampleRate int) (ASRSessionRequest, error) {
 	if sampleRate < 8000 || sampleRate > 48000 {
 		return ASRSessionRequest{}, errors.New("invalid_audio")
@@ -95,7 +108,17 @@ func (e *InteractionEngine) BeginASR(op string, sampleRate int) (ASRSessionReque
 	}
 	ready := make(chan opened)
 	go func() {
+		select {
+		case e.asrSlot <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
 		s, err := provider.OpenSession(ctx, a.request, func(update ASRUpdate) { e.receiveASR(t, a, update) })
+		if s != nil {
+			s = &exclusiveASRSession{VoiceASRSession: s, release: func() { <-e.asrSlot }}
+		} else {
+			<-e.asrSlot
+		}
 		// Unbuffered handoff makes ownership explicit even if startup and cancel
 		// finish simultaneously．Exactly one side disposes of the session．
 		select {

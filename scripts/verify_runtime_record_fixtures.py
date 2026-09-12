@@ -132,6 +132,18 @@ def verify(root):
     interruption = load(mutation/'fixtures/interrupted-answer.record.json')['events'][-1]['assistant']
     check(interruption['generation'] == 'canceled' and interruption['playback'] == 'interrupted', 'interruption status')
     check(interruption['speech_units'][0]['state'] == 'completed' and interruption['speech_units'][1]['state'] == 'started', 'unobserved completion is not invented')
+    delivery = load(mutation/'fixtures/runtime-delivery.scenario.json')
+    import copy
+    for case in delivery['cases']:
+        proposal = copy.deepcopy(load(mutation/'fixtures/interrupted-answer.proposal.json'))
+        proposal['events'][0]['text'] = case['snapshot']['response_plan']['text']
+        proposal['events'][0]['assistant'] = case['expected_assistant']
+        check(proposal_validator.is_valid(proposal), 'runtime delivery schema: ' + case['name'])
+        expected_prefix = ''
+        for unit in case['snapshot']['speech_units']:
+            if unit['state'] != 'completed' or not unit['synthesis_complete']: break
+            expected_prefix += unit['text']
+        check(expected_prefix == case['expected_heard_prefix'], 'runtime delivery prefix: ' + case['name'])
     raw_text = load(mutation/'fixtures/raw-text.proposal.json')['events'][0]['text']
     parsed_text = load(mutation/'fixtures/raw-text.record.json')['events'][0]['text']
     check(raw_text == parsed_text, 'raw text escaping round trip')

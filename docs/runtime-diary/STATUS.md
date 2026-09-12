@@ -1,8 +1,58 @@
 # Runtime会話・日記 C1〜C3 状況
 
-最終更新：2026-09-12．**指定されたStep 3を先行し，Karteのpolicy自動採用・安全な保存・復旧を実装，自動検証した**．C1 Step 1は実機受入待ち，Step 2・4以降は未着手である．実設定・実データへの記録は有効化していない．
+最終更新：2026-09-12．**C1 Step 2の本文割込み・発話冒頭引継ぎを実装し，自動検証した**．先行Step 3のKarte基盤は維持した．Step 1・2の人による実機受入は未確認，Step 4以降は未着手である．実設定・実データへの記録は有効化していない．
 
 次の担当は[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)，[Runtime ADR-0014](../adr/ADR-0014-runtime-conversation-diary-boundaries.md)，[Karte保存契約 v2](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)を読み，ユーザーが指定したStepだけを進める．全Stepを一括実行するgoalは設定しない．
+
+## Step 2／C1 本文割込みと発話冒頭引継ぎ
+
+| 区分 | 状態 |
+|---|---|
+| 実装済み | 単一captureによるLLM待機・フィラー・TTS待機・本文の割込み，500 ms pre-roll，有限の入力引継ぎ，端末の即時mute／stop，旧operation取消と次ASRの分離 |
+| 自動検証済み | 冒頭PCMのbyte一致，4場面，連続割込み，ASR cleanup直列化，pause／resume，旧token／WAV／final／onended，複数WAVのSpeechUnit，v2共通scenario，Work設定・履歴の保持 |
+| 実環境smoke | 修正済み隔離Gateway→既存Workモデル→macOS音声合成が成功．入力は合成文，マイク・音声再生なし |
+| 人による実機受入 | 未確認．Macがロックされ，native appの画面を操作できなかった．実マイク・ヘッドホン・聴感・次回答への接続を自動testで代用しない |
+| 記録 | Step 4未実装．実会話の自動記録，v2 grant，Jobを有効化していない |
+
+開始時のRuntime main／origin/mainは`36e9a3015a986c4ffacece2dcefa93b629737647`，Karteは`e426db4222db39654c87524e45437280aa403210`だった．そこから専用worktreeを作成し，旧C0.1の試行・独立draft PR・Karte stackを変更していない．
+
+### 実装と観測の境界
+
+- sessionがPCM ringを所有し，検出前500 msと検出frameを一度だけ次ASRへ送る．引継ぎ中の合計は2秒，bridge待ちは5秒まで．既存の1秒PCM送信queueへ順番に排出する．上限超過時は冒頭を捨てず，会話をpauseして再発話・text入力を案内する．全PCMを引き継ぐ前にprovider finalが来た場合も，短く切れた内容をcanonicalへ採用せず，previewをtext fallbackへ残してpauseする．raw PCMはdiskへ保存しない．
+- 割込み検出の同期処理でgainを0にし，sourceをstop／disconnectしてqueueを破棄する．LLM／TTSの取消完了を待たない．Goは旧operationのcontextだけをcancelし，voice sessionを残す．ASR provider sessionのCancelが戻るまで次のOpenを直列化するため，同時に2つのASRを開かない．
+- `InterruptInteraction`はvoice session／epoch，conversation，turn，operation，generation revisionを照合する．開始・自然終了の通知がbridgeで遅れていても，端末が観測したWAV単位の結果を一度に照合する．遅れたcallbackは次turnの状態を変更しない．
+- assemblerが確定した時点で全SpeechUnitを登録し，TTS未開始の単位も残す．1 SpeechUnitと1 WAVを同一視しない．全WAVの自然終了とTTS producerの正常終了が揃った単位だけが`completed`になる．中断位置の単語数は推測しない．生成が完了した後の取消でも`generation.complete=true`を保つ．
+- UIの表示本文，生成状態，SpeechUnit観測を別に保持する．次の会話には，中断の事実と連続して自然終了を確認できた単位の接頭部分だけを渡す．表示された全文や未再生の残りを「聞かせた内容」にしない．ASRはcanonical finalを一度だけ採用し，連続会話の割込みで固定ACKを流さない．
+- Work受入で判明した既存の末尾system messageを修正した．completion guidanceを既存mode／personaの先頭system群の後，最初の会話messageの前へ置く．Qwen3.8のtemplate拒否を解消し，thinking・声・温度・512 token／既存continuation設定を変更しない．Gatewayも更新版から再起動して受入する．
+
+### 自動検証と実環境smoke
+
+Frontend 266 tests，Runtime Go全体，対象Go race，Karte `internal/ephyrecordsv2`，v1/v2 45 JSONのbyte照合を実行した．Python全体は613 passed／3 skippedとmacOSの二重sandboxで実行できない4件に分かれ，その4件をテスト自身のsandboxが使える状態で再実行して4 passedを確認した．合計617件の成功を確認したが，単一のsandbox内で617件が通ったという報告にはしない．最終のbuild／CI／source SHAは受入成果物節へ追記する．
+
+Workの初回smokeは末尾system指示による`generation_unknown`で失敗し，syntheticな直接requestでQwen3.8の`System message must be at the beginning`を再現した．配置修正後の生成は約38.2秒で完了した．macOS `say`はsandbox内では成功exitでも`data`が0 bytesのWAVになり，厳格な検査で`tts_invalid_audio`として拒否した．検査は弱めず，システム音声サービスを利用できる実行条件で再検証した．
+
+再検証は既存のWork `qwen3.8-27b`／8082を使用した．設定は`enable_thinking=true`，`preserve_thinking=true`，`reasoning_effort=medium`のままである．修正済みGatewayだけを別portで起動し，既存Gatewayや設定を置き換えなかった．生成本文・reasoning・WAVを受入logへ残さず，次のmetadataを記録した．
+
+| 区間／観測 | 今回の値 |
+|---|---|
+| request→最初のraw delta | 3,746 ms |
+| request→最初の表示本文 | 15,054 ms |
+| 最初のraw delta→表示本文 | 11,308 ms．thinking token数は取得不能であり，推測しない |
+| request→生成完了 | 18,117 ms，1 segment，203 completion tokens，stop＋terminal SSE＋DONE |
+| 生成完了後の合成開始→最初のWAV | 2,031 ms |
+| 合成全体 | 2,977 ms，2 SpeechUnits／2 WAV，合成音声長14,167 ms |
+| 発話開始→partial／endpoint／ASR final | 未計測．このsmokeはマイクを使わない |
+| 実際の割込み→聴感上の停止／次ASR／次の回答音声 | 未計測．自動試験の値を実機値にしない |
+
+このsmokeの合成profileは既存の`macos-say`で，アプリで選択中のvoiceを変更する試験ではない．C1の通常実行では`local_stop`，`input_handoff_asr_ready`，`input_handoff_drained`をmetadata traceへ記録し，既存のspeech／endpoint／ASR finalization／LLM／TTS区間と分けて確認できる．音響上の停止は人が確認する．
+
+### 受入成果物とStep 4への引継ぎ
+
+source SHA／署名後binary hashと起動手順は，clean sourceからのbuild後に記録する．実機手順は[C1 Step 2受入](C1_STEP2_ACCEPTANCE.md)を参照する．
+
+Karte正本の`runtime-delivery.scenario.json`とRuntimeのGo／Frontend／Python，Karteの採用・読戻しtestが同じ状態を検査する．v2 schema／protocolは2.0のままで，未知fieldを追加せず既存enumの意味を明確にした．recordに保存する本文と再生された範囲を同一視しない．
+
+Step 4は現在policyに従うKarte v2 search／readへの統一が必要である．`packages/karte_core/source.py`のscan／`read_document`，`packages/rag_core/service.py`の`_iter_files`／`_copy_ingest_source`，既存copy，cached chunkとread-backまで含めて旧経路を遮断・失効させる．新しいscanの除外だけで既存copyやcacheが消えるとは扱わない．実記録の有効化はこの境界，record用UUID／event順序，永続保全・同意が揃うまで行わない．
 
 ## Step 3／C2 Karteの現在結果
 
@@ -11,15 +61,15 @@
 | 実装済み | Karteの共通writer，限定grant，typed event／派生物の採用，復旧，v2 search／read，human revision，source stale判定 |
 | 自動検証済み | 隔離したroot・合成データで非破壊保存，現在policy，ID再利用拒否，同一event再送，各停止境界の復旧，CLIの保存・読戻し・取消 |
 | native／利用者受入 | Karte UIでの新機能受入は未実施．実CLI試験は合成rootで実施したが，実ユーザーデータや音声記録の受入ではない |
-| Runtime側 | v1/v2の44 JSONをmirrorし，共通fixtureの署名・ID・原文・source参照をPythonで検査．Step 4の記録経路は未実装 |
+| Runtime側 | v1/v2の45 JSONをmirrorし，共通fixtureの署名・ID・原文・source参照をPythonで検査．Step 4の記録経路は未実装 |
 | 新記録の有効化 | 既定OFF．producer登録・scope・記録同意は人が明示する．既存Developer Modeを同意へ変換しない |
 
 ### 対応版と契約
 
 - Karte：[PR #307](https://github.com/kirimine170/Karte/pull/307)．2026-09-12にCI 6件成功・PR時の公開job 1件skipを確認し，squash統合済み．対応mainは**`e426db4222db39654c87524e45437280aa403210`**．検証したPR headは`97a49e509390d7843d1fb63fc8b392e2dbfb17d6`，機能sourceは`591e767a5eee374fb170a2d66fcae39bd1100190`である．
 - C1：[Runtime PR #79](https://github.com/kirimine170/ephy-runtime/pull/79)をCI 6件成功後にsquash統合済み．統合commit `338bd92dfbe1593000bc1e8c8e1ee9e87add6ebc`．下記の受入build source／binary hashは変わらない．
-- Runtime契約mirrorと本STATUS：[PR #80](https://github.com/kirimine170/ephy-runtime/pull/80)に集約する．Karteの上記統合版を照合先とし，Runtime側のcanonical writerや記録ONは追加しない．
-- 保存契約：record schema／context protocol **2.0**．v1の既存15 JSONは維持し，v2の29 JSONを追加した合計44 JSONをKarteとbyte照合する．不明版をv1やdirect filesystemへfallbackしない．
+- Runtime契約mirrorと本STATUS：[PR #80](https://github.com/kirimine170/ephy-runtime/pull/80)は2026-09-12に統合済み．Step 3の統合commitは`36e9a3015a986c4ffacece2dcefa93b629737647`で，Step 2開始時のmain／origin/mainとも一致した．Karteの上記統合版を照合先とし，Runtime側のcanonical writerや記録ONは追加しない．
+- 保存契約：record schema／context protocol **2.0**．v1の既存15 JSONは維持し，Step 3の29 JSONにStep 2の共通scenario 1件を加えたv2の30 JSON，合計45 JSONをKarteとbyte照合する．不明版をv1やdirect filesystemへfallbackしない．
 - ownerと設定：[Karte保存契約](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)，[Step 3設定・復旧手順](../../../karte/architecture/RUNTIME_RECORDS_V2_SETUP.md)，[ADR-0005](../../../karte/architecture/adr/ADR-0005-scoped-runtime-diary-adoption.md)．Runtimeはcanonical Markdownを独自生成しない．
 
 Karteの合成試験用CLIは上記機能sourceのclean tree `6c7d006f4e08e72a65371cb812f458962d7a9555`からGo 1.25.3／darwin arm64でbuildした．binary SHA-256は`b942680b354eeed664f6d2c505d9626f87601cd6c14f52251d4a28ffc3227065`．Desktop UIの実行版や受入の証明へ流用しない．
