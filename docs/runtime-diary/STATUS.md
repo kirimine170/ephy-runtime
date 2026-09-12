@@ -11,10 +11,10 @@
 | 実装済み | 単一captureによるLLM待機・フィラー・TTS待機・本文の割込み，500 ms pre-roll，有限の入力引継ぎ，端末の即時mute／stop，旧operation取消と次ASRの分離 |
 | 自動検証済み | 冒頭PCMのbyte一致，4場面，連続割込み，ASR cleanup直列化，pause／resume，旧token／WAV／final／onended，複数WAVのSpeechUnit，v2共通scenario，Work設定・履歴の保持 |
 | 実環境smoke | 修正済み隔離Gateway→既存Workモデル→macOS音声合成が成功．入力は合成文，マイク・音声再生なし |
-| 人による実機受入 | 未確認．旧appを通常終了し，新buildの継続会話UI表示までは確認した．声一覧・Gatewayの初期化完了前にMacがロックされ，操作が停止した．初期化完了・声の選択状態・実マイク・ヘッドホン・聴感・次回答への接続を自動testで代用しない |
+| 人による実機受入 | 未確認．旧appを通常終了し，初回build（`090f5fe`）の継続会話UI表示までは確認した．review修正後の最終build（`acce6f2`）はMacのロックにより未起動である．声一覧・Gatewayの初期化完了前にMacがロックされ，操作が停止した．初期化完了・声の選択状態・実マイク・ヘッドホン・聴感・次回答への接続を自動testで代用しない |
 | 記録 | Step 4未実装．実会話の自動記録，v2 grant，Jobを有効化していない |
 
-Karteの契約正本は[PR #308](https://github.com/kirimine170/Karte/pull/308)をCI 7件成功・条件外2件skipの後にsquash統合した．検証・統合したPR headは`2f3537373cd3c9b48cc1342a39639f928f01b646`，統合commitは`90c69c58945e4eb00ec5f13c73b444ff298443d2`である．Runtime変更の追跡先は[PR #81](https://github.com/kirimine170/ephy-runtime/pull/81)で，この正本へ45 JSONを照合する．機能差分を含む公開head `f4db14dc7ddec57fe6647dae38652ce03ececa94`ではGitHub CI 6件（Python，Frontend，Desktop，Karte契約，validator 2件）が成功した．この結果の追記は文書のみで，受入buildのsource／hashを変更しない．
+Karteの契約正本は[PR #308](https://github.com/kirimine170/Karte/pull/308)をCI 7件成功・条件外2件skipの後にsquash統合した．検証・統合したPR headは`2f3537373cd3c9b48cc1342a39639f928f01b646`，統合commitは`90c69c58945e4eb00ec5f13c73b444ff298443d2`である．Runtime変更の追跡先は[PR #81](https://github.com/kirimine170/ephy-runtime/pull/81)で，この正本へ45 JSONを照合する．review修正を含む公開head `acce6f290150952dea403151352e1fc59242f56c`ではGitHub CI 6件（Python，Frontend，Desktop，Karte契約，validator 2件）が成功した．この結果の追記は文書のみで，受入buildのsource／hashを変更しない．
 
 開始時のRuntime main／origin/mainは`36e9a3015a986c4ffacece2dcefa93b629737647`，Karteは`e426db4222db39654c87524e45437280aa403210`だった．そこから専用worktreeを作成し，旧C0.1の試行・独立draft PR・Karte stackを変更していない．
 
@@ -33,6 +33,8 @@ Frontend 266 tests，Runtime Go全体，対象Go race，Karte `internal/ephyreco
 
 Workの初回smokeは末尾system指示による`generation_unknown`で失敗し，syntheticな直接requestでQwen3.8の`System message must be at the beginning`を再現した．配置修正後の生成は約38.2秒で完了した．macOS `say`はsandbox内では成功exitでも`data`が0 bytesのWAVになり，厳格な検査で`tts_invalid_audio`として拒否した．検査は弱めず，システム音声サービスを利用できる実行条件で再検証した．
 
+このWork smokeはreview前の機能source `090f5fe7b56c34f7e0b1991a8bad902fbf38cb7b`で行った．後述のreview修正はproducer終了の観測であり，Work経路・モデル設定・合成内容の変更はない．
+
 再検証は既存のWork `qwen3.8-27b`／8082を使用した．設定は`enable_thinking=true`，`preserve_thinking=true`，`reasoning_effort=medium`のままである．修正済みGatewayだけを別portで起動し，既存Gatewayや設定を置き換えなかった．生成本文・reasoning・WAVを受入logへ残さず，次のmetadataを記録した．
 
 | 区間／観測 | 今回の値 |
@@ -48,18 +50,20 @@ Workの初回smokeは末尾system指示による`generation_unknown`で失敗し
 
 このsmokeの合成profileは既存の`macos-say`で，アプリで選択中のvoiceを変更する試験ではない．C1の通常実行では`local_stop`，`input_handoff_asr_ready`，`input_handoff_drained`をmetadata traceへ記録し，既存のspeech／endpoint／ASR finalization／LLM／TTS区間と分けて確認できる．音響上の停止は人が確認する．
 
+[PR review](https://github.com/kirimine170/ephy-runtime/pull/81#discussion_r3996495063)の指摘に対応し，providerの正常終了をstage取消判定より前に記録するよう修正した．取消がengine lockを先に取得しても，同じturn／revision／unitの正常終了観測は保持する．次revisionや置換済みturnへは適用しない．全WAV自然終了と部分中断の両方をlock競合で検査し，Go全体・対象raceを再実行して成功した．未解決reviewは解消済みである．
+
 ### 受入成果物とStep 4への引継ぎ
 
 | 区分 | 版／状態 |
 |---|---|
-| 機能実装source | `090f5fe7b56c34f7e0b1991a8bad902fbf38cb7b` |
-| build対象tree | `6827b2a790ee4fa60d46b90254fa42eef52a0b27`．build前後clean，`source_dirty=false` |
-| 署名後binary SHA-256 | `f0cfe7014cb079ebac62d56ff7823dd41032c131f6e6695b0d2a9d7516cea346` |
+| 機能実装source | `acce6f290150952dea403151352e1fc59242f56c` |
+| build対象tree | `185317366872218023c0b417bffb60cc82c7821f`．build前後clean，`source_dirty=false` |
+| 署名後binary SHA-256 | `4b762d46789f4ba6e044a1c39e9ff502279facf5e7f5e440f7c62b4651a3d2ee` |
 | native build | Go 1.25.3／darwin arm64，production tags，ad-hoc署名 |
 | 署名再確認 | PASS．File Providerが再付与したFinderInfoだけを除去し，binary hash不変を再確認 |
 | ASR helper SHA-256 | `31ea9ff6e0d8a5312af5e8a6f668ad3fa786f0fb4a0dacf34ebb2ea3c9e489db`．既存署名済みhelper |
 
-本STATUSを追記した文書commitとbuild sourceは別である．受入対象は上表で固定する．設定・helper・既存素材を同じworkspace rootから参照できるよう，受入bundleを元Runtime checkoutの`desktop/build/c1-step2/ephy-runtime.app`へコピーし，署名・binary hashの一致を確認した．既存の`desktop/build/bin/`のbundleは置き換えていない．ローカルの`recovery/ephy-runtime/c1-step2-20260912/`にmanifest，`acceptance-status.json`，本文を含めない検証log，`launch-c1-step2-acceptance.command`を保全した．launcherは旧appの通常終了を確認し，署名・binary／helper hashを検査する．Gatewayのsource・既存processのcommand／cwdを照合したうえで，更新済みmainの既存start scriptからGatewayだけを再起動し，前後healthの設定概要と読み込んだsourceを記録する．モデル・persona・voice・thinkingの設定ファイルを編集しない．実機手順は[C1 Step 2受入](C1_STEP2_ACCEPTANCE.md)を参照する．
+本STATUSを追記した文書commitとbuild sourceは別である．受入対象は上表で固定する．設定・helper・既存素材を同じworkspace rootから参照できるよう，受入bundleを元Runtime checkoutの`desktop/build/c1-step2-final/ephy-runtime.app`へコピーし，署名・binary hashの一致を確認した．既存の`desktop/build/bin/`のbundleは置き換えていない．ローカルの`recovery/ephy-runtime/c1-step2-20260912/`にmanifest，`acceptance-status.json`，本文を含めない検証log，`launch-c1-step2-acceptance.command`を保全した．launcherは旧appの通常終了を確認し，署名・binary／helper hashを検査する．Gatewayのsource・既存processのcommand／cwdを照合したうえで，更新済みmainの既存start scriptからGatewayだけを再起動し，前後healthの設定概要と読み込んだsourceを記録する．モデル・persona・voice・thinkingの設定ファイルを編集しない．実機手順は[C1 Step 2受入](C1_STEP2_ACCEPTANCE.md)を参照する．
 
 Karte正本の`runtime-delivery.scenario.json`とRuntimeのGo／Frontend／Python，Karteの採用・読戻しtestが同じ状態を検査する．v2 schema／protocolは2.0のままで，未知fieldを追加せず既存enumの意味を明確にした．recordに保存する本文と再生された範囲を同一視しない．
 
