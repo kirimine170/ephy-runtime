@@ -50,13 +50,17 @@ session／turn／operation／segment／ASR revision／generation revision／play
 
 ヘッドホン環境から受入する．新しいVAD modelは導入せず，既存PCM活動量とASRの安定性を組み合わせる．以下は初期設定であり，実測の達成値ではない．fixtureの固定時計で誤送信と有限性を先に検査し，聴取・発話試験で調整する．
 
-- 活動検出は既存RMS 0.02／32 msを出発点とする．会話区間の成立は150 ms以上の活動とし，短いclick音だけでturnを作らない．
-- 発話後900 msの無音かつASRのstable textが300 ms変化しない場合をendpoint候補とする．短い間に発話が戻れば候補を取消す．stable通知が得られないproviderでも1800 msの無音で有限にFinishへ進む．無音だけで文字を確定せず，非空finalを必要とする．
-- providerのearly finalは既存のdrain→End→一致final採用を通す．機械的な句点だけでendpointを作らない．
+- 活動検出は既存RMS 0.02／32 msを出発点とする．短い「うん」「はい」を150 ms未満という理由だけで捨てない．短いnoiseだけでLLMを呼ばず，発話活動と非空finalの両方を必要とする．
+- providerが保証する`stable_prefix`は撤回されない接頭辞であり，UI表示と整合性検査に使う．partial文字列が300 ms変化しないという観測とは別である．Apple ASRはfinal以前のstable通知を必須にしない．partialの不変時間をstable prefixとして表示・保存しない．
+- 発話後900 msの無音と，非空partial文字列が300 ms不変であることをendpoint候補の補助信号にする．候補後100 msは発話再開で取消できる猶予とし，commit直前にも無音を再検査する．partialが得られない場合でも1800 msの無音から同じ猶予を経て有限にFinishへ進む．無音またはpartialだけで会話・記録・LLMへ送らず，endpoint後の一致する非空finalだけを採用する．
+- 「えっと」「ええと」「あの」等のためらいだけのpartialは900 ms側で閉じず，1800 ms側まで続きを待つ．900／1800 msの直前・一致・直後の再開，猶予後の確定，early final，短い相槌を固定時計で検証する．これらの閾値は調整可能な初期値であり，実機合格の測定値ではない．
+- providerのearly finalはproviderが入力を閉じた明示endpointとして一度だけ扱い，既存のdrain→End→一致final採用を通す．partialや句点をfinalへ昇格しない．無音のsessionではearly finalが来ても会話へ送らない．
 - 1発話60秒／8 MiB，PCM chunk 64 KiB／送信queue 128 KiB，ASR finalization最大30秒を維持する．上限時に話し続けている場合は`utterance_limit`として停止し，切れた発言を完了とみなして自動送信しない．previewからtext訂正・明示再送できる．
 - listening中の無発話はturnを生成しない．5分無活動で表示付きpauseとしてマイクを解放する．設定変更は明示し，録音上限をsession全長へ伸ばさない．
 
 Step 1はsession継続と自動ターン交替を完成させる．回答待機中の既存C0.4活動検出は同じcaptureからPCMを受けるようにし，二重`getUserMedia`を作らない．本文割込みの内容引継ぎはStep 2で完成させる．fillerが無効でもsessionは機能する．
+
+Step 1の連続sessionでは入力AudioContext／MediaStreamをsessionが，出力AudioContextの再生handleを回答runが所有する．ASR segmentは発話単位で閉じる．無発話時は本文を送らず有限時間でASRを更新し，累積5分無活動でsessionをpauseする．従来の手動録音は別の利用モードとして保つ．本文再生中の発話はStep 1の引継ぎ対象外であり，状態UIで回答中／次発話待ちを区別する．
 
 Step 2では500 msのpre-roll ringを同一captureへ追加する．48 kHz／mono PCM16なら48,000 bytesが基準で，resamplingやdevice epoch変更時の上限・破棄も検査する．検出点より前から新しいASR segmentへ順番に送り，検出点のframeを二重送信しない．session継続中も音声をdiskへ書かない．
 
