@@ -46,6 +46,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   # Keep the bundle identifier stable for TCC．An unsigned Go binary is
   # otherwise attributed as `a.out` even when LaunchServices opens the app．
   xattr -cr "${APP_BUNDLE}"
+  # File Provider can leave root FinderInfo behind even after recursive cleanup．
+  # Signing still verifies the complete bundle and fails on other detritus．
+  xattr -d com.apple.FinderInfo "${APP_BUNDLE}" 2>/dev/null || true
   codesign --force --deep --sign - --identifier com.wails.ephy-runtime "${APP_BUNDLE}"
   codesign --verify --strict --deep "${APP_BUNDLE}"
   echo "Updated ${APP_BUNDLE}"
