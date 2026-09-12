@@ -30,6 +30,18 @@ def finish(root, before, binary, output):
     result = {**after, 'schema_version': 1, 'executable_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
               'executable_name': binary.name, 'go_version': subprocess.check_output(['go', 'version']).decode().strip(),
               'build_tags': 'desktop,wv2runtime.download,production'}
+    if binary.parent.name == 'MacOS' and binary.parent.parent.name == 'Contents':
+        contents = binary.parent.parent
+        helper = contents / 'Helpers/ephy-whisper'
+        if helper.exists():
+            provenance = contents / 'Resources/whisper-build-provenance.json'
+            source = json.loads(provenance.read_text())
+            actual = hashlib.sha256(helper.read_bytes()).hexdigest()
+            if actual != source['helper_sha256']:
+                raise ValueError('Bundled ASR helper differs from its build provenance')
+            result['whisper_helper_sha256'] = actual
+            result['whisper_cpp'] = source['whisper_cpp']
+            result['whisper_provenance_sha256'] = hashlib.sha256(provenance.read_bytes()).hexdigest()
     output.write_text(json.dumps(result, indent=2) + '\n')
     return result
 

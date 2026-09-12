@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "whisper_cpp": {
+    "repository": "https://github.com/ggml-org/whisper.cpp.git",
+    "tag": "v1.9.4",
+    "commit": "927cfce34f31707e17f2bff35c349632fb9e2c3a"
+  },
+  "models": [
+    {
+      "id": "kotoba-v2.0-f16",
+      "repository": "kotoba-tech/kotoba-whisper-v2.0-ggml",
+      "revision": "e3a0cf6a62b95911703cfb97d819292e058f12c3",
+      "file": "ggml-kotoba-whisper-v2.0.bin",
+      "bytes": 1519521155,
+      "sha256": "eff70a8a236e731abba774ba71e1f6d0fce53302137208c32207e694e0bf4546",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "large-v3-turbo-f16",
+      "repository": "ggerganov/whisper.cpp",
+      "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+      "file": "ggml-large-v3-turbo.bin",
+      "bytes": 1624555275,
+      "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+      "license": "MIT"
+    },
+    {
+      "id": "silero-v6.2.0",
+      "repository": "ggml-org/whisper-vad",
+      "revision": "9ffd54a1e1ee413ddf265af9913beaf518d1639b",
+      "file": "ggml-silero-v6.2.0.bin",
+      "bytes": 885098,
+      "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+      "license": "MIT"
+    }
+  ]
+}

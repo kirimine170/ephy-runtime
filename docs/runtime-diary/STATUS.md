@@ -1,8 +1,14 @@
 # Runtime会話・日記 C1〜C3 状況
 
-最終更新：2026-09-12．**C1 Step 2の本文割込み・発話冒頭引継ぎを実装し，自動検証した**．先行Step 3のKarte基盤は維持した．Step 1・2の人による実機受入は未確認，Step 4以降は未着手である．実設定・実データへの記録は有効化していない．
+最終更新：2026-09-13．**ASR改善計画A〜Eを常駐Whisper，途中表示，VAD終端，割込み，アプリbuildへ接続した**．公開朗読100件の比較からlarge-v3-turbo F16を選択した．モデルVADで小声と短い指示の取りこぼしを減らし，無発話はLLMへ送らず待受へ戻す．実測と未達，人による再試験は[LOCAL_WHISPER_ASR.md](../LOCAL_WHISPER_ASR.md)を参照する．Frontend 299 testsとGo全体のrace検査は成功した．自然な実マイク会話と実再生停止の品質受入は未完了である．先行Step 3のKarte基盤は維持し，Step 4以降の実会話記録は有効化していない．
 
 次の担当は[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)，[Runtime ADR-0014](../adr/ADR-0014-runtime-conversation-diary-boundaries.md)，[Karte保存契約 v2](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)を読み，ユーザーが指定したStepだけを進める．全Stepを一括実行するgoalは設定しない．
+
+## 2026-09-13 ノイズ対策の追補
+
+Frontendの全291 testsとGo全体で確認した．候補の認識中は生成を続け，本文音量だけを下げる．中断を確定した後は従来の停止・PCM引継ぎへ接続する．起動が遅れた候補も取消でき，候補の確認時間を`candidate_ms`として停止制御時間と分けて残す．物理マイク・聴感での再受入はこれから行う．再ビルドのsource／binary hash，起動状態はローカルの`recovery/ephy-runtime/c1-noise-fix-20260913`へ保存する．
+
+以下は先行Step 2実装時の記録である．32 msの活動で直ちに中断する方式は上記の候補確認へ置き換えた．
 
 ## Step 2／C1 本文割込みと発話冒頭引継ぎ
 
@@ -11,7 +17,7 @@
 | 実装済み | 単一captureによるLLM待機・フィラー・TTS待機・本文の割込み，500 ms pre-roll，有限の入力引継ぎ，端末の即時mute／stop，旧operation取消と次ASRの分離 |
 | 自動検証済み | 冒頭PCMのbyte一致，4場面，連続割込み，ASR cleanup直列化，pause／resume，旧token／WAV／final／onended，複数WAVのSpeechUnit，v2共通scenario，Work設定・履歴の保持 |
 | 実環境smoke | 修正済み隔離Gateway→既存Workモデル→macOS音声合成が成功．入力は合成文，マイク・音声再生なし |
-| 人による実機受入 | 未確認．旧appを通常終了し，初回build（`090f5fe`）の継続会話UI表示までは確認した．review修正後の最終build（`acce6f2`）はMacのロックにより未起動である．声一覧・Gatewayの初期化完了前にMacがロックされ，操作が停止した．初期化完了・声の選択状態・実マイク・ヘッドホン・聴感・次回答への接続を自動testで代用しない |
+| 人による実機受入 | 2026-09-13に最終build（`acce6f2`）を起動し，Irodori Anime／明るくで利用者が試行した．TTS待機中の取消2件と，続く入力の`asr_failed`をtraceで確認した．受入合格とはせず，上記ノイズ対策を再試験する |
 | 記録 | Step 4未実装．実会話の自動記録，v2 grant，Jobを有効化していない |
 
 Karteの契約正本は[PR #308](https://github.com/kirimine170/Karte/pull/308)をCI 7件成功・条件外2件skipの後にsquash統合した．検証・統合したPR headは`2f3537373cd3c9b48cc1342a39639f928f01b646`，統合commitは`90c69c58945e4eb00ec5f13c73b444ff298443d2`である．Runtime変更の追跡先は[PR #81](https://github.com/kirimine170/ephy-runtime/pull/81)で，この正本へ45 JSONを照合する．review修正を含む公開head `acce6f290150952dea403151352e1fc59242f56c`ではGitHub CI 6件（Python，Frontend，Desktop，Karte契約，validator 2件）が成功した．この結果の追記は文書のみで，受入buildのsource／hashを変更しない．

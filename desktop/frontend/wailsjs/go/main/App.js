@@ -6,6 +6,10 @@ export function AppendInteractionAudio(arg1, arg2, arg3) {
   return window['go']['main']['App']['AppendInteractionAudio'](arg1, arg2, arg3);
 }
 
+export function AppendInteractionInterruptionCandidate(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['AppendInteractionInterruptionCandidate'](arg1, arg2, arg3, arg4);
+}
+
 export function ApplyLocalModel(arg1) {
   return window['go']['main']['App']['ApplyLocalModel'](arg1);
 }
@@ -16,6 +20,10 @@ export function ApproveWebSearch(arg1) {
 
 export function BeginInteractionASR(arg1, arg2) {
   return window['go']['main']['App']['BeginInteractionASR'](arg1, arg2);
+}
+
+export function BeginInteractionInterruptionCandidate(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['BeginInteractionInterruptionCandidate'](arg1, arg2, arg3, arg4);
 }
 
 export function BrowseIndex(arg1) {
@@ -32,6 +40,10 @@ export function CancelInteraction(arg1) {
 
 export function CancelInteractionComparison(arg1) {
   return window['go']['main']['App']['CancelInteractionComparison'](arg1);
+}
+
+export function CancelInteractionInterruptionCandidate(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CancelInteractionInterruptionCandidate'](arg1, arg2, arg3);
 }
 
 export function ChangeVoiceSession(arg1, arg2, arg3) {
@@ -84,6 +96,10 @@ export function Embeddings(arg1) {
 
 export function EndInteractionASR(arg1) {
   return window['go']['main']['App']['EndInteractionASR'](arg1);
+}
+
+export function EndInteractionASRWithReason(arg1, arg2) {
+  return window['go']['main']['App']['EndInteractionASRWithReason'](arg1, arg2);
 }
 
 export function Eval(arg1) {
@@ -256,6 +272,10 @@ export function ReadExportedResult(arg1) {
 
 export function RecordExecution(arg1) {
   return window['go']['main']['App']['RecordExecution'](arg1);
+}
+
+export function RecordInteractionAudioCapture(arg1, arg2) {
+  return window['go']['main']['App']['RecordInteractionAudioCapture'](arg1, arg2);
 }
 
 export function RecordInteractionFeedback(arg1) {

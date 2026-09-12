@@ -11,6 +11,19 @@ func fail(_ code: String) -> Never {
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
+// Pure policy checks never instantiate Speech or request a permission．
+if arguments == ["--policy-self-test"] {
+    for final in [false, true] { for text in [false, true] { for error in [false, true] {
+        let action = appleResultAction(isFinal: final, hasText: text, hasError: error)
+        let expected: AppleResultAction = final && text ? .final : error ? .failure : final ? .emptyFinal : .partial
+        guard action == expected else { fail("asr_policy_test_failed") }
+    } } }
+    let privateError = NSError(domain: "private path and transcript", code: 17, userInfo: [NSLocalizedDescriptionKey: "private data"])
+    let safe = appleDiagnostic(privateError)
+    guard safe?.domain == "other", safe?.code == 17 else { fail("asr_policy_test_failed") }
+    print("asr_policy_ok")
+    exit(0)
+}
 var localeIdentifier = "ja-JP"
 var checkOnly = false
 var streaming = false
@@ -197,6 +210,31 @@ struct StreamingOutput: Encodable {
     let model_revision: String
     let monotonic_ms: Int64
     let error_code: String
+    let diagnostic: AppleDiagnostic?
+}
+
+enum AppleResultAction { case final, failure, emptyFinal, partial }
+func appleResultAction(isFinal: Bool, hasText: Bool, hasError: Bool) -> AppleResultAction {
+    if isFinal && hasText { return .final }
+    if hasError { return .failure }
+    return isFinal ? .emptyFinal : .partial
+}
+struct AppleDiagnostic: Encodable {
+    let domain: String
+    let code: Int
+}
+func appleDiagnostic(_ error: Error?) -> AppleDiagnostic? {
+    guard let error = error as NSError? else { return nil }
+    let domain: String
+    switch error.domain {
+    case "kAFAssistantErrorDomain": domain = "speech_assistant"
+    case "kLSRErrorDomain": domain = "speech_recognition"
+    case NSURLErrorDomain: domain = "url"
+    case NSCocoaErrorDomain: domain = "cocoa"
+    case NSOSStatusErrorDomain: domain = "osstatus"
+    default: domain = "other"
+    }
+    return AppleDiagnostic(domain: domain, code: max(-2_147_483_648, min(2_147_483_647, error.code)))
 }
 
 func appleSpeechRevision(_ locale: String) -> String {
@@ -233,7 +271,7 @@ final class StreamingRecognition {
         modelRevision = appleSpeechRevision(locale)
     }
 
-    func emit(_ phase: String, _ text: String = "", _ code: String = "") {
+    func emit(_ phase: String, _ text: String = "", _ code: String = "", diagnostic: AppleDiagnostic? = nil) {
         guard !finished, let start, let operation = start.operation_id, let session = start.session_id,
               let turn = start.turn_id, let segment = start.segment_id else { return }
         revision += 1
@@ -241,14 +279,14 @@ final class StreamingRecognition {
             segment_id: segment, revision: revision, phase: phase, transcript: text,
             stable_prefix: phase == "final" ? text : "", provider: "macos-speech",
             model_revision: modelRevision,
-            monotonic_ms: Int64((DispatchTime.now().uptimeNanoseconds - startedNS) / 1_000_000), error_code: code)
+            monotonic_ms: Int64((DispatchTime.now().uptimeNanoseconds - startedNS) / 1_000_000), error_code: code, diagnostic: diagnostic)
         guard let json = try? JSONEncoder().encode(output), json.count < 96 * 1024 else { fail("asr_stream_invalid") }
         FileHandle.standardOutput.write(json + Data([10]))
     }
 
-    func stop(_ code: String) {
+    func stop(_ code: String, diagnostic: AppleDiagnostic? = nil) {
         guard !finished else { return }
-        emit(code == "asr_timeout" ? "timeout" : "failure", "", code)
+        emit(code == "asr_timeout" ? "timeout" : "failure", "", code, diagnostic: diagnostic)
         failed = true
         finished = true
         pendingAudio.removeAll(keepingCapacity: false)
@@ -281,13 +319,15 @@ final class StreamingRecognition {
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             DispatchQueue.main.async {
                 guard let self, !self.finished else { return }
-                if error != nil { self.stop("asr_failed"); return }
+                let available = result?.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let action = appleResultAction(isFinal: result?.isFinal == true, hasText: !available.isEmpty, hasError: error != nil)
+                if action == .failure { self.stop("asr_failed", diagnostic: appleDiagnostic(error)); return }
                 if let result {
                     let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard text.utf8.count <= 16 * 1024 else { self.stop("asr_stream_invalid"); return }
                     if result.isFinal {
                         guard !text.isEmpty else { self.stop("asr_empty_transcript"); return }
-                        self.emit("final", text)
+                        self.emit("final", text, diagnostic: appleDiagnostic(error))
                         self.finished = true
                         self.pendingAudio.removeAll(keepingCapacity: false)
                         self.request?.endAudio()

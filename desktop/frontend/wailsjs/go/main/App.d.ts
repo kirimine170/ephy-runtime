@@ -4,11 +4,15 @@ import {main} from '../models';
 
 export function AppendInteractionAudio(arg1:string,arg2:number,arg3:string):Promise<void>;
 
+export function AppendInteractionInterruptionCandidate(arg1:string,arg2:string,arg3:number,arg4:string):Promise<main.InterruptionCandidateSnapshot>;
+
 export function ApplyLocalModel(arg1:main.ApplyLocalModelRequest):Promise<main.LocalModelCatalog>;
 
 export function ApproveWebSearch(arg1:string):Promise<Record<string, any>>;
 
 export function BeginInteractionASR(arg1:string,arg2:number):Promise<main.ASRSessionRequest>;
+
+export function BeginInteractionInterruptionCandidate(arg1:string,arg2:string,arg3:number,arg4:number):Promise<main.InterruptionCandidateSnapshot>;
 
 export function BrowseIndex(arg1:main.IndexBrowseRequest):Promise<Record<string, any>>;
 
@@ -17,6 +21,8 @@ export function CancelBatchWorkflow():Promise<main.BatchWorkflowState>;
 export function CancelInteraction(arg1:string):Promise<main.InteractionSnapshot>;
 
 export function CancelInteractionComparison(arg1:string):Promise<void>;
+
+export function CancelInteractionInterruptionCandidate(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function ChangeVoiceSession(arg1:string,arg2:number,arg3:string):Promise<main.VoiceSessionSnapshot>;
 
@@ -43,6 +49,8 @@ export function DeleteSavedRequest(arg1:main.LocalConfigNameRequest):Promise<Arr
 export function Embeddings(arg1:main.EmbeddingRequest):Promise<Record<string, any>>;
 
 export function EndInteractionASR(arg1:string):Promise<void>;
+
+export function EndInteractionASRWithReason(arg1:string,arg2:string):Promise<void>;
 
 export function Eval(arg1:main.EvalRequest):Promise<main.EvalResponse>;
 
@@ -129,6 +137,8 @@ export function Query(arg1:main.QueryRequest):Promise<main.QueryResponse>;
 export function ReadExportedResult(arg1:main.ExportedFileRequest):Promise<main.ExportedFileContent>;
 
 export function RecordExecution(arg1:main.ExecutionHistoryItem):Promise<Array<main.ExecutionHistoryItem>>;
+
+export function RecordInteractionAudioCapture(arg1:string,arg2:main.ASRCaptureMetadata):Promise<void>;
 
 export function RecordInteractionFeedback(arg1:string):Promise<main.InteractionEvaluationRecord>;
 

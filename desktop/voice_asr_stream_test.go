@@ -694,3 +694,29 @@ func TestNativeASRSessionCallbackFailureDoesNotBlockNextSession(t *testing.T) {
 		})
 	}
 }
+
+func TestAppleDiagnosticIsFixedAndFinalRemainsSemanticallyEqual(t *testing.T) {
+	r := nativeStreamRequest()
+	s := &nativeASRSession{request: r, provider: &NativeVoiceASR{locale: "ja-JP"}, lastMS: -1}
+	u := nativeStreamUpdate(r, 1, "final", "確定結果")
+	u.Diagnostic = &ASRDiagnostic{Domain: "speech_assistant", Code: 1101}
+	if err := s.validate(u); err != nil {
+		t.Fatal(err)
+	}
+	b := u
+	d := *u.Diagnostic
+	b.Diagnostic = &d
+	if !sameASRFinal(u, b) {
+		t.Fatal("diagnostic pointer identity invalidated the same final")
+	}
+	b.Diagnostic.Code = 1
+	if sameASRFinal(u, b) {
+		t.Fatal("changed diagnostic ignored")
+	}
+	for _, diagnostic := range []*ASRDiagnostic{{Domain: "private path", Code: 1101}, {Domain: "other", Code: 1 << 40}} {
+		u.Diagnostic = diagnostic
+		if err := s.validate(u); err == nil {
+			t.Fatal("unbounded diagnostic accepted")
+		}
+	}
+}

@@ -55,6 +55,7 @@ type InteractionSnapshot struct {
 	Transcript         string                         `json:"transcript,omitempty"`
 	ResponsePlan       *ResponsePlan                  `json:"response_plan,omitempty"`
 	ErrorCode          string                         `json:"error_code,omitempty"`
+	InputOutcome       string                         `json:"input_outcome,omitempty"`
 	Generation         *GenerationMetadata            `json:"generation,omitempty"`
 	GenerationRevision int                            `json:"generation_revision"`
 	LastAudioSequence  int                            `json:"last_audio_sequence"`
@@ -109,6 +110,8 @@ type interactionTurn struct {
 	source                 string
 	requestConfigurationID string
 	asr                    *interactionASRSession
+	interruptionCandidate  *interactionInterruptionCandidate
+	interruptionTraceCount int
 	speech                 *preparedSpeech
 }
 type InteractionEngine struct {
@@ -915,7 +918,7 @@ func (e *InteractionEngine) finishLocked(t *interactionTurn, state, name, code s
 	t.cancel()
 	if t.asr != nil {
 		t.asr.cancel()
-		t.asr.pending, t.asr.final = nil, nil
+		t.asr.pending, t.asr.pendingActivity, t.asr.final = nil, nil, nil
 		t.asr.stablePrefix = ""
 	}
 	if t.playbackTimer != nil {
@@ -954,7 +957,7 @@ func (e *InteractionEngine) cancelTurnLocked(t *interactionTurn) {
 	}
 }
 func (e *InteractionEngine) Fail(op, code string) error {
-	allowed := map[string]bool{"utterance_limit": true, "microphone_unavailable": true, "microphone_permission_denied": true, "microphone_failed": true, "invalid_audio": true, "playback_failed": true, "interrupted": true, "asr_failed": true, "asr_backpressure": true, "asr_protocol_error": true, "asr_timeout": true, "asr_canceled": true, "asr_unavailable": true, "asr_on_device_unavailable": true, "asr_permission_denied": true, "asr_permission_restricted": true, "asr_stream_invalid": true, "asr_stream_eof": true, "asr_empty_transcript": true, "asr_empty_result": true, "invalid_voice_config": true}
+	allowed := map[string]bool{"utterance_limit": true, "microphone_unavailable": true, "microphone_permission_denied": true, "microphone_failed": true, "invalid_audio": true, "playback_failed": true, "interrupted": true, "asr_failed": true, "asr_loading": true, "asr_model_missing": true, "asr_model_mismatch": true, "asr_model_load_failed": true, "asr_worker_exited": true, "asr_busy": true, "asr_backpressure": true, "asr_protocol_error": true, "asr_timeout": true, "asr_canceled": true, "asr_unavailable": true, "asr_on_device_unavailable": true, "asr_permission_denied": true, "asr_permission_restricted": true, "asr_stream_invalid": true, "asr_stream_eof": true, "asr_empty_transcript": true, "asr_empty_result": true, "invalid_voice_config": true}
 	if !allowed[code] {
 		return errors.New("invalid_failure_code")
 	}
@@ -1014,8 +1017,8 @@ func (e *InteractionEngine) Trace(op string) ([]InteractionTraceEvent, error) {
 }
 func (e *InteractionEngine) Close() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.closed {
+		e.mu.Unlock()
 		return
 	}
 	e.closed = true
@@ -1027,6 +1030,11 @@ func (e *InteractionEngine) Close() {
 		e.cancelTurnLocked(t)
 	}
 	close(e.done)
+	provider := e.asr
+	e.mu.Unlock()
+	if closer, ok := provider.(interface{ Close() }); ok {
+		closer.Close()
+	}
 }
 
 func stableVoiceIdentity(value any, provider, model, config string) (string, string, string) {

@@ -1,11 +1,13 @@
 // PCM lives only in this session-owned bounded buffer．The rolling 500 ms
 // becomes a lossless handoff queue at onset；overflow never drops its beginning．
-export function createVoiceInputBuffer(sampleRate) {
-  const preRoll = Math.ceil(sampleRate * .5), maximum = Math.ceil(sampleRate * 2);
+export function createVoiceInputBuffer(sampleRate, maximumMS = 2000) {
+  if (!Number.isSafeInteger(maximumMS) || maximumMS < 500 || maximumMS > 3000) throw new Error('invalid_input_buffer_limit');
+  const preRoll = Math.ceil(sampleRate * .5), maximum = Math.ceil(sampleRate * maximumMS / 1000);
   let frames = [], samples = 0, holding = false;
   return {
     get holding() { return holding; },
     get samples() { return samples; },
+    snapshot() { return frames.map(frame => new Float32Array(frame)); },
     push(data) {
       if (holding && samples + data.length > maximum) return false;
       frames.push(new Float32Array(data)); samples += data.length;

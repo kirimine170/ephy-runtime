@@ -79,6 +79,7 @@ type nativeASRSession struct {
 	callbackGate  chan struct{}
 	parentCtx     context.Context
 	canceled      bool
+	diagnostic    *ASRDiagnostic
 	writeGate     chan struct{}
 	done          chan struct{}
 	limits        nativeASRStreamLimits
@@ -367,6 +368,9 @@ func (s *nativeASRSession) call(update ASRUpdate) error {
 }
 
 func (s *nativeASRSession) validate(update ASRUpdate) error {
+	if update.Activity != nil || !validASRDiagnostic(update.Diagnostic) || (update.Diagnostic != nil && update.Phase != "final" && update.Phase != "failure") {
+		return errors.New("asr_stream_invalid")
+	}
 	if update.OperationID != s.request.OperationID || update.SessionID != s.request.SessionID || update.TurnID != s.request.TurnID || update.SegmentID != s.request.SegmentID ||
 		update.Provider != "macos-speech" || len(update.ModelRevision) > 128 || !nativeASRModelRevision.MatchString(update.ModelRevision) || !strings.HasSuffix(update.ModelRevision, ":"+s.provider.locale) ||
 		update.Revision <= s.lastRevision || update.Revision > maxASRRevisions || update.MonotonicMS < s.lastMS || update.MonotonicMS < 0 || update.MonotonicMS > 120_000 ||
@@ -461,6 +465,10 @@ func (s *nativeASRSession) readUpdates() {
 		}
 		if err == nil {
 			s.lastRevision, s.lastMS, s.modelRevision = update.Revision, update.MonotonicMS, update.ModelRevision
+			if update.Diagnostic != nil {
+				d := *update.Diagnostic
+				s.diagnostic = &d
+			}
 		}
 		s.mu.Unlock()
 		if err != nil {
@@ -567,6 +575,10 @@ func (s *nativeASRSession) fail(err error) {
 	update := ASRUpdate{OperationID: s.request.OperationID, SessionID: s.request.SessionID, TurnID: s.request.TurnID, SegmentID: s.request.SegmentID,
 		Revision: min(s.lastRevision+1, maxASRRevisions), Phase: phase, Provider: "macos-speech", ModelRevision: s.modelRevision,
 		MonotonicMS: max(s.lastMS, time.Since(s.started).Milliseconds()), ErrorCode: err.Error()}
+	if s.diagnostic != nil {
+		d := *s.diagnostic
+		update.Diagnostic = &d
+	}
 	s.provider.readiness.invalidate()
 	s.mu.Unlock()
 	s.process.stop()

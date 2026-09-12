@@ -1,5 +1,79 @@
 export namespace main {
 
+	export class ASRAudioActivity {
+	    audio_ms: number;
+	    last_speech_ms: number;
+	    speech_ms: number;
+	    probability: number;
+	    speaking: boolean;
+	    has_speech: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ASRAudioActivity(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.audio_ms = source["audio_ms"];
+	        this.last_speech_ms = source["last_speech_ms"];
+	        this.speech_ms = source["speech_ms"];
+	        this.probability = source["probability"];
+	        this.speaking = source["speaking"];
+	        this.has_speech = source["has_speech"];
+	    }
+	}
+	export class ASRCapabilities {
+	    partial: boolean;
+	    activity: boolean;
+	    no_speech: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ASRCapabilities(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.partial = source["partial"];
+	        this.activity = source["activity"];
+	        this.no_speech = source["no_speech"];
+	    }
+	}
+	export class ASRCaptureMetadata {
+	    context_sample_rate: number;
+	    track_sample_rate?: number;
+	    channel_count?: number;
+	    echo_cancellation?: boolean;
+	    noise_suppression?: boolean;
+	    auto_gain_control?: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ASRCaptureMetadata(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.context_sample_rate = source["context_sample_rate"];
+	        this.track_sample_rate = source["track_sample_rate"];
+	        this.channel_count = source["channel_count"];
+	        this.echo_cancellation = source["echo_cancellation"];
+	        this.noise_suppression = source["noise_suppression"];
+	        this.auto_gain_control = source["auto_gain_control"];
+	    }
+	}
+	export class ASRDiagnostic {
+	    domain: string;
+	    code: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ASRDiagnostic(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.domain = source["domain"];
+	        this.code = source["code"];
+	    }
+	}
 	export class ASRMetadata {
 	    provider?: string;
 	    model_revision?: string;
@@ -10,6 +84,15 @@ export namespace main {
 	    first_stable_ms?: number;
 	    final_ms?: number;
 	    finalization_ms?: number;
+	    input_sample_rate?: number;
+	    input_samples?: number;
+	    clipped_samples?: number;
+	    vad_audio_ms?: number;
+	    vad_speech_ms?: number;
+	    vad_last_speech_ms?: number;
+	    diagnostic?: ASRDiagnostic;
+	    capture?: ASRCaptureMetadata;
+	    endpoint_reason?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new ASRMetadata(source);
@@ -26,7 +109,34 @@ export namespace main {
 	        this.first_stable_ms = source["first_stable_ms"];
 	        this.final_ms = source["final_ms"];
 	        this.finalization_ms = source["finalization_ms"];
+	        this.input_sample_rate = source["input_sample_rate"];
+	        this.input_samples = source["input_samples"];
+	        this.clipped_samples = source["clipped_samples"];
+	        this.vad_audio_ms = source["vad_audio_ms"];
+	        this.vad_speech_ms = source["vad_speech_ms"];
+	        this.vad_last_speech_ms = source["vad_last_speech_ms"];
+	        this.diagnostic = this.convertValues(source["diagnostic"], ASRDiagnostic);
+	        this.capture = this.convertValues(source["capture"], ASRCaptureMetadata);
+	        this.endpoint_reason = source["endpoint_reason"];
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ASRSessionRequest {
 	    operation_id: string;
@@ -47,6 +157,62 @@ export namespace main {
 	        this.segment_id = source["segment_id"];
 	        this.sample_rate = source["sample_rate"];
 	    }
+	}
+	export class ASRUpdate {
+	    operation_id: string;
+	    session_id: string;
+	    turn_id: string;
+	    segment_id: string;
+	    revision: number;
+	    phase: string;
+	    transcript?: string;
+	    stable_prefix?: string;
+	    provider: string;
+	    model_revision: string;
+	    monotonic_ms: number;
+	    error_code?: string;
+	    activity?: ASRAudioActivity;
+	    diagnostic?: ASRDiagnostic;
+
+	    static createFrom(source: any = {}) {
+	        return new ASRUpdate(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.operation_id = source["operation_id"];
+	        this.session_id = source["session_id"];
+	        this.turn_id = source["turn_id"];
+	        this.segment_id = source["segment_id"];
+	        this.revision = source["revision"];
+	        this.phase = source["phase"];
+	        this.transcript = source["transcript"];
+	        this.stable_prefix = source["stable_prefix"];
+	        this.provider = source["provider"];
+	        this.model_revision = source["model_revision"];
+	        this.monotonic_ms = source["monotonic_ms"];
+	        this.error_code = source["error_code"];
+	        this.activity = this.convertValues(source["activity"], ASRAudioActivity);
+	        this.diagnostic = this.convertValues(source["diagnostic"], ASRDiagnostic);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ApplyLocalModelRequest {
 	    role: string;
@@ -883,6 +1049,7 @@ export namespace main {
 	    }
 	}
 	export class InteractionInterruption {
+	    candidate_ms?: number;
 	    local_stop_ms: number;
 	    voice_session_id: string;
 	    voice_session_epoch: number;
@@ -898,6 +1065,7 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.candidate_ms = source["candidate_ms"];
 	        this.local_stop_ms = source["local_stop_ms"];
 	        this.voice_session_id = source["voice_session_id"];
 	        this.voice_session_epoch = source["voice_session_epoch"];
@@ -928,6 +1096,7 @@ export namespace main {
 	}
 	export class InteractionInterruptionTiming {
 	    local_stop_ms: number;
+	    candidate_ms?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new InteractionInterruptionTiming(source);
@@ -936,6 +1105,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.local_stop_ms = source["local_stop_ms"];
+	        this.candidate_ms = source["candidate_ms"];
 	    }
 	}
 	export class InteractionPlaybackObservation {
@@ -975,6 +1145,7 @@ export namespace main {
 	    transcript?: string;
 	    response_plan?: ResponsePlan;
 	    error_code?: string;
+	    input_outcome?: string;
 	    generation?: GenerationMetadata;
 	    generation_revision: number;
 	    last_audio_sequence: number;
@@ -996,6 +1167,7 @@ export namespace main {
 	        this.transcript = source["transcript"];
 	        this.response_plan = this.convertValues(source["response_plan"], ResponsePlan);
 	        this.error_code = source["error_code"];
+	        this.input_outcome = source["input_outcome"];
 	        this.generation = this.convertValues(source["generation"], GenerationMetadata);
 	        this.generation_revision = source["generation_revision"];
 	        this.last_audio_sequence = source["last_audio_sequence"];
@@ -1094,6 +1266,44 @@ export namespace main {
 	        this.generation = this.convertValues(source["generation"], GenerationMetadata);
 	        this.generation_revision = source["generation_revision"];
 	        this.asr = this.convertValues(source["asr"], ASRMetadata);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class InterruptionCandidateSnapshot {
+	    candidate_id: string;
+	    request: ASRSessionRequest;
+	    update?: ASRUpdate;
+	    activity?: ASRUpdate;
+	    error_code?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new InterruptionCandidateSnapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.candidate_id = source["candidate_id"];
+	        this.request = this.convertValues(source["request"], ASRSessionRequest);
+	        this.update = this.convertValues(source["update"], ASRUpdate);
+	        this.activity = this.convertValues(source["activity"], ASRUpdate);
+	        this.error_code = source["error_code"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2640,6 +2850,9 @@ export namespace main {
 	    state: string;
 	    can_start: boolean;
 	    error_code?: string;
+	    provider?: string;
+	    model?: string;
+	    capabilities: ASRCapabilities;
 
 	    static createFrom(source: any = {}) {
 	        return new VoiceReadiness(source);
@@ -2650,7 +2863,28 @@ export namespace main {
 	        this.state = source["state"];
 	        this.can_start = source["can_start"];
 	        this.error_code = source["error_code"];
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.capabilities = this.convertValues(source["capabilities"], ASRCapabilities);
 	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class VoiceSessionSnapshot {
 	    id: string;
