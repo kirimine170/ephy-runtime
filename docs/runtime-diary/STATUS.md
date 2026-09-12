@@ -14,7 +14,7 @@
 | 人による実機受入 | 未確認．Macがロックされ，native appの画面を操作できなかった．実マイク・ヘッドホン・聴感・次回答への接続を自動testで代用しない |
 | 記録 | Step 4未実装．実会話の自動記録，v2 grant，Jobを有効化していない |
 
-Karteの契約正本は[PR #308](https://github.com/kirimine170/Karte/pull/308)をCI 7件成功・条件外2件skipの後にsquash統合した．検証・統合したPR headは`2f3537373cd3c9b48cc1342a39639f928f01b646`，統合commitは`90c69c58945e4eb00ec5f13c73b444ff298443d2`である．RuntimeのPRはこの正本へ45 JSONを照合する．
+Karteの契約正本は[PR #308](https://github.com/kirimine170/Karte/pull/308)をCI 7件成功・条件外2件skipの後にsquash統合した．検証・統合したPR headは`2f3537373cd3c9b48cc1342a39639f928f01b646`，統合commitは`90c69c58945e4eb00ec5f13c73b444ff298443d2`である．Runtime変更の追跡先は[PR #81](https://github.com/kirimine170/ephy-runtime/pull/81)で，この正本へ45 JSONを照合する．機能差分を含む公開head `f4db14dc7ddec57fe6647dae38652ce03ececa94`ではGitHub CI 6件（Python，Frontend，Desktop，Karte契約，validator 2件）が成功した．この結果の追記は文書のみで，受入buildのsource／hashを変更しない．
 
 開始時のRuntime main／origin/mainは`36e9a3015a986c4ffacece2dcefa93b629737647`，Karteは`e426db4222db39654c87524e45437280aa403210`だった．そこから専用worktreeを作成し，旧C0.1の試行・独立draft PR・Karte stackを変更していない．
 
