@@ -11,7 +11,7 @@
 | 実装済み | 単一captureによるLLM待機・フィラー・TTS待機・本文の割込み，500 ms pre-roll，有限の入力引継ぎ，端末の即時mute／stop，旧operation取消と次ASRの分離 |
 | 自動検証済み | 冒頭PCMのbyte一致，4場面，連続割込み，ASR cleanup直列化，pause／resume，旧token／WAV／final／onended，複数WAVのSpeechUnit，v2共通scenario，Work設定・履歴の保持 |
 | 実環境smoke | 修正済み隔離Gateway→既存Workモデル→macOS音声合成が成功．入力は合成文，マイク・音声再生なし |
-| 人による実機受入 | 未確認．Macがロックされ，native appの画面を操作できなかった．実マイク・ヘッドホン・聴感・次回答への接続を自動testで代用しない |
+| 人による実機受入 | 未確認．旧appを通常終了し，新buildの継続会話UI表示までは確認した．声一覧・Gatewayの初期化完了前にMacがロックされ，操作が停止した．初期化完了・声の選択状態・実マイク・ヘッドホン・聴感・次回答への接続を自動testで代用しない |
 | 記録 | Step 4未実装．実会話の自動記録，v2 grant，Jobを有効化していない |
 
 Karteの契約正本は[PR #308](https://github.com/kirimine170/Karte/pull/308)をCI 7件成功・条件外2件skipの後にsquash統合した．検証・統合したPR headは`2f3537373cd3c9b48cc1342a39639f928f01b646`，統合commitは`90c69c58945e4eb00ec5f13c73b444ff298443d2`である．Runtime変更の追跡先は[PR #81](https://github.com/kirimine170/ephy-runtime/pull/81)で，この正本へ45 JSONを照合する．機能差分を含む公開head `f4db14dc7ddec57fe6647dae38652ce03ececa94`ではGitHub CI 6件（Python，Frontend，Desktop，Karte契約，validator 2件）が成功した．この結果の追記は文書のみで，受入buildのsource／hashを変更しない．
@@ -59,7 +59,7 @@ Workの初回smokeは末尾system指示による`generation_unknown`で失敗し
 | 署名再確認 | PASS．File Providerが再付与したFinderInfoだけを除去し，binary hash不変を再確認 |
 | ASR helper SHA-256 | `31ea9ff6e0d8a5312af5e8a6f668ad3fa786f0fb4a0dacf34ebb2ea3c9e489db`．既存署名済みhelper |
 
-本STATUSを追記した文書commitとbuild sourceは別である．受入対象は上表で固定する．ローカルの`recovery/ephy-runtime/c1-step2-20260912/`にmanifest，`acceptance-status.json`，本文を含めない検証log，`launch-c1-step2-acceptance.command`を保全した．launcherは旧appの通常終了を確認し，署名・binary／helper hashを検査する．Gatewayのsource・既存processのcommand／cwdを照合したうえで，更新済みmainの既存start scriptからGatewayだけを再起動し，前後healthの設定概要と読み込んだsourceを記録する．モデル・persona・voice・thinkingの設定ファイルを編集しない．実機手順は[C1 Step 2受入](C1_STEP2_ACCEPTANCE.md)を参照する．
+本STATUSを追記した文書commitとbuild sourceは別である．受入対象は上表で固定する．設定・helper・既存素材を同じworkspace rootから参照できるよう，受入bundleを元Runtime checkoutの`desktop/build/c1-step2/ephy-runtime.app`へコピーし，署名・binary hashの一致を確認した．既存の`desktop/build/bin/`のbundleは置き換えていない．ローカルの`recovery/ephy-runtime/c1-step2-20260912/`にmanifest，`acceptance-status.json`，本文を含めない検証log，`launch-c1-step2-acceptance.command`を保全した．launcherは旧appの通常終了を確認し，署名・binary／helper hashを検査する．Gatewayのsource・既存processのcommand／cwdを照合したうえで，更新済みmainの既存start scriptからGatewayだけを再起動し，前後healthの設定概要と読み込んだsourceを記録する．モデル・persona・voice・thinkingの設定ファイルを編集しない．実機手順は[C1 Step 2受入](C1_STEP2_ACCEPTANCE.md)を参照する．
 
 Karte正本の`runtime-delivery.scenario.json`とRuntimeのGo／Frontend／Python，Karteの採用・読戻しtestが同じ状態を検査する．v2 schema／protocolは2.0のままで，未知fieldを追加せず既存enumの意味を明確にした．recordに保存する本文と再生された範囲を同一視しない．
 

@@ -1,12 +1,14 @@
 # C1 Step 2の実機受入
 
-本手順は未実施である．合成テスト，Goのplayback ACK，WAV生成だけを聴感の合格にしない．対応するsource SHA／binary hashと検証状況は[STATUS](STATUS.md)を参照する．実会話の自動記録はOFFのままにする．
+人の発話・聴感による本手順は未実施である．新buildの継続会話UI表示までは確認したが，Macのロックにより初期化完了・声の選択状態は未確認である．合成テスト，Goのplayback ACK，WAV生成だけを聴感の合格にしない．対応するsource SHA／binary hashと検証状況は[STATUS](STATUS.md)を参照する．実会話の自動記録はOFFのままにする．
 
 ## 起動と版の確認
 
-1．Macのロックを解除し，ヘッドホンを接続する．起動中の旧Ephy Runtimeを通常終了する．
+1．Macのロックを解除し，ヘッドホンを接続する．表示中のEphy Runtimeを通常終了する．
 2．`recovery/ephy-runtime/c1-step2-20260912/launch-c1-step2-acceptance.command`を実行する．launcherがclean sourceのmanifest，署名後binary hash，署名，既存ASR helperのhashを照合する．single-instanceで旧appへ転送されないことを確認する．
 3．launcherが今回のcompletion guidance修正を含むRuntime mainのsourceと既存Gatewayの所有processを照合し，Gatewayだけを再起動する．同じsourceで準備済みのprocessなら再起動を省く．前後healthとsource SHAを`gateway-restart-provenance.json`へ記録する．port 8000の所有者やsourceが異なる場合は停止し，別processを強制終了しない．モデルの選択，persona，voice，thinkingの設定は変更しない．
+
+受入bundleは元Runtime checkoutの`desktop/build/c1-step2/ephy-runtime.app`にあり，既存の設定・helper・素材を参照する．再起動後の声の初期選択を受入前のprofile／styleと照合し，異なる場合は既存の選択へ戻す．profileが利用不能ならその状態を記録し，smokeで使った標準声へ暗黙に切り替えて合格にしない．
 
 アプリのsourceとGatewayのsourceは別々に確認する．ASR helperは既存署名済みhelperを使用する．launchしたappのsourceを，元のmainや古いStep 1 bundleのSHAと取り違えない．
 
