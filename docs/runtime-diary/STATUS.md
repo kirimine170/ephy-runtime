@@ -14,6 +14,8 @@
 | 人による実機受入 | 未確認．Macがロックされ，native appの画面を操作できなかった．実マイク・ヘッドホン・聴感・次回答への接続を自動testで代用しない |
 | 記録 | Step 4未実装．実会話の自動記録，v2 grant，Jobを有効化していない |
 
+Karteの契約正本は[PR #308](https://github.com/kirimine170/Karte/pull/308)をCI 7件成功・条件外2件skipの後にsquash統合した．検証・統合したPR headは`2f3537373cd3c9b48cc1342a39639f928f01b646`，統合commitは`90c69c58945e4eb00ec5f13c73b444ff298443d2`である．RuntimeのPRはこの正本へ45 JSONを照合する．
+
 開始時のRuntime main／origin/mainは`36e9a3015a986c4ffacece2dcefa93b629737647`，Karteは`e426db4222db39654c87524e45437280aa403210`だった．そこから専用worktreeを作成し，旧C0.1の試行・独立draft PR・Karte stackを変更していない．
 
 ### 実装と観測の境界
@@ -27,7 +29,7 @@
 
 ### 自動検証と実環境smoke
 
-Frontend 266 tests，Runtime Go全体，対象Go race，Karte `internal/ephyrecordsv2`，v1/v2 45 JSONのbyte照合を実行した．Python全体は613 passed／3 skippedとmacOSの二重sandboxで実行できない4件に分かれ，その4件をテスト自身のsandboxが使える状態で再実行して4 passedを確認した．合計617件の成功を確認したが，単一のsandbox内で617件が通ったという報告にはしない．最終のbuild／CI／source SHAは受入成果物節へ追記する．
+Frontend 266 tests，Runtime Go全体，対象Go race，Karte `internal/ephyrecordsv2`，v1/v2 45 JSONのbyte照合を実行した．Python全体は613 passed／3 skippedとmacOSの二重sandboxで実行できない4件に分かれ，その4件をテスト自身のsandboxが使える状態で再実行して4 passedを確認した．合計617件の成功を確認したが，単一のsandbox内で617件が通ったという報告にはしない．署名付きproduction buildも完了し，source SHAとbinary hashを下記へ記録した．
 
 Workの初回smokeは末尾system指示による`generation_unknown`で失敗し，syntheticな直接requestでQwen3.8の`System message must be at the beginning`を再現した．配置修正後の生成は約38.2秒で完了した．macOS `say`はsandbox内では成功exitでも`data`が0 bytesのWAVになり，厳格な検査で`tts_invalid_audio`として拒否した．検査は弱めず，システム音声サービスを利用できる実行条件で再検証した．
 
@@ -48,7 +50,16 @@ Workの初回smokeは末尾system指示による`generation_unknown`で失敗し
 
 ### 受入成果物とStep 4への引継ぎ
 
-source SHA／署名後binary hashと起動手順は，clean sourceからのbuild後に記録する．実機手順は[C1 Step 2受入](C1_STEP2_ACCEPTANCE.md)を参照する．
+| 区分 | 版／状態 |
+|---|---|
+| 機能実装source | `090f5fe7b56c34f7e0b1991a8bad902fbf38cb7b` |
+| build対象tree | `6827b2a790ee4fa60d46b90254fa42eef52a0b27`．build前後clean，`source_dirty=false` |
+| 署名後binary SHA-256 | `f0cfe7014cb079ebac62d56ff7823dd41032c131f6e6695b0d2a9d7516cea346` |
+| native build | Go 1.25.3／darwin arm64，production tags，ad-hoc署名 |
+| 署名再確認 | PASS．File Providerが再付与したFinderInfoだけを除去し，binary hash不変を再確認 |
+| ASR helper SHA-256 | `31ea9ff6e0d8a5312af5e8a6f668ad3fa786f0fb4a0dacf34ebb2ea3c9e489db`．既存署名済みhelper |
+
+本STATUSを追記した文書commitとbuild sourceは別である．受入対象は上表で固定する．ローカルの`recovery/ephy-runtime/c1-step2-20260912/`にmanifest，`acceptance-status.json`，本文を含めない検証log，`launch-c1-step2-acceptance.command`を保全した．launcherは旧appの通常終了を確認し，署名・binary／helper hashを検査する．Gatewayのsource・既存processのcommand／cwdを照合したうえで，更新済みmainの既存start scriptからGatewayだけを再起動し，前後healthの設定概要と読み込んだsourceを記録する．モデル・persona・voice・thinkingの設定ファイルを編集しない．実機手順は[C1 Step 2受入](C1_STEP2_ACCEPTANCE.md)を参照する．
 
 Karte正本の`runtime-delivery.scenario.json`とRuntimeのGo／Frontend／Python，Karteの採用・読戻しtestが同じ状態を検査する．v2 schema／protocolは2.0のままで，未知fieldを追加せず既存enumの意味を明確にした．recordに保存する本文と再生された範囲を同一視しない．
 

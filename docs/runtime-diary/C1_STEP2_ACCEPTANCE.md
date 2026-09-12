@@ -5,8 +5,8 @@
 ## 起動と版の確認
 
 1．Macのロックを解除し，ヘッドホンを接続する．起動中の旧Ephy Runtimeを通常終了する．
-2．`recovery/ephy-runtime/c1-step2-20260912/launch-c1-step2-acceptance.command`を実行する．launcherがclean sourceのmanifest，署名後binary hash，署名を照合する．single-instanceで旧appへ転送されないことを確認する．
-3．Gatewayは今回のcompletion guidance修正を含むRuntime mainから再起動する．稼働中の旧Gatewayをそのまま使うと，WorkのQwen3.8で末尾system拒否が残る．モデルの選択，persona，voice，thinkingの設定は変更しない．
+2．`recovery/ephy-runtime/c1-step2-20260912/launch-c1-step2-acceptance.command`を実行する．launcherがclean sourceのmanifest，署名後binary hash，署名，既存ASR helperのhashを照合する．single-instanceで旧appへ転送されないことを確認する．
+3．launcherが今回のcompletion guidance修正を含むRuntime mainのsourceと既存Gatewayの所有processを照合し，Gatewayだけを再起動する．同じsourceで準備済みのprocessなら再起動を省く．前後healthとsource SHAを`gateway-restart-provenance.json`へ記録する．port 8000の所有者やsourceが異なる場合は停止し，別processを強制終了しない．モデルの選択，persona，voice，thinkingの設定は変更しない．
 
 アプリのsourceとGatewayのsourceは別々に確認する．ASR helperは既存署名済みhelperを使用する．launchしたappのsourceを，元のmainや古いStep 1 bundleのSHAと取り違えない．
 
