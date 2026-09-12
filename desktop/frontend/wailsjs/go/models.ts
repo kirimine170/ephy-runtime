@@ -470,20 +470,6 @@ export namespace main {
 	        this.path = source["path"];
 	    }
 	}
-	export class GatewayMessage {
-	    role: string;
-	    content: string;
-
-	    static createFrom(source: any = {}) {
-	        return new GatewayMessage(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.role = source["role"];
-	        this.content = source["content"];
-	    }
-	}
 	export class FillerAudio {
 	    kind: string;
 	    audio_base64: string;
@@ -498,30 +484,6 @@ export namespace main {
 	        this.kind = source["kind"];
 	        this.audio_base64 = source["audio_base64"];
 	        this.duration_ms = source["duration_ms"];
-	    }
-	}
-	export class FillerTiming {
-	    llm_request_ms: number;
-	    llm_first_ms: number;
-	    tts_request_ms: number;
-	    tts_chunk_ms: number;
-	    answer_ready_ms: number;
-	    llm_ttft_ms: number;
-	    tts_latency_ms: number;
-
-	    static createFrom(source: any = {}) {
-	        return new FillerTiming(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.llm_request_ms = source["llm_request_ms"];
-	        this.llm_first_ms = source["llm_first_ms"];
-	        this.tts_request_ms = source["tts_request_ms"];
-	        this.tts_chunk_ms = source["tts_chunk_ms"];
-	        this.answer_ready_ms = source["answer_ready_ms"];
-	        this.llm_ttft_ms = source["llm_ttft_ms"];
-	        this.tts_latency_ms = source["tts_latency_ms"];
 	    }
 	}
 	export class FillerSetup {
@@ -560,7 +522,30 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class FillerTiming {
+	    llm_request_ms: number;
+	    llm_first_ms: number;
+	    tts_request_ms: number;
+	    tts_chunk_ms: number;
+	    answer_ready_ms: number;
+	    llm_ttft_ms: number;
+	    tts_latency_ms: number;
 
+	    static createFrom(source: any = {}) {
+	        return new FillerTiming(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.llm_request_ms = source["llm_request_ms"];
+	        this.llm_first_ms = source["llm_first_ms"];
+	        this.tts_request_ms = source["tts_request_ms"];
+	        this.tts_chunk_ms = source["tts_chunk_ms"];
+	        this.answer_ready_ms = source["answer_ready_ms"];
+	        this.llm_ttft_ms = source["llm_ttft_ms"];
+	        this.tts_latency_ms = source["tts_latency_ms"];
+	    }
+	}
 	export class FillerTrace {
 	    kind: string;
 	    latency_ms: number;
@@ -575,7 +560,20 @@ export namespace main {
 	        this.latency_ms = source["latency_ms"];
 	    }
 	}
+	export class GatewayMessage {
+	    role: string;
+	    content: string;
 
+	    static createFrom(source: any = {}) {
+	        return new GatewayMessage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.content = source["content"];
+	    }
+	}
 	export class GenerationLimits {
 	    segment_tokens: number;
 	    max_segments: number;
@@ -2534,7 +2532,27 @@ export namespace main {
 	        this.error_code = source["error_code"];
 	    }
 	}
+	export class VoiceSessionSnapshot {
+	    id: string;
+	    conversation_id: string;
+	    epoch: number;
+	    state: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VoiceSessionSnapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.conversation_id = source["conversation_id"];
+	        this.epoch = source["epoch"];
+	        this.state = source["state"];
+	    }
+	}
 	export class VoiceTurnRequest {
+	    voice_session_id?: string;
+	    voice_session_epoch?: number;
 	    session_id: string;
 	    input_kind?: string;
 	    chat: ChatRequest;
@@ -2547,6 +2565,8 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.voice_session_id = source["voice_session_id"];
+	        this.voice_session_epoch = source["voice_session_epoch"];
 	        this.session_id = source["session_id"];
 	        this.input_kind = source["input_kind"];
 	        this.chat = this.convertValues(source["chat"], ChatRequest);

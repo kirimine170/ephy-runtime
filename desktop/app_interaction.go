@@ -191,7 +191,7 @@ func (a *App) InteractionPlayback(operationID string, sequence int, phase string
 }
 func (a *App) FailInteraction(operationID string, code string) error {
 	switch code {
-	case "microphone_unavailable", "microphone_permission_denied", "microphone_failed", "invalid_audio", "playback_failed", "interrupted", "asr_failed", "asr_backpressure", "asr_protocol_error", "asr_timeout", "asr_canceled", "asr_unavailable", "asr_on_device_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_stream_invalid", "asr_stream_eof", "asr_empty_transcript", "asr_empty_result", "invalid_voice_config":
+	case "utterance_limit", "microphone_unavailable", "microphone_permission_denied", "microphone_failed", "invalid_audio", "playback_failed", "interrupted", "asr_failed", "asr_backpressure", "asr_protocol_error", "asr_timeout", "asr_canceled", "asr_unavailable", "asr_on_device_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_stream_invalid", "asr_stream_eof", "asr_empty_transcript", "asr_empty_result", "invalid_voice_config":
 	default:
 		code = "microphone_failed"
 	}

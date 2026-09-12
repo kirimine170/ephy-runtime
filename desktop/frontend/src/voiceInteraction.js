@@ -1,3 +1,4 @@
+import {createVoiceEndpoint, endpointSettings} from './voiceEndpoint.js';
 import {createTimingObserver} from './fillerTiming.js';
 import {createFillerController, createFillerPlayer, createFillerBackchannel} from './fillerController.js';
 import {startFillerBargeIn} from './fillerBargeIn.js';
@@ -18,6 +19,7 @@ const STATUS = {
   INCOMPLETE: '応答は未完了です．続きを生成するか，テキスト入力で続行できます．',
 };
 const FAILURES = {
+  utterance_limit: '発話の上限に達したため会話を一時停止しました．認識中の内容をテキストへ戻して確認できます．',
   voice_profile_unavailable: '選択した声を利用できません．声を選び直すか，テキスト入力を利用できます．',
   invalid_voice_profile: '選択した声の設定を確認できません．標準の声かテキスト入力を利用できます．',
   unsupported_voice_control: '選択した声で利用できない話し方の設定です．設定を見直すか，テキスト入力を利用できます．',
@@ -211,6 +213,7 @@ export function mountVoiceInteraction({
   subscribe = () => () => {},
   getRequest = () => ({}),
   getSessionID,
+  canStart = () => true,
   onTranscript = () => {},
   onToken = () => {},
   onOutput = () => {},
@@ -227,7 +230,12 @@ export function mountVoiceInteraction({
   decodeBase64 = fromBase64,
   now = () => performance.now(),
   startBargeIn = startFillerBargeIn,
+  endpointConfig = {},
 } = {}) {
+  const config = endpointSettings(endpointConfig);
+  const sessionButton = root?.querySelector('#voice-session');
+  const pauseButton = root?.querySelector('#voice-pause');
+  const endButton = root?.querySelector('#voice-end');
   const record = root?.querySelector('#voice-record');
   const cancelButton = root?.querySelector('#voice-cancel');
   const status = root?.querySelector('#voice-status');
@@ -235,6 +243,8 @@ export function mountVoiceInteraction({
   const liveTranscript = root?.querySelector('#voice-live-transcript');
   const stableTranscript = root?.querySelector('#voice-transcript-stable');
   const revisableTranscript = root?.querySelector('#voice-transcript-revisable');
+  let voice = null;
+  let sessionCapturePending = false;
   let current = null;
   let disposed = false;
   let nextFiller = 0;
@@ -277,7 +287,7 @@ export function mountVoiceInteraction({
       };
       const acknowledgements = setup.assets.filter(a => a.kind === 'backchannel');
       const acknowledgement = acknowledgements[nextBackchannel % acknowledgements.length];
-      if (acknowledgements.length <= 3 && acknowledgement && typeof acknowledgement.audio_base64 === 'string'
+      if (!run.voice && acknowledgements.length <= 3 && acknowledgement && typeof acknowledgement.audio_base64 === 'string'
           && acknowledgement.audio_base64.length <= 420000 && Number.isFinite(acknowledgement.duration_ms)
           && acknowledgement.duration_ms >= 150 && acknowledgement.duration_ms <= 3000) {
         try {
@@ -293,7 +303,7 @@ export function mountVoiceInteraction({
         } catch { /* A failed optional acknowledgement cannot block the answer． */ }
       }
       if (!available()) { run.backchannel?.stop(); run.backchannel = null; return; }
-      const monitor = await startBargeIn({context: run.context, mediaDevices, isCurrent: () => attached(run) && !run.bodyStarted,
+      const monitor = await startBargeIn({context: run.context, mediaDevices, subscribePCM: run.voice ? callback => { run.voice.monitors.add(callback); return () => run.voice.monitors.delete(callback); } : undefined, isCurrent: () => attached(run) && !run.bodyStarted,
         onSpeech: () => {
           if (!attached(run)) return;
           const detected = now(), ack = run.backchannel; run.backchannel = null;
@@ -302,7 +312,7 @@ export function mountVoiceInteraction({
           // Cancel owns the old output，but the acknowledgement inherits its
           // running context so it needs neither TTS nor another resume gesture．
           if (ack) run.context = null;
-          void cancel();
+          if (run.voice) { run.relisten = true; void cancelRun(); } else void cancel();
           if (ack) { nextBackchannel++; handoff = ack; ack.play(detected); render(); }
         },
         onUnavailable: () => { run.fillerInvalidated = true; stopFiller(run); }});
@@ -330,6 +340,7 @@ export function mountVoiceInteraction({
 
   function attached(run) {
     if (!live(run)) return false;
+    if (run.voice && (voice !== run.voice || run.voiceEpoch !== voice.localEpoch || !voice.running)) return false;
     if (getSessionID && run.snapshot.session_id && getSessionID() !== run.snapshot.session_id) {
       void cancel();
       return false;
@@ -338,14 +349,20 @@ export function mountVoiceInteraction({
   }
 
   function render() {
+    const continuous = voice && voice.state !== 'stopped';
     const recording = live(current) && current.recording;
+    if (sessionButton) { sessionButton.disabled = sessionCapturePending || !!continuous || active() || !canStart(); sessionButton.textContent = '会話を開始'; }
+    if (pauseButton) { pauseButton.disabled = !continuous || voice.changing || (voice.state === 'paused' && !canStart()); pauseButton.textContent = voice?.state === 'paused' ? '会話を再開' : '一時停止'; }
+    if (endButton) endButton.disabled = !continuous || voice.changing;
     if (record) {
-      record.disabled = active() && !recording;
+      record.hidden = !!continuous;
+      record.disabled = !!continuous || (active() && !recording);
       record.textContent = recording ? '録音を停止して送信' : '音声入力';
       record.setAttribute('aria-label', recording ? '録音を停止して送信' : '音声入力を開始');
       record.setAttribute('aria-pressed', String(!!recording));
     }
     if (cancelButton) {
+      cancelButton.hidden = !!continuous;
       cancelButton.disabled = !handoff && (!active() || current.cancelRequested);
       cancelButton.setAttribute('aria-label', '音声対話をキャンセル');
     }
@@ -357,10 +374,14 @@ export function mountVoiceInteraction({
         : current?.asrOpenPending && !current.cancelRequested
           ? '音声認識を開始しています．必要な場合は音声認識の許可を確認してください．'
           : voiceStatusText(current?.snapshot);
+      if (continuous) status.textContent = voice.state === 'paused' ? (voice.reason || '会話を一時停止しました．マイクは停止しています．')
+        : voice.permissionPending ? 'マイクの許可を確認しています．'
+        : recording ? (current.endpoint?.candidate ? '発話の区切りを確認しています．' : current.endpoint?.speech ? '聞いています．話し終えると自動で送信します．' : '次の発話を待っています．')
+        : live(current) && !['PREPARING', 'RECORDING'].includes(current.snapshot.state) ? voiceStatusText(current.snapshot) + ' 応答が終わると次の発話を待ちます．' : '連続会話を準備しています．';
       if (current?.bargeIn && live(current)) status.textContent += ' ヘッドホン用の割込み検出中です．';
     }
     if (fallback) {
-      fallback.hidden = !['FAILED', 'INCOMPLETE'].includes(current?.snapshot.state) || !current.snapshot.transcript;
+      fallback.hidden = !['FAILED', 'INCOMPLETE'].includes(current?.snapshot.state) || !(current.snapshot.transcript || current.snapshot.preview);
       fallback.textContent = '認識した内容をテキスト入力へ戻す';
     }
     if (liveTranscript) {
@@ -376,6 +397,9 @@ export function mountVoiceInteraction({
     run.permissionPending = false;
     if (run.timer != null) timers.clearTimeout(run.timer);
     run.timer = null;
+    if (run.endpointTimer != null) timers.clearTimeout(run.endpointTimer);
+    run.endpointTimer = null;
+    if (run.voice) return;
     if (run.processor) run.processor.onaudioprocess = null;
     disconnect(run.processor);
     disconnect(run.input);
@@ -411,7 +435,7 @@ export function mountVoiceInteraction({
     run.asrEarlyEvents = [];
     run.asrEarlyBytes = 0;
     run.liveTranscript = run.stablePrefix = '';
-    try { Promise.resolve(run.context?.close()).catch(() => {}); } catch { /* Already closed． */ }
+    try { if (!run.voice) Promise.resolve(run.context?.close()).catch(() => {}); } catch { /* Already closed． */ }
     run.context = null;
   }
 
@@ -431,15 +455,22 @@ export function mountVoiceInteraction({
       delete snapshot.transcript;
     }
     run.snapshot = {...run.snapshot, ...snapshot};
+    if (run.voice && snapshot.state === 'FAILED' && !run.snapshot.transcript) run.snapshot.preview = run.liveTranscript;
     notifyTranscript(run, run.snapshot.transcript);
     run.finished = true;
     release(run);
     render();
-    onBusy(false);
+    onBusy(!!(run.voice && run.voice.running));
     if (run.snapshot.state === 'COMPLETED') onComplete(run.snapshot);
     else if (run.snapshot.state === 'INCOMPLETE') onIncomplete(run.snapshot);
     else if (run.snapshot.state === 'FAILED') onFailure(run.snapshot);
     else if (run.snapshot.state === 'CANCELED') onCancel(run.snapshot);
+    if (run.voice && run.voice === voice && voice.running && run.voiceEpoch === voice.localEpoch) {
+      if (run.snapshot.state === 'COMPLETED' || run.relisten) {
+        voice.lastActivity = run.endpoint?.speech ? now() : voice.lastActivity;
+        void Promise.resolve().then(() => { if (voice === run.voice && voice.running && run.voiceEpoch === voice.localEpoch && !active()) return start(true); });
+      } else void changeSession('pause', voiceStatusText(run.snapshot));
+    }
   }
 
   function applySnapshot(run, snapshot) {
@@ -479,11 +510,13 @@ export function mountVoiceInteraction({
     }
   }
 
-  function begin(expected = {}, preparing = false) {
+  function begin(expected = {}, preparing = false, continuous = false) {
     if (active() || disposed) return null;
     stopHandoff();
     let ready;
     const run = {
+      voice: continuous ? voice : null, voiceEpoch: continuous ? voice.localEpoch : null,
+      endpoint: continuous ? createVoiceEndpoint({now, settings: config}) : null, endpointTimer: null,
       snapshot: {state: preparing ? 'PREPARING' : 'RECORDING', operation_id: ''},
       finished: false, cancelRequested: false, cancelPromise: null,
       recording: false, permissionPending: false, samples: 0,
@@ -508,7 +541,7 @@ export function mountVoiceInteraction({
     current = run;
     // Create and resume during the user gesture，before any awaited bridge call．
     try {
-      run.context = createAudioContext();
+      run.context = run.voice ? run.voice.output : createAudioContext();
       run.contextReady = Promise.resolve(run.context.resume()).then(() => true, () => false);
     } catch { run.contextReady = Promise.resolve(false); }
     onBusy(true);
@@ -550,11 +583,124 @@ export function mountVoiceInteraction({
     }
   }
 
-  async function start() {
-    const run = begin({}, true);
+  function releaseSessionCapture(v) {
+    if (v.processor) v.processor.onaudioprocess = null;
+    for (const node of [v.processor, v.input, v.mute]) disconnect(node);
+    stopTracks(v.stream);
+    v.processor = v.input = v.mute = v.stream = null;
+    v.monitors.clear();
+    for (const context of [v.inputContext, v.output]) {
+      try { Promise.resolve(context?.close()).catch(() => {}); } catch { /* Already closed． */ }
+    }
+  }
+  async function changeSession(action, reason = '') {
+    const v = voice;
+    if (!v || (v.state === 'stopped' && !v.changing)) return cancelRun();
+    if (v.changing) {
+      if (action === 'end') { v.action = 'end'; v.state = 'stopped'; render(); }
+      return v.changePromise;
+    }
+    v.action = action;
+    v.changing = true; v.running = false; v.localEpoch++;
+    v.state = action === 'end' ? 'stopped' : 'paused'; v.reason = reason;
+    const canceled = cancelRun();
+    releaseSessionCapture(v); render();
+    v.changePromise = (async () => {
+      try {
+        await canceled;
+        const snapshot = await v.pending;
+        if (snapshot?.id) {
+          const applied = v.action;
+          v.snapshot = await bridge.ChangeVoiceSession(snapshot.id, snapshot.epoch, applied);
+          if (applied !== v.action) v.snapshot = await bridge.ChangeVoiceSession(v.snapshot.id, v.snapshot.epoch, v.action);
+        }
+      } catch { v.reason = '会話の停止状態を確認できませんでした．マイクは停止しています．'; }
+      finally { v.changing = false; render(); onBusy(false); }
+    })();
+    return v.changePromise;
+  }
+  async function startSession() {
+    if (disposed || active() || voice?.changing || voice?.running || sessionCapturePending || !canStart()) return false;
+    const previous = voice;
+    const v = {state: 'starting', running: true, changing: false, localEpoch: (previous?.localEpoch || 0) + 1,
+      snapshot: previous?.snapshot || null, lastActivity: now(), monitors: new Set()};
+    voice = v;
+    const epoch = v.localEpoch;
+    const valid = () => !disposed && voice === v && v.running && v.localEpoch === epoch;
+    onBusy(true); render();
+    try {
+      // Both contexts are resumed within the initiating user gesture．Input is
+      // session-owned；turn cleanup only stops output sources，not either context．
+      v.inputContext = createAudioContext(); v.output = createAudioContext();
+      const resumed = Promise.all([v.inputContext.resume(), v.output.resume()]).then(() => true, () => false);
+      const conversationID = getSessionID ? getSessionID() : getRequest().session_id;
+      v.pending = previous?.state === 'paused' && previous.snapshot?.conversation_id === conversationID
+        ? bridge.ChangeVoiceSession(previous.snapshot.id, previous.snapshot.epoch, 'resume')
+        : bridge.StartVoiceSession(conversationID);
+      v.snapshot = await v.pending;
+      if (!await resumed) throw new Error('microphone_unavailable');
+      if (!valid()) return false;
+      if (getSessionID && getSessionID() !== conversationID) { await changeSession('end'); return false; }
+      const readiness = await bridge.GetInteractionASRReadiness();
+      if (!valid()) return false;
+      if (!readiness?.can_start) throw new Error(readiness?.error_code || 'asr_unavailable');
+      v.permissionPending = true; render();
+      let stream;
+      sessionCapturePending = true;
+      try { stream = await mediaDevices.getUserMedia({audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false}, video: false}); }
+      finally { sessionCapturePending = false; render(); }
+      if (!valid()) { stopTracks(stream); return false; }
+      v.stream = stream; v.permissionPending = false;
+      v.input = v.inputContext.createMediaStreamSource(stream);
+      v.processor = v.inputContext.createScriptProcessor(1024, 1, 1);
+      v.mute = v.inputContext.createGain(); v.mute.gain.value = 0;
+      v.input.connect(v.processor); v.processor.connect(v.mute); v.mute.connect(v.inputContext.destination);
+      v.processor.onaudioprocess = event => {
+        if (!valid()) return;
+        if (getSessionID && getSessionID() !== v.snapshot.conversation_id) { void changeSession('end'); return; }
+        const data = event.inputBuffer.getChannelData(0), rate = v.inputContext.sampleRate;
+        for (const callback of [...v.monitors]) callback(data, rate);
+        const run = current;
+        if (!attached(run) || run.voice !== v || !run.recording || run.endPromise) return;
+        const hadSpeech = run.endpoint.speech;
+        const loud = run.endpoint.audio(data, rate);
+        if (hadSpeech !== run.endpoint.speech) render();
+        if (run.endpoint.speech) v.lastActivity = now();
+        if (loud || run.endpoint.speech) {
+          // Include initial activity frames，even before the 32 ms onset decision．
+          if (run.samples + data.length > rate * 60) { void fail(run, 'utterance_limit'); return; }
+          run.samples += data.length;
+          queueInput(run, run.encoder.push(data));
+        }
+      };
+      for (const track of stream.getTracks()) track.onended = () => { if (valid()) void changeSession('pause', 'マイクが停止したため会話を一時停止しました．'); };
+      return await start(true);
+    } catch (error) {
+      if (valid()) await changeSession('pause', FAILURES[error?.name === 'NotAllowedError' ? 'microphone_permission_denied' : error?.message] || FAILURES.microphone_unavailable);
+      return false;
+    }
+  }
+  function tickEndpoint(run) {
+    if (!attached(run) || !run.recording || run.endPromise) return;
+    const wasCandidate = run.endpoint.candidate;
+    const decision = run.endpoint.tick();
+    if (decision === 'limit') { void fail(run, 'utterance_limit'); return; }
+    if (decision === 'endpoint') { void endCapture(run); return; }
+    if (!run.endpoint.speech) {
+      if (now() - run.voice.lastActivity >= config.idlePauseMS) { void changeSession('pause', '5分間発話がなかったため会話を一時停止しました．'); return; }
+      if (now() - run.listeningAt >= config.idleRefreshMS) { run.relisten = true; void cancelRun(); return; }
+    }
+    if (wasCandidate !== run.endpoint.candidate) render();
+    run.endpointTimer = timers.setTimeout(() => tickEndpoint(run), config.pollMS);
+  }
+
+  async function start(continuous = false) {
+    if (continuous && (!voice?.running || (getSessionID && getSessionID() !== voice.snapshot.conversation_id))) return false;
+    if (!continuous && voice?.state !== undefined && voice.state !== 'stopped') return false;
+    const run = begin({}, true, continuous);
     if (!run) return false;
     let request;
-    try { request = getRequest(); } catch (error) {
+    try { request = getRequest(); if (run.voice) request = {...request, voice_session_id: run.voice.snapshot.id, voice_session_epoch: run.voice.snapshot.epoch}; } catch (error) {
       run.resolveIdentity(null);
       await fail(run, VOICE_PROFILE_ERROR_CODES.has(error?.message) ? error.message : 'microphone_unavailable');
       return false;
@@ -591,7 +737,7 @@ export function mountVoiceInteraction({
     run.asrOpenPending = true;
     render();
     try {
-      run.encoder = createPCM16StreamEncoder(run.context.sampleRate);
+      run.encoder = createPCM16StreamEncoder(run.voice ? run.voice.inputContext.sampleRate : run.context.sampleRate);
       const session = await bridge.BeginInteractionASR(run.snapshot.operation_id, run.encoder.outputRate);
       if (!attached(run)) return false;
       if (!session || session.operation_id !== run.snapshot.operation_id || session.session_id !== run.snapshot.session_id
@@ -610,6 +756,10 @@ export function mountVoiceInteraction({
     } catch (error) {
       await fail(run, asrBridgeErrorCode(error, 'asr_unavailable'));
       return false;
+    }
+    if (run.voice) {
+      run.recording = true; run.voice.state = 'listening'; run.listeningAt = now();
+      tickEndpoint(run); render(); return true;
     }
     run.permissionPending = true;
     render();
@@ -709,6 +859,7 @@ export function mountVoiceInteraction({
     const tail = run.encoder.finish();
     stopCapture(run);
     run.snapshot = {...run.snapshot, state: 'TRANSCRIBING'};
+    if (run.voice) run.voice.state = 'responding';
     render();
     if (!queueInput(run, tail)) return Promise.resolve(false);
     run.endPromise = Promise.resolve().then(async () => {
@@ -726,7 +877,7 @@ export function mountVoiceInteraction({
     return run.endPromise;
   }
 
-  function cancel() {
+  function cancelRun() {
     stopHandoff();
     const run = current;
     if (!active(run)) return Promise.resolve(run?.snapshot);
@@ -878,7 +1029,11 @@ export function mountVoiceInteraction({
     run.liveTranscript = text;
     run.stablePrefix = stable;
     render();
-    if (update.phase === 'final') void endCapture(run);
+    run.endpoint?.hypothesis(text);
+    if (update.phase === 'final') {
+      if (!run.voice || run.endpoint.providerFinal()) void endCapture(run);
+      else if (!run.endPromise) { run.relisten = true; void cancelRun(); }
+    }
   }
 
   function receive(event) {
@@ -942,6 +1097,7 @@ export function mountVoiceInteraction({
   }
 
   async function adopt(snapshotOrPromise, expected = {}) {
+    if (voice && voice.state !== 'stopped') await changeSession('end');
     const run = begin(expected);
     if (!run) return false;
     if (!await identify(run, snapshotOrPromise)) {
@@ -951,8 +1107,18 @@ export function mountVoiceInteraction({
     return live(run);
   }
 
+  function cancel() {
+    return voice && voice.state !== 'stopped' ? changeSession('end') : cancelRun();
+  }
+  const onSession = () => { void startSession(); };
+  const onPause = () => { void (voice?.state === 'paused' ? startSession() : changeSession('pause')); };
+  const onEnd = () => { void changeSession('end'); };
+  sessionButton?.addEventListener('click', onSession);
+  pauseButton?.addEventListener('click', onPause);
+  endButton?.addEventListener('click', onEnd);
   const onRecord = () => { void (current?.recording ? stop() : start()); };
   const onDeviceChange = () => {
+    if (voice?.running) { void changeSession('pause', '入力機器が変わったため会話を一時停止しました．'); return; }
     stopHandoff();
     if (current && active()) { current.fillerInvalidated = true; stopFiller(current); }
   };
@@ -965,11 +1131,15 @@ export function mountVoiceInteraction({
   const unsubscribe = subscribe(receive);
   render();
   return {
-    start, stop, cancel, adopt,
-    isActive: () => active(),
+    start, stop, cancel, adopt, startSession, pauseSession: () => changeSession('pause'), endSession: () => changeSession('end'),
+    get sessionSnapshot() { return voice ? {...voice.snapshot, state: voice.state} : null; },
+    isActive: () => active() || !!(voice && voice.state !== 'stopped'),
     get lastSnapshot() { return current?.snapshot || null; },
     async dispose() {
       mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
+      sessionButton?.removeEventListener('click', onSession);
+      pauseButton?.removeEventListener('click', onPause);
+      endButton?.removeEventListener('click', onEnd);
       record?.removeEventListener('click', onRecord);
       cancelButton?.removeEventListener('click', onCancelClick);
       fallback?.removeEventListener('click', onFallbackClick);

@@ -982,6 +982,9 @@ app.innerHTML = `
             <div id="chat-stream-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
             ${voiceProfilesMarkup()}
             <div id="voice-controls" class="voice-controls" role="group" aria-label="音声会話">
+              <button id="voice-session" class="ghost-btn" type="button">会話を開始</button>
+              <button id="voice-pause" class="ghost-btn" type="button" disabled>一時停止</button>
+              <button id="voice-end" class="ghost-btn" type="button" disabled>会話を終了</button>
               <button id="voice-record" class="ghost-btn" type="button">録音開始</button>
               <button id="voice-cancel" class="ghost-btn" type="button" disabled>Ephyの発話停止</button>
               <span id="voice-status" role="status" aria-live="polite">待機中</span>
@@ -2043,6 +2046,10 @@ function buildContinuationPrompt(entry) {
 function setChatSendState(inFlight) {
   chatSendInFlight = inFlight;
   voiceProfiles?.setBusy(!!voiceController?.isActive());
+  const voiceStart = document.getElementById('voice-session');
+  if (voiceStart) voiceStart.disabled = inFlight || !!voiceController?.isActive();
+  const voicePause = document.getElementById('voice-pause');
+  if (voicePause && voiceController?.sessionSnapshot?.state === 'paused') voicePause.disabled = inFlight;
   const voiceRecord = document.getElementById('voice-record');
   if (voiceRecord && !voiceController?.isActive()) voiceRecord.disabled = inFlight;
   const sendButton = document.getElementById('send-chat');
@@ -11160,6 +11167,7 @@ document.getElementById('overview-preset-runtime-hint').addEventListener('click'
 voiceProfiles = mountVoiceProfiles({root: document, bridge: interactionBridge, isBusy: () => !!voiceController?.isActive()});
 voiceController = mountVoiceInteraction({
   root: document,
+  canStart: () => !chatSendInFlight,
   bridge: interactionBridge,
   getSessionID: () => chatConversationId,
   subscribe: callback => window.runtime?.EventsOnMultiple ? EventsOn('interaction-event', callback) : () => {},
@@ -11192,7 +11200,7 @@ voiceController = mountVoiceInteraction({
   onCancel: finalizeVoiceChat,
   onFailure: finalizeVoiceChat,
   onFallback(snapshot) {
-    document.getElementById('chat-prompt').value = snapshot?.transcript || '';
+    document.getElementById('chat-prompt').value = snapshot?.transcript || snapshot?.preview || '';
     document.getElementById('chat-prompt').focus();
   },
   onBusy: busy => {

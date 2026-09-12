@@ -3,6 +3,10 @@ set -euo pipefail
 
 EPHY_RUNTIME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+EPHY_BUILD_SNAPSHOT="$(mktemp)"
+trap 'rm -f "${EPHY_BUILD_SNAPSHOT}"' EXIT
+python3 "${EPHY_RUNTIME_ROOT}/scripts/runtime_build_provenance.py" snapshot "${EPHY_BUILD_SNAPSHOT}"
+
 cd "${EPHY_RUNTIME_ROOT}/desktop/frontend"
 npm run build
 
@@ -46,3 +50,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   codesign --verify --strict --deep "${APP_BUNDLE}"
   echo "Updated ${APP_BUNDLE}"
 fi
+
+EPHY_PROVENANCE_BINARY="${BINARY_PATH}"
+if [[ "$(uname -s)" == "Darwin" ]]; then EPHY_PROVENANCE_BINARY="${APP_BINARY}"; fi
+python3 "${EPHY_RUNTIME_ROOT}/scripts/runtime_build_provenance.py" finish "${EPHY_BUILD_SNAPSHOT}" \
+  --binary "${EPHY_PROVENANCE_BINARY}" --output "${EPHY_RUNTIME_ROOT}/desktop/build/bin/runtime-build-provenance.json"

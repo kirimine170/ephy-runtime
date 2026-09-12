@@ -52,6 +52,13 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 		last[event.Name] = event.MonotonicMS
 	}
 	required := []string{"user_speech_start"}
+	if _, listening := first["listening_started"]; listening {
+		if _, speech := first["user_speech_start"]; !speech {
+			if _, complete := first["turn_completed"]; !complete {
+				required = []string{"listening_started"}
+			}
+		}
+	}
 	if _, completed := first["turn_completed"]; completed {
 		required = append(required, "user_speech_end", "endpoint_commit", "asr_started", "asr_final", "llm_requested", "llm_first_token", "llm_completed")
 		if _, skipped := first["tts_skipped"]; !skipped {
@@ -69,7 +76,7 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 			validation.Missing = append(validation.Missing, name)
 		}
 	}
-	for label, pair := range map[string][2]string{"asr": {"asr_started", "asr_final"}, "asr_first_partial": {"asr_started", "asr_first_partial"}, "asr_first_stable": {"asr_started", "asr_first_stable"}, "asr_finalization": {"endpoint_commit", "asr_final"}, "llm_ttft": {"llm_requested", "llm_first_token"}, "llm": {"llm_requested", "llm_completed"}, "tts_ttfc": {"tts_requested", "tts_first_chunk"}, "tts": {"tts_requested", "tts_completed"}, "first_audio": {"endpoint_commit", "audio_play_started"}, "turn": {"user_speech_start", "turn_completed"}} {
+	for label, pair := range map[string][2]string{"speech_first_partial": {"user_speech_start", "asr_first_partial"}, "speech_to_endpoint": {"user_speech_start", "endpoint_commit"}, "asr": {"asr_started", "asr_final"}, "asr_first_partial": {"asr_started", "asr_first_partial"}, "asr_first_stable": {"asr_started", "asr_first_stable"}, "asr_finalization": {"endpoint_commit", "asr_final"}, "llm_ttft": {"llm_requested", "llm_first_token"}, "llm": {"llm_requested", "llm_completed"}, "tts_ttfc": {"tts_requested", "tts_first_chunk"}, "tts": {"tts_requested", "tts_completed"}, "first_audio": {"endpoint_commit", "audio_play_started"}, "turn": {"user_speech_start", "turn_completed"}} {
 		start, okStart := first[pair[0]]
 		end, okEnd := first[pair[1]]
 		if okStart && okEnd {

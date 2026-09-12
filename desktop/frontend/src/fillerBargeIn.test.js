@@ -27,3 +27,12 @@ test('late microphone permission cannot attach to a canceled turn', async () => 
   resolve({getTracks: () => [{stop() { stopped = true; }}]});
   assert.equal(await pending, null); assert.equal(stopped, true);
 });
+test('shared session PCM detects activity without acquiring or closing the microphone', async () => {
+  let process, unsubscribed = 0, speech = 0;
+  const monitor = await startFillerBargeIn({context: {}, mediaDevices: {getUserMedia() { assert.fail('second capture'); }},
+    subscribePCM(callback) { process = callback; return () => unsubscribed++; },
+    isCurrent: () => true, onSpeech: () => speech++, onUnavailable() { assert.fail(); }});
+  process(new Float32Array(512).fill(.1), 16000);
+  assert.equal(speech, 1); assert.equal(unsubscribed, 1);
+  monitor.stop(); assert.equal(unsubscribed, 1);
+});
