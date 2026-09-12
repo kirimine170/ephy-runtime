@@ -1,0 +1,41 @@
+import importlib.util
+import hashlib
+from pathlib import Path
+import subprocess
+
+import pytest
+
+spec = importlib.util.spec_from_file_location('runtime_build_provenance', Path(__file__).parents[1] / 'scripts/runtime_build_provenance.py')
+provenance = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(provenance)
+
+
+def repository(root):
+    subprocess.run(['git', 'init', '-q', str(root)], check=True)
+    (root / 'source.txt').write_text('source')
+    subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
+    subprocess.run(['git', '-C', str(root), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'], check=True)
+    return root
+
+
+def test_provenance_hashes_final_binary_and_rejects_a_source_change(tmp_path):
+    root = repository(tmp_path / 'repo')
+    before = provenance.source_snapshot(root)
+    assert before['source_dirty'] is False
+    binary = tmp_path / 'binary'; binary.write_bytes(b'final signed executable')
+    result = provenance.finish(root, before, binary, tmp_path / 'provenance.json')
+    assert result['executable_sha256'] == hashlib.sha256(binary.read_bytes()).hexdigest()
+    (root / 'source.txt').write_text('changed during build')
+    with pytest.raises(ValueError, match='Source changed'):
+        provenance.finish(root, before, binary, tmp_path / 'bad.json')
+    assert not (tmp_path / 'bad.json').exists()
+
+
+def test_provenance_tracks_uncommitted_edits_without_exposing_their_text(tmp_path):
+    root = repository(tmp_path / 'repo')
+    (root / 'new.txt').write_text('uncommitted fixture')
+    before = provenance.source_snapshot(root)
+    assert before['source_dirty'] is True
+    assert 'fixture' not in str(before)
+    (root / 'new.txt').write_text('second fixture')
+    assert provenance.source_snapshot(root) != before

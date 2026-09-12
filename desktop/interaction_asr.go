@@ -73,7 +73,15 @@ func (e *InteractionEngine) BeginASR(op string, sampleRate int) (ASRSessionReque
 	// Setup／permission waiting，60 s PCM，draining and finalization each remain
 	// bounded．The outer guard leaves room for those phases without shortening
 	// valid input merely because microphone permission took time．
-	ctx, cancel := context.WithTimeout(t.ctx, 125*time.Second)
+	parent := t.ctx
+	if t.request.VoiceSessionID != "" {
+		if !e.validVoiceSessionLocked(t.request) {
+			e.mu.Unlock()
+			return ASRSessionRequest{}, errors.New("asr_canceled")
+		}
+		parent = e.voiceSession.ctx
+	}
+	ctx, cancel := context.WithTimeout(parent, 125*time.Second)
 	a := &interactionASRSession{ctx: ctx, cancel: cancel, started: time.Now(), lastMonotonicMS: -1,
 		request: ASRSessionRequest{OperationID: op, SessionID: t.snapshot.SessionID, TurnID: t.snapshot.TurnID, SegmentID: interactionID("segment_"), SampleRate: sampleRate}}
 	t.asr = a
@@ -168,6 +176,9 @@ func (e *InteractionEngine) AppendASRAudio(op string, sequence int, pcm []byte) 
 	}
 	a.sequence, a.bytes = sequence, a.bytes+len(pcm)
 	if a.metadata.FirstAudioMS == nil {
+		if t.request.VoiceSessionID != "" {
+			e.traceLocked(t, "user_speech_start", "")
+		}
 		ms := time.Since(a.started).Milliseconds()
 		a.metadata.FirstAudioMS = &ms
 	}
@@ -203,6 +214,9 @@ func (e *InteractionEngine) EndASR(op string) error {
 		e.failLocked(t, "invalid_audio")
 		e.mu.Unlock()
 		return errors.New("invalid_audio")
+	}
+	if t.request.VoiceSessionID != "" && e.validVoiceSessionLocked(t.request) {
+		e.voiceSession.snapshot.State = "responding"
 	}
 	a.ended = time.Now()
 	e.traceLocked(t, "user_speech_end", "")

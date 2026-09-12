@@ -34,6 +34,10 @@ export function CancelInteractionComparison(arg1) {
   return window['go']['main']['App']['CancelInteractionComparison'](arg1);
 }
 
+export function ChangeVoiceSession(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChangeVoiceSession'](arg1, arg2, arg3);
+}
+
 export function Chat(arg1) {
   return window['go']['main']['App']['Chat'](arg1);
 }
@@ -476,6 +480,10 @@ export function StartQdrant() {
 
 export function StartRecommendedStack() {
   return window['go']['main']['App']['StartRecommendedStack']();
+}
+
+export function StartVoiceSession(arg1) {
+  return window['go']['main']['App']['StartVoiceSession'](arg1);
 }
 
 export function StartWatch(arg1) {

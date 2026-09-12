@@ -253,12 +253,14 @@ class FakeContext {
 function harness(options = {}) {
   let listener;
   let identity = 0;
-  const nodes = Object.fromEntries(['voice-record', 'voice-cancel', 'voice-status', 'voice-fallback', 'voice-live-transcript', 'voice-transcript-stable', 'voice-transcript-revisable'].map((id) => [id, button()]));
+  const nodes = Object.fromEntries(['voice-session', 'voice-pause', 'voice-end', 'voice-record', 'voice-cancel', 'voice-status', 'voice-fallback', 'voice-live-transcript', 'voice-transcript-stable', 'voice-transcript-revisable'].map((id) => [id, button()]));
   const calls = {start: [], readiness: [], begin: [], append: [], end: [], commit: [], cancel: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
   const contexts = [];
   const streams = [];
   const timeouts = new Map();
   const bridge = {
+    async StartVoiceSession(conversationID) { return {id: 'voice-1', epoch: 1, conversation_id: conversationID, state: 'starting'}; },
+    async ChangeVoiceSession(id, epoch, action) { return {id, epoch: action === 'resume' ? epoch + 1 : epoch, conversation_id: 'session', state: action === 'end' ? 'stopped' : action === 'pause' ? 'paused' : 'starting'}; },
     async GetInteractionASRReadiness() { calls.readiness.push(true); return {state: 'ready', can_start: true}; },
     async StartInteraction(request) { calls.start.push(request); calls.request = request; return snapshot(++identity); },
     async BeginInteractionASR(operationID, sampleRate) {
@@ -1436,4 +1438,130 @@ test('voice profile setup failures retain fixed codes without opening ASR or a m
   await h.controller.start();
   assert.equal(h.controller.lastSnapshot.error_code, 'microphone_unavailable');
   assert.doesNotMatch(h.nodes['voice-status'].textContent, /PRIVATE|provider|diagnostic/);
+});
+
+function tickContinuous(h) {
+  for (const [id, timer] of [...h.timeouts]) if (timer.milliseconds === 20) { h.timeouts.delete(id); timer.callback(); }
+}
+const speechFrame = () => new Float32Array(512).fill(.1);
+
+test('C1 four completed turns share one capture and output context，history is refreshed before relisten', async () => {
+  let time = 0, completed = 0;
+  const h = harness({now: () => time, getRequest: () => ({session_id: 'session', chat: {messages: Array(completed).fill({role: 'user', content: 'confirmed'})}}), onComplete: () => completed++});
+  assert.equal(await h.controller.startSession(), true);
+  for (let id = 1; id <= 4; id++) {
+    h.contexts[0].capture(speechFrame());
+    h.asr(id, 1, id % 2 ? 'うん' : 'はい');
+    assert.equal(h.calls.transcript.length, id - 1);
+    assert.equal(h.nodes['voice-transcript-stable'].textContent, '');
+    time += 900; tickContinuous(h); assert.equal(h.calls.end.length, id - 1);
+    time += 100; tickContinuous(h); await tick();
+    assert.equal(h.calls.end.length, id);
+    h.event(id, 'transcript', {text: id % 2 ? 'うん' : 'はい'});
+    h.state(id, 'COMPLETED'); await tick();
+    assert.equal(h.calls.start[id].chat.messages.length, id);
+    assert.equal(h.streams.length, 1); assert.equal(h.contexts.length, 2);
+    assert.equal(h.streams[0].tracks[0].stopped, false);
+    assert.match(h.nodes['voice-status'].textContent, /次の発話/);
+  }
+  assert.equal(h.calls.transcript.length, 4);
+  await h.controller.pauseSession();
+  assert.equal(h.controller.sessionSnapshot.state, 'paused'); assert.equal(h.streams[0].tracks[0].stopped, true);
+  assert.equal(await h.controller.startSession(), true);
+  assert.equal(h.calls.start.at(-1).voice_session_epoch, 2);
+  assert.equal(h.streams.length, 2);
+  await h.controller.endSession(); assert.equal(h.controller.sessionSnapshot.state, 'stopped');
+  assert.ok(h.streams.every(s => s.tracks.every(t => t.stopped)));
+});
+test('C1 silence refreshes idle ASR without End or transcript and pauses after five minutes', async () => {
+  let time = 0;
+  const h = harness({now: () => time}); await h.controller.startSession();
+  for (let i = 1; i <= 5; i++) { time = i * 60000; tickContinuous(h); await tick(); }
+  assert.equal(h.calls.end.length, 0); assert.equal(h.calls.transcript.length, 0);
+  assert.equal(h.controller.sessionSnapshot.state, 'paused'); assert.equal(h.streams.length, 1);
+  assert.ok(h.streams[0].tracks.every(t => t.stopped));
+});
+test('C1 early final drains once and idle early final never enters conversation', async () => {
+  const h = harness(); await h.controller.startSession();
+  h.asr(1, 1, '幻覚', {phase: 'final', stable_prefix: '幻覚'}); await tick();
+  assert.equal(h.calls.end.length, 0); assert.equal(h.calls.transcript.length, 0);
+  h.contexts[0].capture(speechFrame());
+  h.asr(2, 1, 'はい', {phase: 'final', stable_prefix: 'はい'}); await tick();
+  h.asr(2, 1, 'はい', {phase: 'final', stable_prefix: 'はい'}); await tick();
+  assert.equal(h.calls.end.length, 1); assert.equal(h.calls.transcript.length, 0);
+  h.event(2, 'transcript', {text: 'はい'}); h.event(2, 'transcript', {text: 'はい'});
+  assert.equal(h.calls.transcript.length, 1); await h.controller.endSession();
+});
+test('C1 permission resolving after end stops its late track without starting ASR', async () => {
+  const permission = deferred(); const late = stream();
+  const h = harness({mediaDevices: {getUserMedia: () => permission.promise}});
+  const started = h.controller.startSession(); await tick(); await h.controller.endSession();
+  permission.resolve(late); assert.equal(await started, false);
+  assert.ok(late.tracks.every(t => t.stopped)); assert.equal(h.calls.start.length, 0);
+});
+test('C1 device end and delayed completed callbacks cannot reacquire capture', async () => {
+  const h = harness(); await h.controller.startSession();
+  h.streams[0].tracks[0].onended(); await tick();
+  h.state(1, 'COMPLETED'); await tick();
+  assert.equal(h.controller.sessionSnapshot.state, 'paused'); assert.equal(h.streams.length, 1);
+  assert.equal(h.calls.start.length, 1);
+});
+test('C1 60-second continuous speech pauses without sending a truncated final，preview can be edited', async () => {
+  let time = 0; const h = harness({now: () => time}); await h.controller.startSession();
+  h.contexts[0].capture(speechFrame()); h.asr(1, 1, '続けている内容');
+  time = 60000; h.contexts[0].capture(speechFrame()); tickContinuous(h); await tick();
+  assert.equal(h.calls.end.length, 0); assert.equal(h.calls.transcript.length, 0);
+  assert.equal(h.calls.failure[0][0].error_code, 'utterance_limit');
+  assert.equal(h.controller.lastSnapshot.preview, '続けている内容'); assert.equal(h.nodes['voice-fallback'].hidden, false);
+  assert.equal(h.controller.sessionSnapshot.state, 'paused');
+});
+test('C1 session endpoint waits for pending PCM append before End and pause discards it', async () => {
+  const pending = deferred(); let time = 0;
+  const h = harness({now: () => time, bridge: {AppendInteractionAudio: () => pending.promise}});
+  await h.controller.startSession(); h.contexts[0].capture(speechFrame()); h.asr(1, 1, 'はい');
+  time = 900; tickContinuous(h); time = 1000; tickContinuous(h); await tick();
+  assert.equal(h.calls.end.length, 0); await h.controller.pauseSession(); pending.resolve(); await tick();
+  assert.equal(h.calls.end.length, 0); assert.equal(h.calls.transcript.length, 0);
+});
+test('C1 pause during output stops sources synchronously and keeps no microphone track', async () => {
+  const h = harness(); await h.controller.startSession();
+  h.contexts[0].capture(speechFrame()); h.asr(1, 1, 'はい', {phase: 'final', stable_prefix: 'はい'}); await tick();
+  h.event(1, 'transcript', {text: 'はい'}); h.audio(1, 1); await tick();
+  const source = h.contexts[1].sources[0]; assert.equal(source.started, true);
+  const paused = h.controller.pauseSession();
+  assert.equal(source.stopped, true); assert.ok(h.streams[0].tracks.every(t => t.stopped));
+  await paused; h.audio(1, 2); await tick(); assert.equal(h.contexts[1].sources.length, 1);
+});
+test('C1 backpressure pauses the session and never sends overflowed audio', async () => {
+  const pending = deferred(); const h = harness({bridge: {AppendInteractionAudio: () => pending.promise}});
+  await h.controller.startSession();
+  for (let i = 0; i < 33; i++) h.contexts[0].capture(speechFrame());
+  await tick(); assert.equal(h.calls.failure[0][0].error_code, 'asr_backpressure');
+  assert.equal(h.controller.sessionSnapshot.state, 'paused'); assert.equal(h.calls.end.length, 0);
+  pending.resolve(); await tick(); assert.equal(h.calls.transcript.length, 0);
+});
+test('C1 end supersedes a pending pause before a new conversation starts', async () => {
+  const paused = deferred(); const changes = [];
+  const h = harness({bridge: {ChangeVoiceSession: async (id, epoch, action) => {
+    changes.push(action); if (action === 'pause') await paused.promise;
+    return {id, epoch, conversation_id: 'session', state: action === 'end' ? 'stopped' : 'paused'};
+  }}});
+  await h.controller.startSession(); const pause = h.controller.pauseSession(); await tick();
+  const end = h.controller.endSession(); paused.resolve(); await Promise.all([pause, end]);
+  assert.deepEqual(changes, ['pause', 'end']); assert.equal(h.controller.sessionSnapshot.state, 'stopped');
+  await h.controller.startSession(); assert.equal(h.streams.length, 2); await h.controller.endSession();
+});
+test('C1 startup cancellation fences a delayed backend session and never acquires a microphone', async () => {
+  const pending = deferred(); const h = harness({bridge: {StartVoiceSession: () => pending.promise}});
+  const start = h.controller.startSession(); const end = h.controller.endSession();
+  pending.resolve({id: 'voice-1', epoch: 1, conversation_id: 'session', state: 'starting'});
+  await Promise.all([start, end]); assert.equal(h.streams.length, 0); assert.equal(h.calls.start.length, 0);
+  assert.equal(h.controller.sessionSnapshot.state, 'stopped'); assert.ok(h.contexts.every(c => c.closed));
+});
+test('C1 never opens a second permission request while canceled capture is still pending', async () => {
+  const permission = deferred(); const late = stream(); let acquisitions = 0;
+  const h = harness({mediaDevices: {getUserMedia: () => { acquisitions++; return permission.promise; }}});
+  const started = h.controller.startSession(); await tick(); await h.controller.endSession();
+  assert.equal(await h.controller.startSession(), false); assert.equal(acquisitions, 1);
+  permission.resolve(late); await started; assert.ok(late.tracks.every(t => t.stopped));
 });

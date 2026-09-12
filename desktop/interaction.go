@@ -27,11 +27,13 @@ type voiceIdentity interface {
 	Identity() (provider, model, configuration string)
 }
 type VoiceTurnRequest struct {
-	SessionID        string           `json:"session_id"`
-	InputKind        string           `json:"input_kind,omitempty"`
-	Chat             ChatRequest      `json:"chat"`
-	GenerationLimits GenerationLimits `json:"generation_limits"`
-	Speech           SpeechOptions    `json:"speech"`
+	VoiceSessionID    string           `json:"voice_session_id,omitempty"`
+	VoiceSessionEpoch uint64           `json:"voice_session_epoch,omitempty"`
+	SessionID         string           `json:"session_id"`
+	InputKind         string           `json:"input_kind,omitempty"`
+	Chat              ChatRequest      `json:"chat"`
+	GenerationLimits  GenerationLimits `json:"generation_limits"`
+	Speech            SpeechOptions    `json:"speech"`
 }
 type VoiceHint struct {
 	Pace   float64 `json:"pace"`
@@ -104,18 +106,19 @@ type interactionTurn struct {
 	speech                 *preparedSpeech
 }
 type InteractionEngine struct {
-	mu      sync.Mutex
-	asr     VoiceASR
-	tts     VoiceTTS
-	chat    func(context.Context, ChatRequest, func(string)) (*ChatResponse, error)
-	emit    func(InteractionEvent)
-	turns   map[string]*interactionTurn
-	active  string
-	closed  bool
-	events  chan InteractionEvent
-	done    chan struct{}
-	asrWake chan struct{}
-	store   *interactionTraceStore
+	mu           sync.Mutex
+	voiceSession *voiceSession
+	asr          VoiceASR
+	tts          VoiceTTS
+	chat         func(context.Context, ChatRequest, func(string)) (*ChatResponse, error)
+	emit         func(InteractionEvent)
+	turns        map[string]*interactionTurn
+	active       string
+	closed       bool
+	events       chan InteractionEvent
+	done         chan struct{}
+	asrWake      chan struct{}
+	store        *interactionTraceStore
 	// Configure before starting the first operation.
 	Timeouts InteractionTimeouts
 }
@@ -255,6 +258,9 @@ func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot
 	if e.closed {
 		return InteractionSnapshot{}, errors.New("interaction_closed")
 	}
+	if !e.validVoiceSessionLocked(request) {
+		return InteractionSnapshot{}, errors.New("stale_voice_session")
+	}
 	if e.active != "" {
 		return InteractionSnapshot{}, errors.New("interaction_busy")
 	}
@@ -276,7 +282,14 @@ func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot
 	t.speech = prepared
 	e.turns[op] = t
 	e.active = op
-	e.traceLocked(t, "user_speech_start", "")
+	if request.VoiceSessionID != "" {
+		e.voiceSession.snapshot.State = "listening"
+	}
+	if request.VoiceSessionID == "" {
+		e.traceLocked(t, "user_speech_start", "")
+	} else {
+		e.traceLocked(t, "listening_started", "")
+	}
 	_ = e.transitionLocked(t, "RECORDING")
 	return cloneInteractionSnapshot(t.snapshot), nil
 }
@@ -874,6 +887,10 @@ func (e *InteractionEngine) Cancel(op string) (InteractionSnapshot, error) {
 	if t == nil {
 		return InteractionSnapshot{}, errors.New("operation_not_found")
 	}
+	e.cancelTurnLocked(t)
+	return cloneInteractionSnapshot(t.snapshot), nil
+}
+func (e *InteractionEngine) cancelTurnLocked(t *interactionTurn) {
 	if !interactionTerminal(t.snapshot.State) {
 		if t.snapshot.Generation == nil {
 			t.snapshot.Generation = &GenerationMetadata{SchemaVersion: 2, ProviderFinishReason: "unknown"}
@@ -891,10 +908,9 @@ func (e *InteractionEngine) Cancel(op string) (InteractionSnapshot, error) {
 		}
 		e.finishLocked(t, "CANCELED", "cancel_acknowledged", "")
 	}
-	return cloneInteractionSnapshot(t.snapshot), nil
 }
 func (e *InteractionEngine) Fail(op, code string) error {
-	allowed := map[string]bool{"microphone_unavailable": true, "microphone_permission_denied": true, "microphone_failed": true, "invalid_audio": true, "playback_failed": true, "interrupted": true, "asr_failed": true, "asr_backpressure": true, "asr_protocol_error": true, "asr_timeout": true, "asr_canceled": true, "asr_unavailable": true, "asr_on_device_unavailable": true, "asr_permission_denied": true, "asr_permission_restricted": true, "asr_stream_invalid": true, "asr_stream_eof": true, "asr_empty_transcript": true, "asr_empty_result": true, "invalid_voice_config": true}
+	allowed := map[string]bool{"utterance_limit": true, "microphone_unavailable": true, "microphone_permission_denied": true, "microphone_failed": true, "invalid_audio": true, "playback_failed": true, "interrupted": true, "asr_failed": true, "asr_backpressure": true, "asr_protocol_error": true, "asr_timeout": true, "asr_canceled": true, "asr_unavailable": true, "asr_on_device_unavailable": true, "asr_permission_denied": true, "asr_permission_restricted": true, "asr_stream_invalid": true, "asr_stream_eof": true, "asr_empty_transcript": true, "asr_empty_result": true, "invalid_voice_config": true}
 	if !allowed[code] {
 		return errors.New("invalid_failure_code")
 	}
@@ -959,6 +975,10 @@ func (e *InteractionEngine) Close() {
 		return
 	}
 	e.closed = true
+	if e.voiceSession != nil {
+		e.voiceSession.cancel()
+		e.voiceSession.snapshot.State = "stopped"
+	}
 	for _, t := range e.turns {
 		if !interactionTerminal(t.snapshot.State) {
 			if t.snapshot.Generation == nil {

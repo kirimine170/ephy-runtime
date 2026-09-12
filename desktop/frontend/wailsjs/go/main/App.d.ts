@@ -18,6 +18,8 @@ export function CancelInteraction(arg1:string):Promise<main.InteractionSnapshot>
 
 export function CancelInteractionComparison(arg1:string):Promise<void>;
 
+export function ChangeVoiceSession(arg1:string,arg2:number,arg3:string):Promise<main.VoiceSessionSnapshot>;
+
 export function Chat(arg1:main.ChatRequest):Promise<main.ChatResponse>;
 
 export function ClearBatchPresetSelection():Promise<Array<string>>;
@@ -239,6 +241,8 @@ export function StartInteraction(arg1:main.VoiceTurnRequest):Promise<main.Intera
 export function StartQdrant():Promise<main.RuntimeStatus>;
 
 export function StartRecommendedStack():Promise<main.StackActionResponse>;
+
+export function StartVoiceSession(arg1:string):Promise<main.VoiceSessionSnapshot>;
 
 export function StartWatch(arg1:main.WatchRequest):Promise<main.RuntimeStatus>;
 
