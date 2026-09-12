@@ -17,12 +17,31 @@ export function endpointSettings(overrides = {}) {
 export function createVoiceEndpoint({now, settings = DEFAULT_ENDPOINT}) {
   let activeMS = 0, speech = false, started = null, lastSpeech = null;
   let partial = '', changed = null, candidate = null, committed = false;
+  let modelActivity = false, audioMS = 0, processedMS = 0, lastSpeechMS = 0;
   const hesitation = text => /^(え[ーぇ]*[とっ]+|ええと|あの[ーぉ]*|その[ーぉ]*|うー+ん?)[\s，．、。…・.!?！？]*$/u.test(text.trim());
   return {
     get speech() { return speech; },
     get candidate() { return candidate !== null; },
+    setActivityMode(value) { modelActivity = value === true; },
+    activity(value) {
+      if (!modelActivity || committed || !value || !Number.isSafeInteger(value.audio_ms)
+          || value.audio_ms < processedMS || value.audio_ms > audioMS + 33
+          || !Number.isSafeInteger(value.last_speech_ms) || value.last_speech_ms < lastSpeechMS
+          || value.last_speech_ms > value.audio_ms) return false;
+      processedMS = value.audio_ms;
+      if (value.has_speech && value.last_speech_ms > lastSpeechMS) {
+        speech = true;
+        started ??= now() - Math.max(0, audioMS - value.last_speech_ms);
+        lastSpeech = now() - Math.max(0, audioMS - value.last_speech_ms);
+        lastSpeechMS = value.last_speech_ms;
+        candidate = null;
+      }
+      return true;
+    },
     audio(data, sampleRate) {
       if (committed) return false;
+      audioMS += data.length / sampleRate * 1000;
+      if (modelActivity) return speech;
       let energy = 0; for (const sample of data) energy += sample * sample;
       const loud = data.length > 0 && Math.sqrt(energy / data.length) >= settings.rms;
       activeMS = loud ? activeMS + data.length / sampleRate * 1000 : 0;
@@ -39,8 +58,10 @@ export function createVoiceEndpoint({now, settings = DEFAULT_ENDPOINT}) {
       if (!speech || committed) return '';
       const at = now();
       if (at - started >= settings.maxUtteranceMS) return 'limit';
+      // Never end against a silence result while newer PCM is still awaiting VAD．
+      if (modelActivity && audioMS - processedMS > 250) { candidate = null; return ''; }
       const usable = partial.trim() && !hesitation(partial) && changed !== null && at - changed >= settings.partialUnchangedMS;
-      const threshold = usable ? settings.silenceMS : settings.fallbackSilenceMS;
+      const threshold = usable || (modelActivity && !hesitation(partial)) ? settings.silenceMS : settings.fallbackSilenceMS;
       if (at - lastSpeech < threshold) { candidate = null; return ''; }
       candidate ??= at;
       if (at - candidate < settings.graceMS) return 'candidate';

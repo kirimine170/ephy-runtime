@@ -9,9 +9,12 @@ import (
 // VoiceReadiness describes availability without provider diagnostics or paths．
 // permission_required permits explicit recording but does not claim authorization．
 type VoiceReadiness struct {
-	State     string `json:"state"`
-	CanStart  bool   `json:"can_start"`
-	ErrorCode string `json:"error_code,omitempty"`
+	State        string          `json:"state"`
+	CanStart     bool            `json:"can_start"`
+	ErrorCode    string          `json:"error_code,omitempty"`
+	Provider     string          `json:"provider,omitempty"`
+	Model        string          `json:"model,omitempty"`
+	Capabilities ASRCapabilities `json:"capabilities"`
 }
 
 type voiceReadinessProvider interface {
@@ -20,7 +23,7 @@ type voiceReadinessProvider interface {
 
 func blockedVoiceReadiness(code string) VoiceReadiness {
 	switch code {
-	case "asr_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_on_device_unavailable", "asr_timeout", "asr_canceled", "invalid_voice_config":
+	case "asr_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_on_device_unavailable", "asr_timeout", "asr_canceled", "invalid_voice_config", "asr_model_missing", "asr_model_mismatch", "asr_model_load_failed", "asr_loading", "asr_worker_exited":
 	default:
 		code = "asr_unavailable"
 	}
@@ -50,6 +53,9 @@ func readInteractionASRReadiness(ctx context.Context, provider VoiceASR, timeout
 		return blockedVoiceReadiness(err.Error())
 	}
 	if readiness.CanStart && readiness.ErrorCode == "" && (readiness.State == "ready" || readiness.State == "permission_required") {
+		return readiness
+	}
+	if readiness.State == "loading" && !readiness.CanStart && readiness.ErrorCode == "" {
 		return readiness
 	}
 	return blockedVoiceReadiness(readiness.ErrorCode)

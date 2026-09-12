@@ -98,6 +98,10 @@ export function EndInteractionASR(arg1) {
   return window['go']['main']['App']['EndInteractionASR'](arg1);
 }
 
+export function EndInteractionASRWithReason(arg1, arg2) {
+  return window['go']['main']['App']['EndInteractionASRWithReason'](arg1, arg2);
+}
+
 export function Eval(arg1) {
   return window['go']['main']['App']['Eval'](arg1);
 }
@@ -268,6 +272,10 @@ export function ReadExportedResult(arg1) {
 
 export function RecordExecution(arg1) {
   return window['go']['main']['App']['RecordExecution'](arg1);
+}
+
+export function RecordInteractionAudioCapture(arg1, arg2) {
+  return window['go']['main']['App']['RecordInteractionAudioCapture'](arg1, arg2);
 }
 
 export function RecordInteractionFeedback(arg1) {

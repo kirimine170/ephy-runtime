@@ -49,3 +49,33 @@ test('endpoint thresholds are adjustable and bounded', () => {
   for (const value of [0, -1, Infinity, NaN]) assert.throws(() => endpointSettings({graceMS: value}));
   assert.throws(() => endpointSettings({maxUtteranceMS: 60001}));
 });
+
+test('model activity admits quiet speech and timestamps silence from audio samples', () => {
+  let time = 0;
+  const e = createVoiceEndpoint({now: () => time}); e.setActivityMode(true);
+  const audio = (ms, value = .001) => { time += ms; e.audio(new Float32Array(ms * 16).fill(value), 16000); };
+  audio(200); assert.equal(e.speech, false);
+  assert.equal(e.activity({audio_ms: 192, last_speech_ms: 160, has_speech: true}), true);
+  assert.equal(e.speech, true); e.hypothesis('はい');
+  audio(800, 0);
+  // A delayed VAD result must not make old silence look current．
+  assert.equal(e.tick(), '');
+  e.activity({audio_ms: 992, last_speech_ms: 160, has_speech: true});
+  time = 1060; assert.equal(e.tick(), 'candidate');
+  // Identical activity updates must not reset the speech-end clock．
+  e.activity({audio_ms: 992, last_speech_ms: 160, has_speech: true});
+  time = 1160; assert.equal(e.tick(), 'endpoint');
+});
+
+test('model VAD resumption revokes endpoint and invalid sample clocks are ignored', () => {
+  let time = 0; const e = createVoiceEndpoint({now: () => time}); e.setActivityMode(true);
+  e.audio(new Float32Array(16000), 16000); time = 1000;
+  e.activity({audio_ms: 992, last_speech_ms: 64, has_speech: true});
+  assert.equal(e.tick(), 'candidate');
+  e.audio(new Float32Array(1600), 16000); time = 1100;
+  e.activity({audio_ms: 1088, last_speech_ms: 1056, has_speech: true});
+  assert.equal(e.tick(), '');
+  for (const a of [{audio_ms: 800, last_speech_ms: 700}, {audio_ms: 1200, last_speech_ms: 1056}, {audio_ms: 1088, last_speech_ms: 1}]) {
+    assert.equal(e.activity({...a, has_speech: true}), false);
+  }
+});

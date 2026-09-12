@@ -254,6 +254,7 @@ function harness(options = {}) {
   let listener;
   let identity = 0;
   const nodes = Object.fromEntries(['voice-session', 'voice-pause', 'voice-end', 'voice-record', 'voice-cancel', 'voice-status', 'voice-fallback', 'voice-live-transcript', 'voice-transcript-stable', 'voice-transcript-revisable'].map((id) => [id, button()]));
+  if (options.showASR) nodes['voice-asr-status'] = button();
   const calls = {start: [], readiness: [], begin: [], append: [], end: [], commit: [], cancel: [], interrupts: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
   calls.candidateBegin = []; calls.candidateAppend = []; calls.candidateCancel = [];
   const candidateRequest = op => ({operation_id: op, session_id: 'session', turn_id: `turn-${op.slice(3)}`, segment_id: `candidate-segment-${op}`, sample_rate: 16000});
@@ -1822,4 +1823,60 @@ test('pause and resume fence a late candidate startup without reactivating its m
   assert.equal(h.calls.interrupts.length, 0); assert.equal(h.calls.candidateCancel.at(-1)[2], 'detached');
   assert.ok(h.streams[0].tracks.every(t => t.stopped)); assert.ok(h.streams[1].tracks.every(t => !t.stopped));
   await h.controller.endSession();
+});
+
+const whisperReadiness = () => ({state: 'ready', can_start: true, provider: 'whisper-cpp', model: 'large-v3-turbo-f16', capabilities: {partial: true, activity: true, no_speech: true}});
+test('Whisper continuous capture feeds quiet PCM and activity preserves revisable text', async () => {
+  let time = 0;
+  const h = harness({now: () => time, bridge: {GetInteractionASRReadiness: async () => whisperReadiness()}});
+  assert.equal(await h.controller.startSession(), true);
+  h.contexts[0].capture(new Float32Array(1600).fill(.001)); await tick();
+  assert.equal(h.calls.append.length, 1);
+  h.asr(1, 1, 'はい');
+  h.asr(1, 2, '', {phase: 'activity', activity: {audio_ms: 96, last_speech_ms: 96, speech_ms: 64, speaking: true, has_speech: true}});
+  assert.equal(h.nodes['voice-transcript-revisable'].textContent, 'はい');
+  assert.match(h.nodes['voice-status'].textContent, /聞いています/);
+  assert.equal(h.calls.transcript.length, 0);
+  time = 1000; h.contexts[0].capture(new Float32Array(16000)); await tick();
+  // Do not use an obsolete activity timestamp while new input awaits VAD．
+  tickContinuous(h); assert.equal(h.calls.end.length, 0);
+  h.asr(1, 3, '', {phase: 'activity', activity: {audio_ms: 1088, last_speech_ms: 96, speech_ms: 64, speaking: false, has_speech: true}});
+  tickContinuous(h); time += 100; tickContinuous(h); await tick();
+  assert.equal(h.calls.end.length, 1);
+  h.asr(1, 4, 'はい', {phase: 'final', stable_prefix: 'はい'});
+  h.event(1, 'transcript', {text: 'はい'}); h.event(1, 'transcript', {text: 'はい'});
+  assert.equal(h.calls.transcript.length, 1);
+  await h.controller.endSession();
+});
+
+test('Whisper no-speech returns to listening without Conversation or cancel placeholder', async () => {
+  let time = 0;
+  const h = harness({now: () => time, bridge: {GetInteractionASRReadiness: async () => whisperReadiness()}});
+  await h.controller.startSession();
+  h.contexts[0].capture(new Float32Array(1600)); await tick();
+  time = 59000; tickContinuous(h); await tick();
+  assert.equal(h.calls.end.length, 1);
+  h.asr(1, 1, '', {phase: 'no_speech'});
+  h.state(1, 'CANCELED', {input_outcome: 'no_speech'}); await tick();
+  assert.equal(h.calls.start.length, 2);
+  assert.equal(h.calls.transcript.length, 0); assert.equal(h.calls.canceled.length, 0);
+  assert.equal(h.streams.length, 1); assert.equal(h.streams[0].tracks[0].stopped, false);
+  // An old terminal event must not touch the replacement recognizer．
+  h.asr(1, 2, 'old', {phase: 'final', stable_prefix: 'old'});
+  assert.equal(h.calls.transcript.length, 0);
+  await h.controller.endSession();
+});
+
+test('Whisper readiness polls warmup，disables starting and displays selected model', async () => {
+  let checks = 0;
+  const h = harness({showASR: true, bridge: {GetInteractionASRReadiness: async () => ++checks === 1
+    ? {...whisperReadiness(), state: 'loading', can_start: false} : whisperReadiness()}});
+  await tick();
+  assert.equal(h.nodes['voice-session'].disabled, true); assert.equal(h.nodes['voice-record'].disabled, true);
+  assert.match(h.nodes['voice-asr-status'].textContent, /large-v3-turbo-f16.*準備中/);
+  for (const [id, timer] of [...h.timeouts]) if (timer.milliseconds === 1000) { h.timeouts.delete(id); timer.callback(); }
+  await tick(); assert.equal(h.nodes['voice-session'].disabled, false);
+  assert.match(h.nodes['voice-asr-status'].textContent, /準備完了/);
+  assert.equal(h.streams.length, 0);
+  await h.controller.dispose(); assert.equal(h.timeouts.size, 0);
 });

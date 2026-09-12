@@ -16,6 +16,7 @@ type InterruptionCandidateSnapshot struct {
 	CandidateID string            `json:"candidate_id"`
 	Request     ASRSessionRequest `json:"request"`
 	Update      *ASRUpdate        `json:"update,omitempty"`
+	Activity    *ASRUpdate        `json:"activity,omitempty"`
 	ErrorCode   string            `json:"error_code,omitempty"`
 }
 
@@ -29,6 +30,8 @@ type interactionInterruptionCandidate struct {
 	session         VoiceASRSession
 	sequence, bytes int
 	latest          *ASRUpdate
+	activity        *ASRUpdate
+	lastUpdate      *ASRUpdate
 	errorCode       string
 	closed          bool
 }
@@ -55,6 +58,12 @@ func candidateSnapshot(c *interactionInterruptionCandidate) InterruptionCandidat
 	if c.latest != nil {
 		u := *c.latest
 		s.Update = &u
+	}
+	if c.activity != nil {
+		u := *c.activity
+		a := *u.Activity
+		u.Activity = &a
+		s.Activity = &u
 	}
 	return s
 }
@@ -96,7 +105,11 @@ func (e *InteractionEngine) BeginInterruptionCandidate(op, candidateID string, r
 		case <-ctx.Done():
 			return
 		}
-		s, err := provider.OpenSession(ctx, c.request, func(u ASRUpdate) { e.receiveInterruptionCandidate(t, c, u) })
+		open := provider.OpenSession
+		if candidateProvider, ok := provider.(VoiceInterruptionASR); ok {
+			open = candidateProvider.OpenInterruptionSession
+		}
+		s, err := open(ctx, c.request, func(u ASRUpdate) { e.receiveInterruptionCandidate(t, c, u) })
 		if s != nil {
 			s = &exclusiveASRSession{VoiceASRSession: s, release: func() { <-e.asrSlot }}
 		} else {
@@ -155,6 +168,7 @@ func (e *InteractionEngine) closeInterruptionCandidate(t *interactionTurn, c *in
 	}
 	c.closed = true
 	c.latest = nil
+	c.activity, c.lastUpdate = nil, nil
 	if e.liveLocked(t) && t.interruptionCandidate == c {
 		e.candidateTraceLocked(t, reason)
 	}
@@ -194,7 +208,11 @@ func (e *InteractionEngine) AppendInterruptionCandidate(op, id string, sequence 
 		e.mu.Unlock()
 		return InterruptionCandidateSnapshot{}, errors.New("asr_canceled")
 	}
-	if sequence != c.sequence+1 || len(pcm) == 0 || len(pcm)%2 != 0 || len(pcm) > maxASRPCMChunkBytes || c.bytes+len(pcm) > c.request.SampleRate*2*2 {
+	seconds := 2
+	if asrCapabilities(e.asr).Activity {
+		seconds = 3
+	}
+	if sequence != c.sequence+1 || len(pcm) == 0 || len(pcm)%2 != 0 || len(pcm) > maxASRPCMChunkBytes || c.bytes+len(pcm) > c.request.SampleRate*2*seconds {
 		e.mu.Unlock()
 		e.closeInterruptionCandidate(t, c, "unavailable")
 		return InterruptionCandidateSnapshot{}, errors.New("invalid_audio")
@@ -226,21 +244,29 @@ func (e *InteractionEngine) receiveInterruptionCandidate(t *interactionTurn, c *
 	if u.OperationID != r.OperationID || u.SessionID != r.SessionID || u.TurnID != r.TurnID || u.SegmentID != r.SegmentID {
 		return
 	}
-	if c.latest != nil && (u.Revision <= c.latest.Revision || c.latest.Phase == "final") {
+	if c.lastUpdate != nil && (u.Revision <= c.lastUpdate.Revision || (c.latest != nil && c.latest.Phase == "final")) {
 		return
 	}
-	valid := u.Revision > 0 && u.Revision <= maxASRRevisions && u.MonotonicMS >= 0 &&
+	valid := u.Revision > 0 && u.Revision <= maxASRRevisions && u.MonotonicMS >= 0 && validASRDiagnostic(u.Diagnostic) &&
 		interactionIdentifier.MatchString(u.Provider) && interactionMetadataID.MatchString(u.ModelRevision) &&
 		utf8.ValidString(u.Transcript) && utf8.ValidString(u.StablePrefix) && len(u.Transcript) <= 16<<10 &&
 		strings.HasPrefix(u.Transcript, u.StablePrefix)
-	if c.latest != nil {
-		valid = valid && u.MonotonicMS >= c.latest.MonotonicMS && u.Provider == c.latest.Provider &&
-			u.ModelRevision == c.latest.ModelRevision && strings.HasPrefix(u.StablePrefix, c.latest.StablePrefix)
+	if c.lastUpdate != nil {
+		valid = valid && u.MonotonicMS >= c.lastUpdate.MonotonicMS && u.Provider == c.lastUpdate.Provider &&
+			u.ModelRevision == c.lastUpdate.ModelRevision
 	}
 	switch u.Phase {
+	case "activity":
+		valid = valid && asrCapabilities(e.asr).Activity && validASRActivity(u.Activity) && u.ErrorCode == "" && u.Transcript == "" && u.StablePrefix == ""
+		if valid && c.activity != nil {
+			valid = u.Activity.AudioMS >= c.activity.Activity.AudioMS && u.Activity.LastSpeechMS >= c.activity.Activity.LastSpeechMS
+		}
 	case "partial", "stable", "final":
-		valid = valid && u.ErrorCode == "" && (u.Phase != "stable" || u.StablePrefix != "") &&
+		valid = valid && u.Activity == nil && u.ErrorCode == "" && (u.Phase != "stable" || u.StablePrefix != "") &&
 			(u.Phase != "final" || (strings.TrimSpace(u.Transcript) != "" && u.StablePrefix == u.Transcript))
+		if c.latest != nil {
+			valid = valid && strings.HasPrefix(u.StablePrefix, c.latest.StablePrefix)
+		}
 	default:
 		valid = false
 	}
@@ -249,5 +275,14 @@ func (e *InteractionEngine) receiveInterruptionCandidate(t *interactionTurn, c *
 		c.cancel() // Candidate failure never fails or cancels the responding turn．
 		return
 	}
-	c.latest = &u
+	if u.Activity != nil {
+		a := *u.Activity
+		u.Activity = &a
+	}
+	c.lastUpdate = &u
+	if u.Phase == "activity" {
+		c.activity = &u
+	} else {
+		c.latest = &u
+	}
 }

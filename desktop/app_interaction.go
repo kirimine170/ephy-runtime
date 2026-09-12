@@ -84,11 +84,15 @@ func (a *App) interactionEngine() *InteractionEngine {
 		if root == "" {
 			root = detectWorkspaceRoot()
 		}
-		a.interaction = NewInteractionEngine(NewNativeVoiceASR(root), NewVoiceTTSRegistry(), a.chatWithContext, func(event InteractionEvent) {
+		asr := NewConfiguredVoiceASR(root)
+		a.interaction = NewInteractionEngine(asr, NewVoiceTTSRegistry(), a.chatWithContext, func(event InteractionEvent) {
 			if ctx := a.currentContext(); ctx != nil {
 				runtime.EventsEmit(ctx, "interaction-event", event)
 			}
 		}, filepath.Join(root, "data", "runtime", "interaction"))
+		if provider, ok := asr.(*WhisperVoiceASR); ok {
+			_, _ = provider.Readiness(context.Background())
+		}
 	}
 	return a.interaction
 }
@@ -177,6 +181,12 @@ func (a *App) AppendInteractionAudio(operationID string, sequence int, pcmBase64
 func (a *App) EndInteractionASR(operationID string) error {
 	return a.interactionEngine().EndASR(operationID)
 }
+func (a *App) EndInteractionASRWithReason(operationID, reason string) error {
+	return a.interactionEngine().EndASRWithReason(operationID, reason)
+}
+func (a *App) RecordInteractionAudioCapture(operationID string, metadata ASRCaptureMetadata) error {
+	return a.interactionEngine().RecordASRCapture(operationID, metadata)
+}
 
 func (a *App) BeginInteractionInterruptionCandidate(operationID, candidateID string, revision, sampleRate int) (InterruptionCandidateSnapshot, error) {
 	return a.interactionEngine().BeginInterruptionCandidate(operationID, candidateID, revision, sampleRate)
@@ -210,7 +220,7 @@ func (a *App) InteractionPlayback(operationID string, sequence int, phase string
 }
 func (a *App) FailInteraction(operationID string, code string) error {
 	switch code {
-	case "utterance_limit", "microphone_unavailable", "microphone_permission_denied", "microphone_failed", "invalid_audio", "playback_failed", "interrupted", "asr_failed", "asr_backpressure", "asr_protocol_error", "asr_timeout", "asr_canceled", "asr_unavailable", "asr_on_device_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_stream_invalid", "asr_stream_eof", "asr_empty_transcript", "asr_empty_result", "invalid_voice_config":
+	case "utterance_limit", "microphone_unavailable", "microphone_permission_denied", "microphone_failed", "invalid_audio", "playback_failed", "interrupted", "asr_failed", "asr_loading", "asr_model_missing", "asr_model_mismatch", "asr_model_load_failed", "asr_worker_exited", "asr_busy", "asr_backpressure", "asr_protocol_error", "asr_timeout", "asr_canceled", "asr_unavailable", "asr_on_device_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_stream_invalid", "asr_stream_eof", "asr_empty_transcript", "asr_empty_result", "invalid_voice_config":
 	default:
 		code = "microphone_failed"
 	}

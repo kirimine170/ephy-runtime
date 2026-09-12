@@ -6,11 +6,11 @@ import {createPCM16StreamEncoder} from './voiceInteraction.js';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return {promise, resolve}; };
 function fixture(options = {}) {
-  let at = 0, phase = options.phase || 'SYNTHESIZING', update = null;
+  let at = 0, phase = options.phase || 'SYNTHESIZING', update = null, activity = null;
   const timers = new Map(), calls = {begin: [], append: [], cancel: [], duck: [], confirmed: 0};
   const request = {operation_id: 'op', session_id: 'session', turn_id: 'turn', segment_id: 'candidate-segment', sample_rate: 16000};
-  const snapshot = () => ({candidate_id: 'candidate', request, ...(update ? {update} : {})});
-  const buffer = createVoiceInputBuffer(16000);
+  const snapshot = () => ({candidate_id: 'candidate', request, ...(update ? {update} : {}), ...(activity ? {activity} : {})});
+  const buffer = createVoiceInputBuffer(16000, options.modelActivity ? 3000 : 2000);
   const bridge = {
     async BeginInteractionInterruptionCandidate(...args) { calls.begin.push(args); return snapshot(); },
     async AppendInteractionInterruptionCandidate(...args) { calls.append.push(args); return snapshot(); },
@@ -22,9 +22,11 @@ function fixture(options = {}) {
     encodeBase64: bytes => Buffer.from(bytes).toString('base64'), now: () => at,
     timers: {setTimeout(fn, ms) { const id = Symbol(); timers.set(id, {fn, at: at + ms}); return id; }, clearTimeout(id) { timers.delete(id); }},
     isCurrent: options.isCurrent || (() => true), phase: () => phase,
-    onDuck: duck => calls.duck.push(duck), onConfirm: () => calls.confirmed++, settings: interruptionSettings(options.settings), createID: () => 'candidate'});
+    onDuck: duck => calls.duck.push(duck), onConfirm: () => calls.confirmed++, modelActivity: options.modelActivity,
+    settings: interruptionSettings(options.settings, options.modelActivity), createID: () => 'candidate'});
   return {gate, calls, timers, buffer, snapshot,
     hypothesis(text, revision = 1, phase = 'partial', extra = {}) { update = {...request, revision, phase, transcript: text, stable_prefix: phase === 'final' ? text : '', ...extra}; },
+    activity(speechMS, revision = 1) { activity = {...request, revision, phase: 'activity', activity: {audio_ms: speechMS, last_speech_ms:speechMS, speech_ms:speechMS, has_speech:speechMS>=64}}; },
     setPhase(value) { phase = value; },
     async audio(ms, amplitude = .1) { at += ms; gate.audio(new Float32Array(ms * 16).fill(amplitude)); await tick(); },
     async advance(ms) { at += ms; for (const [id, timer] of [...timers]) if (timer.at <= at) { timers.delete(id); timer.fn(); } await tick(); },
@@ -132,4 +134,33 @@ test('natural reply completion hands pending input to ordinary ASR and fences la
   assert.equal(f.buffer.holding, true); assert.equal(f.buffer.samples, 2560);
   f.hypothesis('待って', 1, 'final'); await f.audio(300);
   assert.equal(f.calls.confirmed, 0); assert.equal(f.calls.cancel[0][2], 'completed');
+});
+
+test('model VAD preserves a quiet short command beyond the RMS-only noise timeout', async () => {
+  const f=fixture({modelActivity:true,phase:'PLAYING'});
+  await f.audio(200,0);await f.audio(80,.006);
+  assert.equal(f.gate.pending,true);assert.equal(f.calls.duck.includes(true),false);
+  f.activity(64);await f.audio(200,0);
+  assert.equal(f.gate.pending,true);assert.equal(f.calls.confirmed,0);
+  f.hypothesis('待って',2);await f.audio(40,0);await f.audio(80,0);
+  assert.equal(f.calls.confirmed,1);assert.equal(f.buffer.holding,true);f.gate.stop();
+});
+
+test('model VAD rejects a noise candidate without ducking or stopping playback', async () => {
+  const f=fixture({modelActivity:true,phase:'PLAYING'});f.activity(0);
+  await f.audio(40,.8);for(let i=0;i<10;i++)await f.audio(40,0);
+  assert.equal(f.calls.confirmed,0);assert.equal(f.calls.duck.includes(true),false);
+  assert.equal(f.calls.cancel.at(-1)[2],'noise');f.gate.stop();
+});
+
+test('model acknowledgement may become a correction after 1200 ms within a bounded handoff', async () => {
+  const f=fixture({modelActivity:true});f.activity(320);f.hypothesis('はい',2);
+  await f.audio(80);await f.audio(800,0);await f.advance(400);
+  assert.equal(f.gate.pending,true);assert.equal(f.calls.confirmed,0);assert.equal(f.calls.duck.at(-1),false);
+  f.hypothesis('はい，でも違います',3);await f.audio(40,0);await f.audio(240,0);
+  assert.equal(f.calls.confirmed,1);assert.equal(f.buffer.holding,true);f.gate.stop();
+  assert.equal(interruptionSettings({},true).candidateMS,1800);
+  assert.throws(()=>interruptionSettings({candidateMS:1801},true));
+  const b=createVoiceInputBuffer(16000,3000);b.hold();assert.equal(b.push(new Float32Array(48000)),true);
+  assert.equal(b.push(new Float32Array(1)),false);assert.throws(()=>createVoiceInputBuffer(16000,3001));
 });

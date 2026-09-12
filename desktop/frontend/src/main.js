@@ -988,6 +988,7 @@ app.innerHTML = `
               <button id="voice-record" class="ghost-btn" type="button">録音開始</button>
               <button id="voice-cancel" class="ghost-btn" type="button" disabled>Ephyの発話停止</button>
               <span id="voice-status" role="status" aria-live="polite">待機中</span>
+              <span id="voice-asr-status" role="status" aria-live="polite">音声認識を確認中</span>
               <button id="voice-fallback" class="ghost-btn" type="button" hidden>文字入力で続ける</button>
               <button id="voice-feedback" class="ghost-btn" type="button" disabled>違和感を記録</button>
               <div id="voice-live-transcript" class="voice-live-transcript" role="status" aria-live="polite" aria-atomic="true" hidden><span id="voice-transcript-stable" class="voice-transcript-stable"></span><span id="voice-transcript-revisable" class="voice-transcript-revisable"></span></div>

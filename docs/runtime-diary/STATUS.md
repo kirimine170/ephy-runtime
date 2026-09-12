@@ -1,6 +1,6 @@
 # Runtime会話・日記 C1〜C3 状況
 
-最終更新：2026-09-13．**C1 Step 2の実機試行で見つかった過敏な割込みを修正し，認識による候補確認を実装した**．通常の発話検出と中断の判断を分け，短いノイズ・相づち・候補ASR失敗で元の返答を破棄しない．詳細と再試験手順は[C1_INTERRUPTION_GUARD.md](C1_INTERRUPTION_GUARD.md)を参照する．先行Step 3のKarte基盤は維持し，Step 4以降の実会話記録は有効化していない．
+最終更新：2026-09-13．**ASR改善計画A〜Eを常駐Whisper，途中表示，VAD終端，割込み，アプリbuildへ接続した**．公開朗読100件の比較からlarge-v3-turbo F16を選択した．モデルVADで小声と短い指示の取りこぼしを減らし，無発話はLLMへ送らず待受へ戻す．実測と未達，人による再試験は[LOCAL_WHISPER_ASR.md](../LOCAL_WHISPER_ASR.md)を参照する．Frontend 299 testsとGo全体のrace検査は成功した．自然な実マイク会話と実再生停止の品質受入は未完了である．先行Step 3のKarte基盤は維持し，Step 4以降の実会話記録は有効化していない．
 
 次の担当は[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)，[Runtime ADR-0014](../adr/ADR-0014-runtime-conversation-diary-boundaries.md)，[Karte保存契約 v2](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)を読み，ユーザーが指定したStepだけを進める．全Stepを一括実行するgoalは設定しない．
 

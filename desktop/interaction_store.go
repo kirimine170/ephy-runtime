@@ -76,6 +76,8 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 		if _, skipped := first["tts_skipped"]; !skipped {
 			required = append(required, "tts_requested", "tts_first_chunk", "tts_completed", "audio_play_started", "audio_play_stopped")
 		}
+	} else if _, noSpeech := first["asr_no_speech"]; noSpeech {
+		required = append(required, "endpoint_commit", "asr_started")
 	} else if _, canceled := first["cancel_requested"]; canceled {
 		required = append(required, "cancel_acknowledged")
 	} else if _, failed := first["turn_failed"]; !failed {

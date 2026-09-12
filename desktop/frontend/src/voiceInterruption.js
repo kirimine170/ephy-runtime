@@ -4,13 +4,13 @@ export const DEFAULT_INTERRUPTION = Object.freeze({rms: .025, onsetMS: 80, gapMS
   candidateMS: 1200, quietMS: 200, minimumSpeechMS: 180, waitingSpeechMS: 260,
   stableMS: 160, waitingStableMS: 240, explicitStableMS: 80, duckVolume: .3});
 
-export function interruptionSettings(overrides = {}) {
-  const result = {...DEFAULT_INTERRUPTION};
+export function interruptionSettings(overrides = {}, modelActivity = false) {
+  const result = {...DEFAULT_INTERRUPTION, ...(modelActivity ? {rms: .004, onsetMS: 40, candidateMS: 1800} : {})};
   for (const key of Object.keys(result)) {
     if (overrides[key] !== undefined) result[key] = overrides[key];
     if (!Number.isFinite(result[key]) || result[key] <= 0) throw new Error('invalid_interruption_setting');
   }
-  if (result.rms > 1 || result.duckVolume > 1 || result.onsetMS > 300 || result.candidateMS > 1200
+  if (result.rms > 1 || result.duckVolume > 1 || result.onsetMS > 300 || result.candidateMS > (modelActivity ? 1800 : 1200)
     || result.minimumSpeechMS < result.onsetMS || result.waitingSpeechMS < result.minimumSpeechMS
     || result.waitingStableMS < result.stableMS) throw new Error('invalid_interruption_setting');
   return result;
@@ -47,6 +47,7 @@ export function interruptionIntent(text) {
 let nextCandidateID = 0;
 export function createVoiceInterruption({bridge, identity, sampleRate, buffer, createEncoder,
   encodeBase64, now, timers, isCurrent, phase, onDuck, onConfirm, settings = DEFAULT_INTERRUPTION,
+  modelActivity = false,
   createID = () => `candidate_${Date.now().toString(36)}_${++nextCandidateID}`}) {
   let candidate = null, stopped = false, transferred = false;
   let activeMS = 0, quietMS = 0, blocked = false, noiseFloor = .003;
@@ -75,6 +76,23 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
       || snapshot.request?.session_id !== c.session || snapshot.request?.turn_id !== c.turn
       || snapshot.request?.segment_id !== c.segment || snapshot.request?.sample_rate !== c.encoder.outputRate
       || snapshot.error_code) { close('unavailable'); return; }
+    const activity = snapshot.activity;
+    if (activity) {
+      const a = activity.activity;
+      if (activity.operation_id !== c.op || activity.session_id !== c.session || activity.turn_id !== c.turn
+          || activity.segment_id !== c.segment || activity.phase !== 'activity' || activity.error_code
+          || !a || !Number.isSafeInteger(a.speech_ms) || a.speech_ms < 0 || a.speech_ms > (modelActivity ? 3000 : 2000)
+          || typeof a.has_speech !== 'boolean'
+          || !Number.isSafeInteger(activity.revision) || activity.revision < 1) { close('unavailable'); return; }
+      // Model VAD and the RMS onset are separate observations．Text is still
+      // required to confirm an interruption，including for a short command．
+      if (activity.revision > (c.activityRevision || 0)) {
+        c.activityRevision = activity.revision;
+        c.modelSpeechMS = a.speech_ms;
+        c.modelHasSpeech = a.has_speech;
+        if (modelActivity && a.has_speech && !c.ducked && c.intent !== 'acknowledgement') { c.ducked = true; onDuck(true); }
+      }
+    }
     const update = snapshot.update;
     if (!update) return;
     if (update.operation_id !== c.op || update.session_id !== c.session || update.turn_id !== c.turn
@@ -87,10 +105,12 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
     if (update.transcript !== c.text) { c.text = update.transcript; c.changedAt = now(); }
     const intent = interruptionIntent(c.text);
     c.intent = intent;
+    if (modelActivity && intent === 'acknowledgement' && c.ducked) { c.ducked = false; onDuck(false); }
     const waiting = phase() !== 'PLAYING';
-    const speechMS = intent === 'explicit' ? settings.minimumSpeechMS : waiting ? settings.waitingSpeechMS : settings.minimumSpeechMS;
+    const speechMS = intent === 'explicit' && modelActivity ? 64 : intent === 'explicit' ? settings.minimumSpeechMS : waiting ? settings.waitingSpeechMS : settings.minimumSpeechMS;
     const stableMS = intent === 'explicit' ? settings.explicitStableMS : waiting ? settings.waitingStableMS : settings.stableMS;
-    if (['explicit', 'speech'].includes(intent) && c.speechMS >= speechMS
+    const observedSpeechMS = modelActivity ? (c.modelHasSpeech ? c.modelSpeechMS : 0) : c.speechMS;
+    if (['explicit', 'speech'].includes(intent) && observedSpeechMS >= speechMS
       && (update.phase === 'final' || now() - c.changedAt >= stableMS)) {
       const candidateMS = Math.max(0, Math.round(now() - c.startedAt));
       close('confirmed', true);
@@ -117,7 +137,7 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
     const bytes = c.encoder.push(frame);
     if (!bytes.byteLength) return;
     // Include the in-flight bridge append in this bound．
-    if (c.queuedBytes + bytes.byteLength > c.encoder.outputRate * 2 * 2) { close('unavailable'); return; }
+    if (c.queuedBytes + bytes.byteLength > c.encoder.outputRate * 2 * (modelActivity ? 3 : 2)) { close('unavailable'); return; }
     c.queue.push(bytes); c.queuedBytes += bytes.byteLength;
     pump(c);
   }
@@ -134,7 +154,7 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
     buffer.hold();
     for (const frame of buffer.snapshot()) queue(c, frame);
     if (!current(c)) return;
-    onDuck(true);
+    if (!modelActivity) { c.ducked = true; onDuck(true); }
     c.timer = timers.setTimeout(() => { if (current(c)) close(c.intent === 'acknowledgement' ? 'acknowledgement' : 'expired'); }, settings.candidateMS);
     void (async () => {
       try {
@@ -165,7 +185,7 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
         c.silenceMS = loud ? 0 : c.silenceMS + duration;
         if (c.elapsedMS >= settings.candidateMS) { close(c.intent === 'acknowledgement' ? 'acknowledgement' : 'expired'); return; }
         // A click can briefly open a candidate but cannot duck the whole reply．
-        if (c.silenceMS >= settings.gapMS && c.speechMS < settings.minimumSpeechMS) { close('noise'); return; }
+        if (c.silenceMS >= settings.gapMS && (modelActivity ? (!c.modelHasSpeech && c.elapsedMS >= 400) : c.speechMS < settings.minimumSpeechMS)) { close('noise'); return; }
         queue(c, data);
         return;
       }

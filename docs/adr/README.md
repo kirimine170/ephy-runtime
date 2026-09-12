@@ -15,5 +15,6 @@
 | [ADR-0012](ADR-0012-custom-voice-tts.md) | VoiceProfileと独立Inference serviceで句単位TTSを実現する | Implemented，voice品質受入れは別途 |
 | [ADR-0013](ADR-0013-irodori-experimental-provider.md) | Irodori-TTSを第3のexperimental providerとして隔離する | Implemented，production採用は別途 |
 | [ADR-0014](ADR-0014-runtime-conversation-diary-boundaries.md) | C1〜C3の入力・回答・記録を分離し，Karte v2へ限定policyで保存する | Accepted for implementation，Step 0設計 |
+| [ADR-0015](ADR-0015-local-whisper-asr.md) | 常駐Whisperを交換可能なローカルASRとして接続する | Implemented，自然会話の品質受入は未完了 |
 
 新しい判断は，連番のADRとして追加する．既存ADRの判断を変更する場合は本文を上書きせず，新しいADRで置換関係を示す．

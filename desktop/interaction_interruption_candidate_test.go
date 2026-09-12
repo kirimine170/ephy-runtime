@@ -312,3 +312,41 @@ func TestInterruptionCandidateTimingIsSeparateFromLocalStopAndBounded(t *testing
 		t.Fatal("recognition wait hidden inside local stop metric")
 	}
 }
+
+func TestInterruptionCandidateKeepsTextAcrossModelActivityUpdates(t *testing.T) {
+	p := &activityEngineProvider{}
+	e, old := candidateFixture(t, p)
+	c, err := e.BeginInterruptionCandidate(old.OperationID, interactionID("candidate_"), 1, 16000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := p.sessions[0]
+	native.emit(native.update(1, "partial", "待って"))
+	a := native.update(2, "activity", "")
+	a.Activity = &ASRAudioActivity{AudioMS: 192, LastSpeechMS: 192, SpeechMS: 192, Probability: .9, HasSpeech: true, Speaking: true}
+	native.emit(a)
+	got, err := e.AppendInterruptionCandidate(old.OperationID, c.CandidateID, 1, make([]byte, 6400))
+	if err != nil || got.Update == nil || got.Update.Transcript != "待って" || got.Activity == nil || got.Activity.Activity.SpeechMS != 192 {
+		t.Fatal("activity discarded candidate text", got, err)
+	}
+	assertCandidateReplyLive(t, e, old.OperationID)
+}
+
+func TestModelVADInterruptionPCMCapMatchesThreeSecondHandoff(t *testing.T) {
+	p := &activityEngineProvider{}
+	e, old := candidateFixture(t, p)
+	c, err := e.BeginInterruptionCandidate(old.OperationID, interactionID("candidate_"), 1, 16000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.AppendInterruptionCandidate(old.OperationID, c.CandidateID, 1, make([]byte, 64000)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.AppendInterruptionCandidate(old.OperationID, c.CandidateID, 2, make([]byte, 32000)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.AppendInterruptionCandidate(old.OperationID, c.CandidateID, 3, []byte{0, 0}); err == nil {
+		t.Fatal("candidate exceeded three-second bound")
+	}
+	assertCandidateReplyLive(t, e, old.OperationID)
+}

@@ -21,6 +21,12 @@ const STATUS = {
   INCOMPLETE: '応答は未完了です．続きを生成するか，テキスト入力で続行できます．',
 };
 const FAILURES = {
+  asr_loading: '音声認識モデルを準備しています．準備が終わると開始できます．',
+  asr_model_missing: '音声認識モデルが見つかりません．ASR設定を確認してください．',
+  asr_model_mismatch: '音声認識モデルを確認できません．ASR設定を確認してください．',
+  asr_model_load_failed: '音声認識モデルを読み込めませんでした．ASR設定を確認してください．',
+  asr_worker_exited: '音声認識が停止しました．準備が終わったら再開してください．',
+  asr_busy: '音声認識の終了処理を待っています．少し待って再開してください．',
   input_handoff_overflow: '割込み発話の引継ぎが間に合わなかったため会話を一時停止しました．再開してもう一度話すか，テキスト入力を利用できます．',
   utterance_limit: '発話の上限に達したため会話を一時停止しました．認識中の内容をテキストへ戻して確認できます．',
   voice_profile_unavailable: '選択した声を利用できません．声を選び直すか，テキスト入力を利用できます．',
@@ -52,14 +58,15 @@ const MAX_ASR_SAMPLE_RATE = 48000;
 const MAX_ASR_CHUNK_BYTES = 64 * 1024;
 const MAX_ASR_QUEUE_BYTES = 128 * 1024;
 const MAX_ASR_TEXT_LENGTH = 16000;
-const ASR_PHASES = new Set(['partial', 'stable', 'final', 'failure', 'timeout', 'canceled']);
+const ASR_PHASES = new Set(['partial', 'stable', 'final', 'failure', 'timeout', 'canceled', 'activity', 'no_speech']);
 const MAX_PLAYBACK_BYTES = 16 * 1024 * 1024;
 const MAX_PLAYBACK_CHUNK_BYTES = 8 * 1024 * 1024;
 const MAX_PLAYBACK_CHUNKS = 64;
 const MAX_EARLY_EVENT_BYTES = Math.ceil(MAX_PLAYBACK_BYTES / 3) * 4 + 512 * 1024;
-const READINESS_ERROR_CODES = new Set(['asr_unavailable', 'asr_permission_denied', 'asr_permission_restricted', 'asr_on_device_unavailable', 'asr_timeout', 'asr_canceled', 'invalid_voice_config']);
+const READINESS_ERROR_CODES = new Set(['asr_loading', 'asr_model_missing', 'asr_model_mismatch', 'asr_model_load_failed', 'asr_worker_exited', 'asr_busy', 'asr_unavailable', 'asr_permission_denied', 'asr_permission_restricted', 'asr_on_device_unavailable', 'asr_timeout', 'asr_canceled', 'invalid_voice_config']);
 const VOICE_PROFILE_ERROR_CODES = new Set(['voice_profile_unavailable', 'invalid_voice_profile', 'unsupported_voice_control']);
 const ASR_BRIDGE_ERROR_CODES = new Set([
+  ...READINESS_ERROR_CODES,
   'asr_failed', 'asr_backpressure', 'asr_protocol_error', 'asr_timeout', 'asr_canceled', 'asr_unavailable',
   'asr_on_device_unavailable', 'asr_permission_denied', 'asr_permission_restricted', 'asr_stream_invalid',
   'asr_stream_eof', 'asr_empty_transcript', 'asr_empty_result', 'invalid_audio', 'invalid_voice_config',
@@ -73,6 +80,7 @@ function asrBridgeErrorCode(error, fallback) {
 }
 
 export function voiceStatusText(snapshot) {
+  if (snapshot?.input_outcome === 'no_speech') return '発話はありませんでした．次の音声入力を開始できます．';
   if (snapshot?.state === 'FAILED') {
     return FAILURES[snapshot.error_code] || '音声対話を完了できませんでした．テキスト入力を利用できます．';
   }
@@ -244,6 +252,18 @@ export function mountVoiceInteraction({
   const record = root?.querySelector('#voice-record');
   const cancelButton = root?.querySelector('#voice-cancel');
   const status = root?.querySelector('#voice-status');
+  const asrStatus = root?.querySelector('#voice-asr-status');
+  let asrReadiness = null, readinessTimer = null;
+  async function refreshReadiness() {
+    if (disposed || !asrStatus || typeof bridge.GetInteractionASRReadiness !== 'function') return;
+    try { asrReadiness = await bridge.GetInteractionASRReadiness(); }
+    catch { asrReadiness = {state: 'unavailable', error_code: 'asr_unavailable'}; }
+    if (disposed) return;
+    render();
+    if (asrReadiness?.state === 'loading' || asrReadiness?.error_code === 'asr_worker_exited') {
+      readinessTimer = timers.setTimeout(refreshReadiness, 1000);
+    }
+  }
   const fallback = root?.querySelector('#voice-fallback');
   const liveTranscript = root?.querySelector('#voice-live-transcript');
   const stableTranscript = root?.querySelector('#voice-transcript-stable');
@@ -356,12 +376,16 @@ export function mountVoiceInteraction({
   function render() {
     const continuous = voice && voice.state !== 'stopped';
     const recording = live(current) && current.recording;
-    if (sessionButton) { sessionButton.disabled = sessionCapturePending || !!continuous || active() || !canStart(); sessionButton.textContent = '会話を開始'; }
+    const asrLoading = asrReadiness?.state === 'loading';
+    if (asrStatus) asrStatus.textContent = asrReadiness?.provider === 'whisper-cpp'
+      ? `音声認識：Whisper ${asrReadiness.model || ''} · ${asrLoading ? '準備中' : asrReadiness.can_start ? '準備完了' : '利用できません'}`
+      : asrReadiness ? '音声認識：Apple（端末内）' : '音声認識を確認中';
+    if (sessionButton) { sessionButton.disabled = asrLoading || sessionCapturePending || !!continuous || active() || !canStart(); sessionButton.textContent = '会話を開始'; }
     if (pauseButton) { pauseButton.disabled = !continuous || voice.changing || (voice.state === 'paused' && !canStart()); pauseButton.textContent = voice?.state === 'paused' ? '会話を再開' : '一時停止'; }
     if (endButton) endButton.disabled = !continuous || voice.changing;
     if (record) {
       record.hidden = !!continuous;
-      record.disabled = !!continuous || (active() && !recording);
+      record.disabled = !!continuous || (active() && !recording) || (asrLoading && !recording);
       record.textContent = recording ? '録音を停止して送信' : '音声入力';
       record.setAttribute('aria-label', recording ? '録音を停止して送信' : '音声入力を開始');
       record.setAttribute('aria-pressed', String(!!recording));
@@ -464,6 +488,7 @@ export function mountVoiceInteraction({
       delete snapshot.transcript;
     }
     run.snapshot = {...run.snapshot, ...snapshot};
+    if (snapshot.input_outcome === 'no_speech' && snapshot.state === 'CANCELED') run.relisten = true;
     if (run.voice && snapshot.state === 'FAILED' && !run.snapshot.transcript) run.snapshot.preview = run.liveTranscript;
     notifyTranscript(run, run.snapshot.transcript);
     if (run.voice && snapshot.state === 'COMPLETED' && run.interruptionGuard?.transfer()) {
@@ -476,7 +501,7 @@ export function mountVoiceInteraction({
     if (run.snapshot.state === 'COMPLETED') onComplete(run.snapshot);
     else if (run.snapshot.state === 'INCOMPLETE') onIncomplete(run.snapshot);
     else if (run.snapshot.state === 'FAILED') onFailure(run.snapshot);
-    else if (run.snapshot.state === 'CANCELED') onCancel(run.snapshot);
+    else if (run.snapshot.state === 'CANCELED' && run.snapshot.input_outcome !== 'no_speech') onCancel(run.snapshot);
     if (run.voice && run.voice === voice && voice.running && run.voiceEpoch === voice.localEpoch) {
       if (run.snapshot.state === 'COMPLETED' || run.relisten) {
         voice.lastActivity = run.endpoint?.speech ? now() : voice.lastActivity;
@@ -553,12 +578,14 @@ export function mountVoiceInteraction({
     };
     run.resolveIdentity = ready;
     current = run;
+    const modelActivity = continuous && run.voice.asrActivity;
+    const guardSettings = modelActivity ? interruptionSettings(interruptionConfig, true) : interruptionConfigResolved;
     if (continuous) run.interruptionGuard = createVoiceInterruption({
       bridge, identity: () => run.snapshot, sampleRate: run.voice.inputContext.sampleRate,
       buffer: run.voice.pcm, createEncoder: createPCM16StreamEncoder, encodeBase64, now, timers,
-      settings: interruptionConfigResolved, isCurrent: () => attached(run),
+      settings: guardSettings, modelActivity, isCurrent: () => attached(run),
       phase: () => run.playing ? 'PLAYING' : run.snapshot.state,
-      onDuck: duck => { if (run.outputGain) run.outputGain.gain.value = duck ? interruptionConfigResolved.duckVolume : 1; render(); },
+      onDuck: duck => { if (run.outputGain) run.outputGain.gain.value = duck ? guardSettings.duckVolume : 1; render(); },
       onConfirm: ({candidateMS}) => {
         const v = run.voice;
         if (!attached(run)) return;
@@ -676,7 +703,9 @@ export function mountVoiceInteraction({
       if (getSessionID && getSessionID() !== conversationID) { await changeSession('end'); return false; }
       const readiness = await bridge.GetInteractionASRReadiness();
       if (!valid()) return false;
+      asrReadiness = readiness; render();
       if (!readiness?.can_start) throw new Error(readiness?.error_code || 'asr_unavailable');
+      v.asrActivity = readiness.capabilities?.activity === true;
       v.permissionPending = true; render();
       let stream;
       sessionCapturePending = true;
@@ -684,7 +713,7 @@ export function mountVoiceInteraction({
       finally { sessionCapturePending = false; render(); }
       if (!valid()) { stopTracks(stream); return false; }
       v.stream = stream; v.permissionPending = false;
-      v.pcm = createVoiceInputBuffer(v.inputContext.sampleRate);
+      v.pcm = createVoiceInputBuffer(v.inputContext.sampleRate, v.asrActivity ? 3000 : 2000);
       v.input = v.inputContext.createMediaStreamSource(stream);
       v.processor = v.inputContext.createScriptProcessor(1024, 1, 1);
       v.mute = v.inputContext.createGain(); v.mute.gain.value = 0;
@@ -701,7 +730,7 @@ export function mountVoiceInteraction({
         }
         if (!attached(run) || run.voice !== v) return;
         if (run.recording && !run.endPromise) {
-          if (run.endpoint.speech) feedContinuous(run, data);
+          if (run.activityMode || run.endpoint.speech) feedContinuous(run, data);
           else {
             v.pcm.push(data);
             run.endpoint.audio(data, rate);
@@ -731,7 +760,10 @@ export function mountVoiceInteraction({
     run.endpoint.audio(data, rate);
     if (hadSpeech !== run.endpoint.speech) render();
     if (run.endpoint.speech) run.voice.lastActivity = now();
-    if (run.samples + data.length > rate * 60) { void fail(run, 'utterance_limit'); return false; }
+    if (run.samples + data.length > rate * (run.endpoint.speech ? 60 : 59)) {
+      if (run.activityMode && !run.endpoint.speech) { void endCapture(run, 'idle_refresh'); return false; }
+      void fail(run, 'utterance_limit'); return false;
+    }
     run.samples += data.length;
     return queueInput(run, run.encoder.push(data));
   }
@@ -761,10 +793,14 @@ export function mountVoiceInteraction({
     const wasCandidate = run.endpoint.candidate;
     const decision = run.endpoint.tick();
     if (decision === 'limit') { void fail(run, 'utterance_limit'); return; }
-    if (decision === 'endpoint') { void endCapture(run); return; }
+    if (decision === 'endpoint') { void endCapture(run, 'silence'); return; }
     if (!run.endpoint.speech) {
       if (now() - run.voice.lastActivity >= config.idlePauseMS) { void changeSession('pause', '5分間発話がなかったため会話を一時停止しました．'); return; }
-      if (now() - run.listeningAt >= config.idleRefreshMS) { run.relisten = true; void cancelRun(); return; }
+      if (now() - run.listeningAt >= Math.min(config.idleRefreshMS, run.activityMode ? 59000 : 60000)) {
+        run.relisten = true;
+        if (run.activityMode && run.samples) void endCapture(run, 'idle_refresh'); else void cancelRun();
+        return;
+      }
     }
     if (wasCandidate !== run.endpoint.candidate) render();
     run.endpointTimer = timers.setTimeout(() => tickEndpoint(run), config.pollMS);
@@ -791,16 +827,20 @@ export function mountVoiceInteraction({
     // Readiness owns no backend turn．A canceled or detached check must not
     // create an operation or ask for microphone access when it returns late．
     if (!live(run)) return false;
+    asrReadiness = readiness;
     if (getSessionID && getSessionID() !== request.session_id) {
       await cancel();
       return false;
     }
     if (!readiness?.can_start || !['ready', 'permission_required'].includes(readiness.state) || readiness.error_code) {
       run.resolveIdentity(null);
-      await fail(run, READINESS_ERROR_CODES.has(readiness?.error_code) ? readiness.error_code : 'asr_unavailable');
+      await fail(run, readiness?.state === 'loading' ? 'asr_loading' : READINESS_ERROR_CODES.has(readiness?.error_code) ? readiness.error_code : 'asr_unavailable');
       return false;
     }
     run.readinessState = readiness.state;
+    run.activityMode = readiness.capabilities?.activity === true;
+    run.noSpeechMode = readiness.capabilities?.no_speech === true;
+    run.endpoint?.setActivityMode(run.activityMode);
     run.operationRequested = true;
     let pending;
     try { pending = bridge.StartInteraction(request); } catch { pending = Promise.reject(new Error('start_failed')); }
@@ -813,6 +853,8 @@ export function mountVoiceInteraction({
     run.asrOpenPending = true;
     render();
     try {
+      const captureRate = run.voice ? run.voice.inputContext.sampleRate : run.context.sampleRate;
+      if (run.activityMode && captureRate > MAX_ASR_SAMPLE_RATE) throw new Error('invalid_audio');
       run.encoder = createPCM16StreamEncoder(run.voice ? run.voice.inputContext.sampleRate : run.context.sampleRate);
       const session = await bridge.BeginInteractionASR(run.snapshot.operation_id, run.encoder.outputRate);
       if (!attached(run)) return false;
@@ -834,6 +876,7 @@ export function mountVoiceInteraction({
       return false;
     }
     if (run.voice) {
+      recordCaptureSettings(run, run.voice.stream, run.voice.inputContext);
       run.recording = true; run.voice.state = 'listening'; run.listeningAt = now();
       if (!await drainHandoff(run)) return false;
       tickEndpoint(run); render(); return true;
@@ -841,10 +884,11 @@ export function mountVoiceInteraction({
     run.permissionPending = true;
     render();
     try {
-      const stream = await mediaDevices.getUserMedia({audio: {channelCount: 1}, video: false});
+      const stream = await mediaDevices.getUserMedia({audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false}, video: false});
       // Permission prompts can resolve after cancellation or a later turn．
       if (!attached(run) || run.endPromise) { stopTracks(stream); return false; }
       run.stream = stream;
+      recordCaptureSettings(run, stream, run.context);
       run.input = run.context.createMediaStreamSource(stream);
       run.processor = run.context.createScriptProcessor(4096, 1, 1);
       run.mute = run.context.createGain();
@@ -863,12 +907,12 @@ export function mountVoiceInteraction({
           run.samples += count;
           if (!queueInput(run, run.encoder.push(input.subarray(0, count)))) return;
         }
-        if (run.samples >= maxSamples) void stop();
+        if (run.samples >= maxSamples) void endCapture(run, 'duration_limit');
       };
       for (const track of stream.getTracks()) {
         track.onended = () => { if (live(run) && run.recording) void fail(run, 'microphone_failed'); };
       }
-      run.timer = timers.setTimeout(() => { if (live(run) && run.recording) void stop(); }, MAX_RECORDING_MS);
+      run.timer = timers.setTimeout(() => { if (live(run) && run.recording) void endCapture(run, 'duration_limit'); }, MAX_RECORDING_MS);
       render();
       return true;
     } catch (error) {
@@ -930,7 +974,21 @@ export function mountVoiceInteraction({
     return true;
   }
 
-  function endCapture(run) {
+  function recordCaptureSettings(run, stream, context) {
+    if (typeof bridge.RecordInteractionAudioCapture !== 'function') return;
+    try {
+      const settings = stream?.getAudioTracks?.()[0]?.getSettings?.() || {};
+      const metadata = {context_sample_rate: context.sampleRate};
+      for (const [source, target] of [['sampleRate', 'track_sample_rate'], ['channelCount', 'channel_count']]) {
+        if (Number.isSafeInteger(settings[source])) metadata[target] = settings[source];
+      }
+      for (const [source, target] of [['echoCancellation', 'echo_cancellation'], ['noiseSuppression', 'noise_suppression'], ['autoGainControl', 'auto_gain_control']]) {
+        if (typeof settings[source] === 'boolean') metadata[target] = settings[source];
+      }
+      Promise.resolve(bridge.RecordInteractionAudioCapture(run.snapshot.operation_id, metadata)).catch(() => {});
+    } catch { /* Missing browser settings do not block input． */ }
+  }
+  function endCapture(run, reason = 'manual') {
     if (run.endPromise) return run.endPromise;
     if (!attached(run) || !run.asrSession) return Promise.resolve(false);
     const tail = run.encoder.finish();
@@ -944,7 +1002,8 @@ export function mountVoiceInteraction({
       if (!attached(run)) return false;
       try {
         run.endRequested = true;
-        await bridge.EndInteractionASR(run.snapshot.operation_id);
+        if (typeof bridge.EndInteractionASRWithReason === 'function') await bridge.EndInteractionASRWithReason(run.snapshot.operation_id, reason);
+        else await bridge.EndInteractionASR(run.snapshot.operation_id);
         return attached(run) || ['COMPLETED', 'INCOMPLETE'].includes(run.snapshot.state);
       } catch (error) {
         await fail(run, asrBridgeErrorCode(error, 'asr_failed'));
@@ -1104,6 +1163,18 @@ export function mountVoiceInteraction({
     }
     run.asrRevision = update.revision;
     run.asrMonotonicMS = update.monotonic_ms;
+    if (update.phase === 'activity') {
+      if (!run.activityMode || update.error_code || !update.activity) { void fail(run, 'asr_protocol_error'); return; }
+      if (run.endpoint?.activity(update.activity)) {
+        if (update.activity.speaking) run.voice.lastActivity = now();
+        render();
+      }
+      return;
+    }
+    if (update.phase === 'no_speech') {
+      if (!run.noSpeechMode || !run.endRequested || update.error_code) { void fail(run, 'asr_protocol_error'); return; }
+      run.asrPhase = update.phase; run.liveTranscript = run.stablePrefix = ''; render(); return;
+    }
     run.asrPhase = update.phase;
     if (['failure', 'timeout'].includes(update.phase)) {
       void fail(run, update.phase === 'timeout' ? 'asr_timeout'
@@ -1121,7 +1192,7 @@ export function mountVoiceInteraction({
       // A provider-final seals that ASR．Unsent handoff PCM cannot silently be
       // discarded or attributed to its partial result．Pause with text fallback．
       if (run.voice?.pcm.holding && run.voice.pcm.samples > 0) { void fail(run, 'asr_protocol_error'); return; }
-      if (!run.voice || run.endpoint.providerFinal()) void endCapture(run);
+      if (!run.voice || run.endpoint.providerFinal()) void endCapture(run, 'provider_final');
       else if (!run.endPromise) { run.relisten = true; void cancelRun(); }
     }
   }
@@ -1220,6 +1291,7 @@ export function mountVoiceInteraction({
   fallback?.addEventListener('click', onFallbackClick);
   const unsubscribe = subscribe(receive);
   render();
+  void refreshReadiness();
   return {
     start, stop, cancel, adopt, startSession, pauseSession: () => changeSession('pause'), endSession: () => changeSession('end'),
     get sessionSnapshot() { return voice ? {...voice.snapshot, state: voice.state} : null; },
@@ -1236,6 +1308,7 @@ export function mountVoiceInteraction({
       if (typeof unsubscribe === 'function') unsubscribe();
       const pending = cancel();
       disposed = true;
+      if (readinessTimer != null) timers.clearTimeout(readinessTimer);
       await pending;
     },
   };

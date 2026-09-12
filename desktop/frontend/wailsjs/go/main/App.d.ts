@@ -50,6 +50,8 @@ export function Embeddings(arg1:main.EmbeddingRequest):Promise<Record<string, an
 
 export function EndInteractionASR(arg1:string):Promise<void>;
 
+export function EndInteractionASRWithReason(arg1:string,arg2:string):Promise<void>;
+
 export function Eval(arg1:main.EvalRequest):Promise<main.EvalResponse>;
 
 export function ExportInteractionEvaluations(arg1:string):Promise<main.ExportResultResponse>;
@@ -135,6 +137,8 @@ export function Query(arg1:main.QueryRequest):Promise<main.QueryResponse>;
 export function ReadExportedResult(arg1:main.ExportedFileRequest):Promise<main.ExportedFileContent>;
 
 export function RecordExecution(arg1:main.ExecutionHistoryItem):Promise<Array<main.ExecutionHistoryItem>>;
+
+export function RecordInteractionAudioCapture(arg1:string,arg2:main.ASRCaptureMetadata):Promise<void>;
 
 export function RecordInteractionFeedback(arg1:string):Promise<main.InteractionEvaluationRecord>;
 

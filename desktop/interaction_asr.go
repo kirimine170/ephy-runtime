@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"strings"
 	"sync"
@@ -12,15 +13,65 @@ import (
 // ASRMetadata contains measurements only．No hypothesis crosses the trace boundary．
 // Latencies use the Runtime session clock，not the adapter's clock origin．
 type ASRMetadata struct {
-	Provider       string `json:"provider,omitempty"`
-	ModelRevision  string `json:"model_revision,omitempty"`
-	RevisionCount  int    `json:"revision_count"`
-	CharacterCount int    `json:"character_count"`
-	FirstAudioMS   *int64 `json:"first_audio_ms,omitempty"`
-	FirstPartialMS *int64 `json:"first_partial_ms,omitempty"`
-	FirstStableMS  *int64 `json:"first_stable_ms,omitempty"`
-	FinalMS        *int64 `json:"final_ms,omitempty"`
-	FinalizationMS *int64 `json:"finalization_ms,omitempty"`
+	Provider        string              `json:"provider,omitempty"`
+	ModelRevision   string              `json:"model_revision,omitempty"`
+	RevisionCount   int                 `json:"revision_count"`
+	CharacterCount  int                 `json:"character_count"`
+	FirstAudioMS    *int64              `json:"first_audio_ms,omitempty"`
+	FirstPartialMS  *int64              `json:"first_partial_ms,omitempty"`
+	FirstStableMS   *int64              `json:"first_stable_ms,omitempty"`
+	FinalMS         *int64              `json:"final_ms,omitempty"`
+	FinalizationMS  *int64              `json:"finalization_ms,omitempty"`
+	InputSampleRate int                 `json:"input_sample_rate,omitempty"`
+	InputSamples    int                 `json:"input_samples,omitempty"`
+	ClippedSamples  int                 `json:"clipped_samples,omitempty"`
+	VADAudioMS      int                 `json:"vad_audio_ms,omitempty"`
+	VADSpeechMS     int                 `json:"vad_speech_ms,omitempty"`
+	VADLastSpeechMS int                 `json:"vad_last_speech_ms,omitempty"`
+	Diagnostic      *ASRDiagnostic      `json:"diagnostic,omitempty"`
+	Capture         *ASRCaptureMetadata `json:"capture,omitempty"`
+	EndpointReason  string              `json:"endpoint_reason,omitempty"`
+}
+
+// Actual browser-reported settings only．Device names and IDs are excluded．
+type ASRCaptureMetadata struct {
+	ContextSampleRate int   `json:"context_sample_rate"`
+	TrackSampleRate   int   `json:"track_sample_rate,omitempty"`
+	ChannelCount      int   `json:"channel_count,omitempty"`
+	EchoCancellation  *bool `json:"echo_cancellation,omitempty"`
+	NoiseSuppression  *bool `json:"noise_suppression,omitempty"`
+	AutoGainControl   *bool `json:"auto_gain_control,omitempty"`
+}
+
+func cloneASRCapture(m *ASRCaptureMetadata) *ASRCaptureMetadata {
+	if m == nil {
+		return nil
+	}
+	c := *m
+	copyBool := func(b *bool) *bool {
+		if b == nil {
+			return nil
+		}
+		v := *b
+		return &v
+	}
+	c.EchoCancellation = copyBool(m.EchoCancellation)
+	c.NoiseSuppression = copyBool(m.NoiseSuppression)
+	c.AutoGainControl = copyBool(m.AutoGainControl)
+	return &c
+}
+func (e *InteractionEngine) RecordASRCapture(op string, m ASRCaptureMetadata) error {
+	if m.ContextSampleRate < 8000 || m.ContextSampleRate > 192000 || (m.TrackSampleRate != 0 && (m.TrackSampleRate < 8000 || m.TrackSampleRate > 192000)) || m.ChannelCount < 0 || m.ChannelCount > 32 {
+		return errors.New("invalid_audio")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t := e.turns[op]
+	if t == nil || !e.liveLocked(t) || t.asr == nil || t.asr.metadata.Capture != nil {
+		return errors.New("asr_canceled")
+	}
+	t.asr.metadata.Capture = cloneASRCapture(&m)
+	return nil
 }
 
 func cloneASRMetadata(v *ASRMetadata) *ASRMetadata {
@@ -37,6 +88,11 @@ func cloneASRMetadata(v *ASRMetadata) *ASRMetadata {
 	}
 	c.FirstAudioMS, c.FirstPartialMS, c.FirstStableMS = copyMS(v.FirstAudioMS), copyMS(v.FirstPartialMS), copyMS(v.FirstStableMS)
 	c.FinalMS, c.FinalizationMS = copyMS(v.FinalMS), copyMS(v.FinalizationMS)
+	c.Capture = cloneASRCapture(v.Capture)
+	if v.Diagnostic != nil {
+		d := *v.Diagnostic
+		c.Diagnostic = &d
+	}
 	return &c
 }
 
@@ -52,6 +108,8 @@ type interactionASRSession struct {
 	stablePrefix                  string
 	final                         *ASRUpdate
 	pending                       *ASRUpdate
+	pendingActivity               *ASRUpdate
+	activityMode, speechObserved  bool
 	completed                     bool
 	metadata                      ASRMetadata
 }
@@ -95,7 +153,7 @@ func (e *InteractionEngine) BeginASR(op string, sampleRate int) (ASRSessionReque
 		parent = e.voiceSession.ctx
 	}
 	ctx, cancel := context.WithTimeout(parent, 125*time.Second)
-	a := &interactionASRSession{ctx: ctx, cancel: cancel, started: time.Now(), lastMonotonicMS: -1,
+	a := &interactionASRSession{ctx: ctx, cancel: cancel, started: time.Now(), lastMonotonicMS: -1, activityMode: asrCapabilities(e.asr).Activity,
 		request: ASRSessionRequest{OperationID: op, SessionID: t.snapshot.SessionID, TurnID: t.snapshot.TurnID, SegmentID: interactionID("segment_"), SampleRate: sampleRate}}
 	t.asr = a
 	e.traceLocked(t, "asr_started", "")
@@ -198,8 +256,16 @@ func (e *InteractionEngine) AppendASRAudio(op string, sequence int, pcm []byte) 
 		return errors.New("invalid_audio")
 	}
 	a.sequence, a.bytes = sequence, a.bytes+len(pcm)
+	a.metadata.InputSampleRate = a.request.SampleRate
+	a.metadata.InputSamples += len(pcm) / 2
+	for offset := 0; offset < len(pcm); offset += 2 {
+		sample := int16(binary.LittleEndian.Uint16(pcm[offset : offset+2]))
+		if sample >= 32760 || sample <= -32760 {
+			a.metadata.ClippedSamples++
+		}
+	}
 	if a.metadata.FirstAudioMS == nil {
-		if t.request.VoiceSessionID != "" {
+		if t.request.VoiceSessionID != "" && !a.activityMode {
 			e.traceLocked(t, "user_speech_start", "")
 		}
 		ms := time.Since(a.started).Milliseconds()
@@ -222,6 +288,14 @@ func (e *InteractionEngine) AppendASRAudio(op string, sequence int, pcm []byte) 
 }
 
 func (e *InteractionEngine) EndASR(op string) error {
+	return e.EndASRWithReason(op, "manual")
+}
+func (e *InteractionEngine) EndASRWithReason(op, reason string) error {
+	switch reason {
+	case "manual", "silence", "provider_final", "idle_refresh", "duration_limit":
+	default:
+		return errors.New("invalid_audio")
+	}
 	t, a, err := e.asrForInput(op)
 	if err != nil {
 		return err
@@ -242,6 +316,7 @@ func (e *InteractionEngine) EndASR(op string) error {
 		e.voiceSession.snapshot.State = "responding"
 	}
 	a.ended = time.Now()
+	a.metadata.EndpointReason = reason
 	e.traceLocked(t, "user_speech_end", "")
 	e.traceLocked(t, "endpoint_commit", "")
 	_ = e.transitionLocked(t, "TRANSCRIBING")
@@ -268,7 +343,7 @@ func (e *InteractionEngine) finishASR(t *interactionTurn, a *interactionASRSessi
 		e.mu.Unlock()
 		return
 	}
-	if a.final == nil || final != *a.final || final.Phase != "final" {
+	if a.final == nil || !sameASRFinal(final, *a.final) || (final.Phase != "final" && final.Phase != "no_speech") {
 		e.failLocked(t, "asr_stream_invalid")
 		e.mu.Unlock()
 		return
@@ -277,9 +352,30 @@ func (e *InteractionEngine) finishASR(t *interactionTurn, a *interactionASRSessi
 	a.metadata.FinalizationMS = &ms
 	a.completed = true
 	a.cancel()
+	if final.Phase == "no_speech" {
+		t.snapshot.InputOutcome = "no_speech"
+		if e.validVoiceSessionLocked(t.request) && e.voiceSession != nil {
+			e.voiceSession.snapshot.State = "listening"
+		}
+		_ = e.transitionLocked(t, "CANCELING")
+		e.finishLocked(t, "CANCELED", "asr_no_speech", "")
+		e.mu.Unlock()
+		return
+	}
 	text := final.Transcript
 	e.mu.Unlock()
 	e.acceptTranscript(t, text)
+}
+
+func sameASRFinal(a, b ASRUpdate) bool {
+	if (a.Diagnostic == nil) != (b.Diagnostic == nil) {
+		return false
+	}
+	if a.Diagnostic != nil && *a.Diagnostic != *b.Diagnostic {
+		return false
+	}
+	a.Diagnostic, b.Diagnostic = nil, nil
+	return a == b
 }
 
 func asrStreamError(err error) string {
@@ -291,7 +387,7 @@ func asrStreamError(err error) string {
 	}
 	if err != nil {
 		switch err.Error() {
-		case "asr_stream_invalid", "asr_stream_eof", "asr_timeout", "asr_canceled", "asr_unavailable", "asr_on_device_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_empty_result", "asr_empty_transcript", "invalid_audio", "invalid_voice_config":
+		case "asr_stream_invalid", "asr_stream_eof", "asr_timeout", "asr_canceled", "asr_unavailable", "asr_on_device_unavailable", "asr_permission_denied", "asr_permission_restricted", "asr_empty_result", "asr_empty_transcript", "invalid_audio", "invalid_voice_config", "asr_model_missing", "asr_model_mismatch", "asr_model_load_failed", "asr_loading", "asr_worker_exited", "asr_busy":
 			return err.Error()
 		}
 	}
@@ -313,6 +409,10 @@ func (e *InteractionEngine) receiveASR(t *interactionTurn, a *interactionASRSess
 		e.failLocked(t, "asr_stream_invalid")
 		return
 	}
+	if !validASRDiagnostic(update.Diagnostic) || (update.Diagnostic != nil && (update.Provider != "macos-speech" || (update.Phase != "failure" && update.Phase != "final"))) {
+		e.failLocked(t, "asr_stream_invalid")
+		return
+	}
 	if update.Revision > maxASRRevisions || update.MonotonicMS < a.lastMonotonicMS || update.MonotonicMS < 0 || !interactionIdentifier.MatchString(update.Provider) || !interactionMetadataID.MatchString(update.ModelRevision) || !utf8.ValidString(update.Transcript) || !utf8.ValidString(update.StablePrefix) || len(update.Transcript) > 16<<10 || !strings.HasPrefix(update.Transcript, update.StablePrefix) {
 		e.failLocked(t, "asr_stream_invalid")
 		return
@@ -322,13 +422,24 @@ func (e *InteractionEngine) receiveASR(t *interactionTurn, a *interactionASRSess
 		return
 	}
 	switch update.Phase {
+	case "activity":
+		if !a.activityMode || !validASRActivity(update.Activity) || update.Activity.AudioMS < a.metadata.VADAudioMS || update.Activity.SpeechMS < a.metadata.VADSpeechMS || update.Activity.LastSpeechMS < a.metadata.VADLastSpeechMS ||
+			update.Activity.AudioMS > a.metadata.InputSamples*1000/a.request.SampleRate+32 || (a.speechObserved && !update.Activity.HasSpeech) || update.Transcript != "" || update.StablePrefix != "" || update.ErrorCode != "" {
+			e.failLocked(t, "asr_stream_invalid")
+			return
+		}
+	case "no_speech":
+		if !asrCapabilities(e.asr).NoSpeech || a.ended.IsZero() || update.Transcript != "" || update.StablePrefix != "" || update.ErrorCode != "" || update.Activity != nil {
+			e.failLocked(t, "asr_stream_invalid")
+			return
+		}
 	case "partial", "stable", "final":
-		if update.ErrorCode != "" || (update.Phase == "final" && (strings.TrimSpace(update.Transcript) == "" || update.StablePrefix != update.Transcript)) || (update.Phase == "stable" && update.StablePrefix == "") || !strings.HasPrefix(update.StablePrefix, a.stablePrefix) {
+		if update.Activity != nil || update.ErrorCode != "" || (update.Phase == "final" && (strings.TrimSpace(update.Transcript) == "" || update.StablePrefix != update.Transcript)) || (update.Phase == "stable" && update.StablePrefix == "") || !strings.HasPrefix(update.StablePrefix, a.stablePrefix) {
 			e.failLocked(t, "asr_stream_invalid")
 			return
 		}
 	case "failure", "timeout", "canceled":
-		if update.Transcript != "" || update.StablePrefix != "" {
+		if update.Transcript != "" || update.StablePrefix != "" || update.Activity != nil {
 			e.failLocked(t, "asr_stream_invalid")
 			return
 		}
@@ -339,6 +450,30 @@ func (e *InteractionEngine) receiveASR(t *interactionTurn, a *interactionASRSess
 	a.lastRevision, a.lastMonotonicMS = update.Revision, update.MonotonicMS
 	a.metadata.Provider, a.metadata.ModelRevision = update.Provider, update.ModelRevision
 	a.metadata.RevisionCount++
+	if update.Diagnostic != nil {
+		d := *update.Diagnostic
+		update.Diagnostic = &d
+		a.metadata.Diagnostic = &d
+	}
+	if update.Phase == "activity" {
+		activity := *update.Activity
+		update.Activity = &activity
+		a.metadata.VADAudioMS = activity.AudioMS
+		a.metadata.VADSpeechMS = activity.SpeechMS
+		a.metadata.VADLastSpeechMS = activity.LastSpeechMS
+		if activity.HasSpeech && !a.speechObserved {
+			a.speechObserved = true
+			if t.request.VoiceSessionID != "" {
+				e.traceLocked(t, "user_speech_start", "")
+			}
+		}
+		a.pendingActivity = &update
+		select {
+		case e.asrWake <- struct{}{}:
+		default:
+		}
+		return
+	}
 	a.metadata.CharacterCount = utf8.RuneCountInString(update.Transcript)
 	a.stablePrefix = update.StablePrefix
 	ms := time.Since(a.started).Milliseconds()
@@ -350,7 +485,7 @@ func (e *InteractionEngine) receiveASR(t *interactionTurn, a *interactionASRSess
 		a.metadata.FirstStableMS = &ms
 		e.traceLocked(t, "asr_first_stable", "")
 	}
-	if update.Phase == "final" {
+	if update.Phase == "final" || update.Phase == "no_speech" {
 		a.final = &update
 		a.metadata.FinalMS = &ms
 	}
@@ -377,12 +512,24 @@ func (e *InteractionEngine) receiveASR(t *interactionTurn, a *interactionASRSess
 func (e *InteractionEngine) dispatchASR() {
 	e.mu.Lock()
 	t := e.turns[e.active]
-	if t == nil || t.asr == nil || t.asr.pending == nil || !e.liveLocked(t) {
+	if t == nil || t.asr == nil || (t.asr.pending == nil && t.asr.pendingActivity == nil) || !e.liveLocked(t) {
 		e.mu.Unlock()
 		return
 	}
-	update := *t.asr.pending
-	t.asr.pending = nil
+	var update ASRUpdate
+	if t.asr.pendingActivity != nil && (t.asr.pending == nil || t.asr.pendingActivity.Revision < t.asr.pending.Revision) {
+		update = *t.asr.pendingActivity
+		t.asr.pendingActivity = nil
+	} else {
+		update = *t.asr.pending
+		t.asr.pending = nil
+	}
+	if t.asr.pending != nil || t.asr.pendingActivity != nil {
+		select {
+		case e.asrWake <- struct{}{}:
+		default:
+		}
+	}
 	event := e.eventLocked(t, "asr_update")
 	event.ASR = &update
 	e.mu.Unlock()

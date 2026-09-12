@@ -7,6 +7,26 @@ import (
 
 const maxVoiceWAVBytes = 8 << 20
 
+func voicePCMFromWAV(audio []byte) (int, []byte) {
+	if _, valid := voiceWAVDuration(audio, 60); !valid {
+		return 0, nil
+	}
+	var rate int
+	var pcm []byte
+	for offset := 12; offset < len(audio); {
+		size := int(binary.LittleEndian.Uint32(audio[offset+4 : offset+8]))
+		start := offset + 8
+		switch string(audio[offset : offset+4]) {
+		case "fmt ":
+			rate = int(binary.LittleEndian.Uint32(audio[start+4 : start+8]))
+		case "data":
+			pcm = audio[start : start+size]
+		}
+		offset = start + size + size%2
+	}
+	return rate, pcm
+}
+
 // Parse the entire bounded PCM16 mono WAV before trusting its duration．
 func voiceWAVDuration(audio []byte, maxSeconds int) (time.Duration, bool) {
 	if maxSeconds <= 0 || len(audio) < 44 || len(audio) > maxVoiceWAVBytes || string(audio[:4]) != "RIFF" || string(audio[8:12]) != "WAVE" || uint64(binary.LittleEndian.Uint32(audio[4:8]))+8 != uint64(len(audio)) {

@@ -134,7 +134,11 @@ func (a *App) RecordInteractionInputHandoff(operationID string, revision int, ti
 	return a.interactionEngine().RecordInputHandoff(operationID, revision, timing)
 }
 func (e *InteractionEngine) RecordInputHandoff(op string, revision int, timing InteractionInputHandoffTiming) error {
-	if timing.ASRReadyMS < 0 || timing.DrainedMS < timing.ASRReadyMS || timing.DrainedMS > 5000 || timing.BufferedAudioMS < 0 || timing.BufferedAudioMS > 2000 {
+	maximumAudioMS := 2000
+	if asrCapabilities(e.asr).Activity {
+		maximumAudioMS = 3000
+	}
+	if timing.ASRReadyMS < 0 || timing.DrainedMS < timing.ASRReadyMS || timing.DrainedMS > 5000 || timing.BufferedAudioMS < 0 || timing.BufferedAudioMS > maximumAudioMS {
 		return errors.New("invalid_input_handoff_timing")
 	}
 	e.mu.Lock()

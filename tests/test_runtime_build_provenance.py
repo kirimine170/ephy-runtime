@@ -1,5 +1,6 @@
 import importlib.util
 import hashlib
+import json
 from pathlib import Path
 import subprocess
 
@@ -39,3 +40,20 @@ def test_provenance_tracks_uncommitted_edits_without_exposing_their_text(tmp_pat
     assert 'fixture' not in str(before)
     (root / 'new.txt').write_text('second fixture')
     assert provenance.source_snapshot(root) != before
+
+
+def test_bundle_provenance_checks_the_packaged_helper(tmp_path):
+    root = repository(tmp_path / 'repo')
+    before = provenance.source_snapshot(root)
+    contents = tmp_path / 'app/Contents'
+    for directory in ['MacOS', 'Helpers', 'Resources']:
+        (contents / directory).mkdir(parents=True)
+    binary = contents / 'MacOS/ephy-runtime'; binary.write_bytes(b'app')
+    helper = contents / 'Helpers/ephy-whisper'; helper.write_bytes(b'helper')
+    digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+    (contents / 'Resources/whisper-build-provenance.json').write_text(json.dumps({'helper_sha256':digest, 'whisper_cpp':{'commit':'pinned'}}))
+    result = provenance.finish(root, before, binary, tmp_path / 'proof.json')
+    assert result['whisper_helper_sha256'] == digest
+    helper.write_bytes(b'stale helper')
+    with pytest.raises(ValueError, match='Bundled ASR helper'):
+        provenance.finish(root, before, binary, tmp_path / 'bad.json')

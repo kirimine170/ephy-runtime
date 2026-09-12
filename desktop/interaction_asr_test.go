@@ -323,3 +323,97 @@ func TestStreamingASREmptyHypothesisDoesNotClaimFirstVisiblePartial(t *testing.T
 		t.Fatal("first visible partial was not measured")
 	}
 }
+
+type activityEngineProvider struct{ c02EngineProvider }
+
+func (p *activityEngineProvider) Capabilities() ASRCapabilities {
+	return ASRCapabilities{Partial: true, Activity: true, NoSpeech: true}
+}
+
+func TestASRNoSpeechDoesNotCreateConversationAndNextInputRemainsIndependent(t *testing.T) {
+	p := &activityEngineProvider{}
+	var calls atomic.Int32
+	e := NewInteractionEngine(p, testVoiceTTS{}, func(context.Context, ChatRequest, func(string)) (*ChatResponse, error) {
+		calls.Add(1)
+		return completedVoiceResponse("```code```"), nil
+	}, nil, t.TempDir())
+	defer e.Close()
+	s, session := c02Start(t, e, &p.c02EngineProvider)
+	if err := e.EndASR(s.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	final := session.update(1, "no_speech", "")
+	session.emit(final)
+	session.result <- c02SessionResult{update: final}
+	got := awaitInteraction(t, e, s.OperationID, "CANCELED")
+	if got.InputOutcome != "no_speech" || got.Transcript != "" || got.ErrorCode != "" || calls.Load() != 0 {
+		t.Fatal("no-speech became conversation or failure", got)
+	}
+	next, newSession := c02Start(t, e, &p.c02EngineProvider)
+	session.emit(session.update(2, "final", "stale"))
+	got, _ = e.Snapshot(next.OperationID)
+	if got.Transcript != "" || got.State != "RECORDING" || newSession.canceled.Load() {
+		t.Fatal("old no-speech affected next session")
+	}
+	trace, err := e.Trace(s.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, event := range trace {
+		if event.Name == "asr_no_speech" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatal("no-speech outcome missing from metadata")
+	}
+}
+
+func TestASRActivityDoesNotOverwritePartialOrCommitText(t *testing.T) {
+	p := &activityEngineProvider{}
+	e := NewInteractionEngine(p, testVoiceTTS{}, testVoiceChat, nil, t.TempDir())
+	defer e.Close()
+	s, session := c02Start(t, e, &p.c02EngineProvider)
+	session.emit(session.update(1, "partial", "小さな声"))
+	a := session.update(2, "activity", "")
+	a.Activity = &ASRAudioActivity{AudioMS: 10, LastSpeechMS: 10, SpeechMS: 10, Probability: .9, HasSpeech: true, Speaking: true}
+	session.emit(a)
+	e.mu.Lock()
+	metadata := e.turns[s.OperationID].asr.metadata
+	last := e.turns[s.OperationID].asr.lastRevision
+	e.mu.Unlock()
+	got, _ := e.Snapshot(s.OperationID)
+	if metadata.CharacterCount != 4 || metadata.VADSpeechMS != 10 || last != 2 || got.Transcript != "" || got.State != "RECORDING" {
+		t.Fatal("activity changed hypothesis or canonical input", metadata, got)
+	}
+}
+
+func TestASRCaptureMetadataAndEndpointReasonExcludeDeviceIdentity(t *testing.T) {
+	p := &c02EngineProvider{}
+	e := NewInteractionEngine(p, testVoiceTTS{}, func(context.Context, ChatRequest, func(string)) (*ChatResponse, error) {
+		return completedVoiceResponse("```go\nfixture\n```"), nil
+	}, nil, t.TempDir())
+	defer e.Close()
+	s, session := c02Start(t, e, p)
+	yes, no := true, false
+	m := ASRCaptureMetadata{ContextSampleRate: 48000, TrackSampleRate: 44100, ChannelCount: 1, EchoCancellation: &yes, NoiseSuppression: &yes, AutoGainControl: &no}
+	if err := e.RecordASRCapture(s.OperationID, m); err != nil {
+		t.Fatal(err)
+	}
+	yes = false
+	if err := e.EndASRWithReason(s.OperationID, "silence"); err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	metadata := cloneASRMetadata(&e.turns[s.OperationID].asr.metadata)
+	e.mu.Unlock()
+	if metadata.EndpointReason != "silence" || metadata.Capture == nil || !*metadata.Capture.EchoCancellation || metadata.InputSampleRate != 16000 {
+		t.Fatal("capture metadata missing or aliased", metadata)
+	}
+	session.result <- c02SessionResult{update: session.update(1, "final", "確定")}
+	awaitInteraction(t, e, s.OperationID, "COMPLETED")
+	if err := e.RecordASRCapture(s.OperationID, m); err == nil {
+		t.Fatal("late capture metadata changed closed turn")
+	}
+}

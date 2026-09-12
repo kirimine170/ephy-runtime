@@ -68,3 +68,8 @@ jobs:
         working-directory: desktop/frontend
       - run: go test ./...
         working-directory: desktop
+      - name: Verify bounded PCM resampling
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror voice/whisper/resampler_test.cpp -o "$RUNNER_TEMP/ephy-resampler-test"
+          "$RUNNER_TEMP/ephy-resampler-test"
+        working-directory: desktop

@@ -32,8 +32,10 @@ xcrun swiftc \
 codesign --force --sign - --identifier jp.ephy.runtime.asr "${STAGED_ASR_APP}"
 codesign --verify --strict "${STAGED_ASR_APP}"
 rm -rf -- "${ASR_APP}"
+mkdir -p "${EPHY_RUNTIME_ROOT}/bin"
 cp -R -X "${STAGED_ASR_APP}" "${ASR_APP}"
 xattr -cr "${ASR_APP}"
+xattr -d com.apple.FinderInfo "${ASR_APP}" 2>/dev/null || true
 codesign --force --deep --sign - --identifier jp.ephy.runtime.asr "${ASR_APP}"
 codesign --verify --strict --deep "${ASR_APP}"
 rm -f -- "${EPHY_RUNTIME_ROOT}/bin/ephy-asr"
