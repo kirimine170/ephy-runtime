@@ -17,7 +17,8 @@
 ### 対応版と契約
 
 - Karte：[PR #307](https://github.com/kirimine170/Karte/pull/307)．2026-09-12にCI 6件成功・PR時の公開job 1件skipを確認し，squash統合済み．対応mainは**`e426db4222db39654c87524e45437280aa403210`**．検証したPR headは`97a49e509390d7843d1fb63fc8b392e2dbfb17d6`，機能sourceは`591e767a5eee374fb170a2d66fcae39bd1100190`である．
-- C1：[Runtime PR #79](https://github.com/kirimine170/ephy-runtime/pull/79)をCI 6件成功後にsquash統合済み．main `338bd92dfbe1593000bc1e8c8e1ee9e87add6ebc`．下記の受入build source／binary hashは変わらない．
+- C1：[Runtime PR #79](https://github.com/kirimine170/ephy-runtime/pull/79)をCI 6件成功後にsquash統合済み．統合commit `338bd92dfbe1593000bc1e8c8e1ee9e87add6ebc`．下記の受入build source／binary hashは変わらない．
+- Runtime契約mirrorと本STATUS：[PR #80](https://github.com/kirimine170/ephy-runtime/pull/80)に集約する．Karteの上記統合版を照合先とし，Runtime側のcanonical writerや記録ONは追加しない．
 - 保存契約：record schema／context protocol **2.0**．v1の既存15 JSONは維持し，v2の29 JSONを追加した合計44 JSONをKarteとbyte照合する．不明版をv1やdirect filesystemへfallbackしない．
 - ownerと設定：[Karte保存契約](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)，[Step 3設定・復旧手順](../../../karte/architecture/RUNTIME_RECORDS_V2_SETUP.md)，[ADR-0005](../../../karte/architecture/adr/ADR-0005-scoped-runtime-diary-adoption.md)．Runtimeはcanonical Markdownを独自生成しない．
 
