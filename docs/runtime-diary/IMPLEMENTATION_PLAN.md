@@ -1,6 +1,6 @@
 # Runtime会話・日記 C1〜C3 実装計画
 
-2026-09-12．対象は添付`Ephy_Karte_Runtime_C1-C3_Codex_Prompts.md`の共通指示とStep 0である．本書は実装に使う設計であり，C1〜C3の機能実装済みを意味しない．現在の根拠と受入状態は[STATUS.md](STATUS.md)を正本とする．各Stepは指定された分だけ実行し，次へ自動進行しない．
+2026-09-12．添付`Ephy_Karte_Runtime_C1-C3_Codex_Prompts.md`を基に，Step 1と先行したStep 3の実装を反映した．Step 1は実機受入待ち，Step 2・4以降は未着手である．本書には後続の設計も含まれ，全体の実装済みを意味しない．現在の根拠と受入状態は[STATUS.md](STATUS.md)を正本とする．各Stepは指定された分だけ実行し，次へ自動進行しない．
 
 ## 1．到達点，責務，既存計画との関係
 
@@ -31,7 +31,7 @@ RuntimeのqueueをKarteと独立して編集・確定・検索できる記憶DB�
 
 ## 2．C1の所有と取消契約
 
-現行`InteractionEngine`はactive operationを1つ持ち，`BeginASR`が`t.ctx`の子となり，cancelでASRも終了する．Frontendの`release(run)`もマイクtrackと出力contextを一緒に解放する．C1では以下の寿命へ分離する．既存callback検査とstate machineを延長し，別の汎用session基盤を新設しない．
+Step 0時点では`InteractionEngine`のoperation取消がASRも終了させ，Frontendの`release(run)`がcaptureと出力を同時解放していた．Step 1で以下の所有分離と自動再待機を実装した．割込み発話の本文引継ぎはStep 2で完成させる．既存callback検査とstate machineを延長し，別の汎用session基盤を新設しない．
 
 | 単位 | owner／寿命 | 取消対象 |
 |---|---|---|
@@ -73,6 +73,8 @@ C0.4の300 ms待機ACKは初期C1では割込み発話中に再生しない．AC
 現行Fast音声のrequestは`enable_thinking=false`，`reasoning_format=deepseek`である．現行Workは実選択`qwen3.8-27b`，`enable_thinking=true`，`preserve_thinking=true`，`reasoning_effort=medium`である．C1はこれを暗黙変更しない．UIにある`max_tokens=512`は既存generation completion／continuationの入力であり，回答を途中で合格扱いにする上限として使わない．Step 2受入にはWorkのthinkingを維持した実音声一周を含める．
 
 ## 3．C2の保存と復旧
+
+Step 3ではKarteの`internal/canonical`，`internal/ephyrecordsv2`，`cmd/karte-ephy-control`とv2 schemas／fixturesを実装した．設定・処理・復旧は[KarteのStep 3手順](../../../karte/architecture/RUNTIME_RECORDS_V2_SETUP.md)へ集約する．本節のRuntime queue・記録設定・配送はStep 4の未実装設計である．Step 4はStep 2の中断・再生状況と，現在policyに従うv2 reader，旧direct index除外の完成を前提とする．
 
 wire field，Karte正本format，policy，ID・revision，transaction境界，保持上限の詳細は[Karte保存契約 v2](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)へ集約する．Runtimeはそれを独自に再定義しない．
 
@@ -140,7 +142,7 @@ state: queued
 | 0 | 本書，STATUS，Runtime ADR-0014，Karte保存契約・ADR-0005 | 設計と照合のみ．本体・schema・設定は変更しない |
 | 1／C1前半 | `desktop/frontend/src/voiceInteraction.js`，`fillerBargeIn.js`，`voiceSession.js`，`main.js`，`desktop/interaction.go`，`interaction_asr.go`，`app_interaction.go`，`voice_asr_session.go`．必要なsession state型・controllerを既存境界へ追加 | Runtimeだけ．captureとoutput取消の所有分離→endpoint→自動再待機→UI／bindings |
 | 2／C1後半 | 同上＋`voiceConversation.js`，`conversationHistory.js`，`desktop/generation_assembler.go`，`generation_types.go`，`app_generation_stream.go` | Step 1にpre-roll，新入力独立，本文停止，履歴中断情報を追加．新しいTTS providerを作らない |
-| 3／C2 Karte | `app.go`のSaveFile／AcceptEphyProposal／finishSavedEphyTransaction，`app_context_policy.go`，`internal/ephyoutbox/{contracts,store,placement}.go`，`internal/contextcore/{contracts,policy,service,store,processor}.go`，frontmatter，v2 schemas／fixtures | atomic-save未統合変更の再照合→writer安全性→v2 record／policy→transaction・復旧→search/read→Karte検証・統合→Runtime共通fixture mirror |
+| 3／C2 Karte | `app.go`のSaveFile／LoadFile／ProcessContextRequests，`internal/canonical`，`internal/ephyrecordsv2`，`internal/contextcore`，`internal/git`，`cmd/karte-ephy-control`，v2 schemas／fixtures | atomic-save未統合変更の再照合→writer安全性→v2 record／policy→transaction・復旧→search/read→Karte検証・統合→Runtime共通fixture mirror |
 | 4／C2 Runtime | `packages/karte_core/{contracts,outbox,context,conversation,source}.py`，`apps/gateway`，Go Chat／Interaction入口，Frontend設定・状態表示．durable event spool／単一dispatcherの追加 | Step 3の確定版をpin→user finalの永続化→assistant状態→配送・receipt→restart read-back．旧候補UIは互換維持．新recordを旧direct indexから除外 |
 | 5／C3生成 | Runtime内Job descriptor／store／runner，既存LLM adapter，`prompts/`に要約・日記template，Karteの派生revision採用，日記本文UI | C2 canonical source refs→summary→日付Job→日記保存．model・template・入力版をpin |
 | 6／C3利用 | `packages/karte_core/context.py`と既存grounding／Sources UI，Karte v2失効・control経路，Runtime queue／Job invalidation | source訂正・削除・制限→依存失効→検索・read→回答・再生成を一周確認 |
@@ -173,8 +175,8 @@ Step 1〜2のrollbackはsession featureを停止して手動録音／textへ戻�
 
 Step 3以降はproducer・Job停止→durable queueの保全→Karteのv2 grant無効化→in-flight transactionを復旧または保留へ固定→旧clientのv2領域アクセス遮断→旧binaryへ復帰の順にする．正本文書・ID ledger・tombstone・未配送eventを消すrollbackはしない．旧clientがv2非対応なら未配送を表示して止める．新設領域の旧Karteによるscanを隔離できない場合は，Karteをv2 reader可能版に維持してproducerだけをrollbackする．
 
-## 8．Step 0の完了と次の範囲
+## 8．現在の完了範囲と次の指示対象
 
-Step 0は設計と現行基盤照合で完了する．次に変更する範囲はStep 1のsession/capture所有分離，endpoint，自動再待機，状態UI，その境界テストである．保存機能，本文割込み内容の完成，日記生成，Karte schema変更はStep 1へ含めない．
+Step 0の設計・照合，Step 1の実装・自動検証，先行Step 3のKarte実装・自動検証・契約照合まで実施した．統合版と受入の証拠はSTATUSを優先する．実保存先を新しく有効にした事実や，実音声受入の合格へ読み替えない．
 
-設計を停止させる未決事項はない．添付指示が言及するReference Architecture PDFそのもの，現行Runtime binaryとsource SHAの厳密な対応，最新実機音声・日記品質の受入は未確認としてSTATUSへ残す．実保存先の新policy登録はStep 3〜4で既存設定の範囲を確認して行い，Step 0では有効化しない．
+次の指示対象はC1 Step 1の既存受入手順とStep 2である．Step 2では入力冒頭，取消後の次ASR，生成・表示・再生開始・自然終了・不明状態を確定する．その後に別指示でStep 4の記録設定・永続queue・v2配送／read-back・旧reader除外を実装する．Step 5〜7とWorkerへ自動進行しない．

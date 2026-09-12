@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that Ephy and Karte publish the same V1 filesystem contract."""
+"""Verify that Ephy and Karte publish the same v1/v2 filesystem contracts."""
 
 from __future__ import annotations
 
@@ -32,6 +32,39 @@ CONTEXT_REQUIRED_FILES = {
     Path("fixtures/read-response.json"),
 }
 CONTRACT_SPECS = {
+    Path('schemas/karte-ephy/v2'): {
+        Path('fixtures/conversation-8-messages.scenario.json'),
+        Path('fixtures/conversation-user-final.canonical.json'),
+        Path('fixtures/conversation-user-final.event.canonical.json'),
+        Path('fixtures/conversation-user-final.proposal.json'),
+        Path('fixtures/conversation-user-final.receipt.json'),
+        Path('fixtures/conversation-user-final.record.json'),
+        Path('fixtures/derived-diary.proposal.json'),
+        Path('fixtures/derived-diary.record.json'),
+        Path('fixtures/derived-summary.proposal.json'),
+        Path('fixtures/grant.json'),
+        Path('fixtures/interrupted-answer.proposal.json'),
+        Path('fixtures/interrupted-answer.record.json'),
+        Path('fixtures/raw-text.proposal.json'),
+        Path('fixtures/raw-text.record.json'),
+        Path('fixtures/strict-json.cases.json'),
+        Path('grant.schema.json'),
+        Path('proposal.schema.json'),
+        Path('receipt.schema.json'),
+        Path('record.schema.json'),
+        Path('rejection.schema.json'),
+        Path('source-reference.schema.json'),
+    },
+    Path('schemas/karte-context/v2'): {
+        Path('capabilities.schema.json'),
+        Path('fixtures/capabilities.json'),
+        Path('fixtures/read-request.json'),
+        Path('fixtures/read-response.json'),
+        Path('fixtures/search-request.json'),
+        Path('fixtures/search-response.json'),
+        Path('request.schema.json'),
+        Path('response.schema.json'),
+    },
     CONTRACT_RELATIVE_ROOT: REQUIRED_FILES,
     CONTEXT_CONTRACT_RELATIVE_ROOT: CONTEXT_REQUIRED_FILES,
 }
