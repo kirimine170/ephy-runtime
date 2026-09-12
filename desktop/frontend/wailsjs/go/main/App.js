@@ -202,6 +202,10 @@ export function InteractionPlayback(arg1, arg2, arg3) {
   return window['go']['main']['App']['InteractionPlayback'](arg1, arg2, arg3);
 }
 
+export function InterruptInteraction(arg1) {
+  return window['go']['main']['App']['InterruptInteraction'](arg1);
+}
+
 export function ListExportedResults() {
   return window['go']['main']['App']['ListExportedResults']();
 }
@@ -264,6 +268,10 @@ export function RecordInteractionFillerTiming(arg1, arg2, arg3) {
 
 export function RecordInteractionFillerTrace(arg1, arg2, arg3) {
   return window['go']['main']['App']['RecordInteractionFillerTrace'](arg1, arg2, arg3);
+}
+
+export function RecordInteractionInputHandoff(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RecordInteractionInputHandoff'](arg1, arg2, arg3);
 }
 
 export function ReloadGatewayConfig() {

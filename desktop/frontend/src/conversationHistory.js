@@ -16,11 +16,15 @@ export function conversationHistory(entries) {
   let bytes = 0;
   const encoder = new TextEncoder();
   for (const entry of [...entries].reverse()) {
-    if (!isConversationHistoryEntry(entry)) continue;
-    const length = encoder.encode(entry.text).length;
+    const interruption = entry?.role === 'assistant' && entry.voice && !entry.streaming
+      && entry.terminalState === 'CANCELED' && entry.voiceDelivery?.interrupted;
+    if (!interruption && !isConversationHistoryEntry(entry)) continue;
+    const content = interruption ? '[音声応答はユーザーの発話で中断された．自然終了を確認できた発話単位のみを以下に残す．中断した単位のどの単語まで届いたかは不明．]'
+      + (entry.voiceDelivery.playedPrefix ? `\n${entry.voiceDelivery.playedPrefix}` : '\n[自然終了を確認できた発話単位はない．]') : entry.text;
+    const length = encoder.encode(content).length;
     if (length > 16000 || bytes + length > 48000 || result.length >= 28) break;
     bytes += length;
-    result.unshift({role: entry.role, content: entry.text});
+    result.unshift({role: entry.role, content});
   }
   return result;
 }

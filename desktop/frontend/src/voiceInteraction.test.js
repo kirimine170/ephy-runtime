@@ -254,7 +254,7 @@ function harness(options = {}) {
   let listener;
   let identity = 0;
   const nodes = Object.fromEntries(['voice-session', 'voice-pause', 'voice-end', 'voice-record', 'voice-cancel', 'voice-status', 'voice-fallback', 'voice-live-transcript', 'voice-transcript-stable', 'voice-transcript-revisable'].map((id) => [id, button()]));
-  const calls = {start: [], readiness: [], begin: [], append: [], end: [], commit: [], cancel: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
+  const calls = {start: [], readiness: [], begin: [], append: [], end: [], commit: [], cancel: [], interrupts: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
   const contexts = [];
   const streams = [];
   const timeouts = new Map();
@@ -273,6 +273,10 @@ function harness(options = {}) {
     async CancelInteraction(op) {
       calls.cancel.push(op);
       return {...snapshot(op.slice(3), 'CANCELED')};
+    },
+    async InterruptInteraction(request) {
+      calls.interrupts.push(request); calls.cancel.push(request.operation_id);
+      return snapshot(request.operation_id.slice(3), 'CANCELED', {interruption: {local_stop_ms: request.local_stop_ms}});
     },
     async InteractionPlayback(...args) { calls.playback.push(args); },
     async FailInteraction(...args) { calls.fail.push(args); },
@@ -1564,4 +1568,186 @@ test('C1 never opens a second permission request while canceled capture is still
   const started = h.controller.startSession(); await tick(); await h.controller.endSession();
   assert.equal(await h.controller.startSession(), false); assert.equal(acquisitions, 1);
   permission.resolve(late); await started; assert.ok(late.tracks.every(t => t.stopped));
+});
+
+for (const phase of ['llm_wait', 'filler', 'tts_wait', 'body']) {
+  test(`C1 Step2 ${phase} stops locally and preserves the exact onset across cancel and ASR startup`, async () => {
+    let time = 0;
+    const canceled = deferred(), opened = deferred(), requests = [];
+    const h = harness({now: () => time, bridge: {
+      InterruptInteraction(request) { requests.push(request); return canceled.promise; },
+      BeginInteractionASR(operationID, sampleRate) {
+        h.calls.begin.push([operationID, sampleRate]);
+        return operationID === 'op-2' ? opened.promise : Promise.resolve(asrSession(1, sampleRate));
+      },
+      GetInteractionFiller: async () => fillerSetup(),
+    }});
+    await h.controller.startSession();
+    h.contexts[0].capture(speechFrame()); await h.controller.stop();
+    h.event(1, 'transcript', {text: '四季を説明して'}); h.state(1, 'THINKING');
+    const input = h.contexts[0], output = h.contexts[1];
+    if (phase === 'filler') {
+      output.decode = async () => ({duration: 1});
+      for (const [name, at] of [['endpoint_commit', 0], ['llm_requested', 20], ['llm_identity_ready', 30]]) {
+        time = at; h.event(1, 'trace', {trace: {name, monotonic_ms: at}});
+      }
+      await tick(); await tick();
+      for (const [name, at] of [['llm_first_token', 900], ['tts_requested', 1100]]) {
+        time = at; h.event(1, 'trace', {trace: {name, monotonic_ms: at}});
+      }
+      time = 3850; for (const timer of [...h.timeouts.values()]) timer.callback();
+      assert.equal(output.sources[0].started, true);
+    }
+    if (phase === 'tts_wait') h.state(1, 'SYNTHESIZING');
+    if (phase === 'body') { h.state(1, 'SYNTHESIZING'); h.audio(1, 1); await tick(); }
+    const oldSource = output.sources[0], oldEnd = oldSource?.onended;
+    const before = new Float32Array(128), onset1 = new Float32Array(256).fill(.0625), onset2 = new Float32Array(256).fill(.125);
+    input.capture(before); input.capture(onset1);
+    assert.equal(requests.length, 0);
+    input.capture(onset2);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].operation_id, 'op-1');
+    assert.equal(requests[0].generation_revision, 1);
+    assert.equal(requests[0].local_stop_ms, 0);
+    if (oldSource) assert.equal(oldSource.stopped, true);
+    assert.equal(h.streams.length, 1); assert.equal(h.streams[0].tracks[0].stopped, false);
+    input.capture(new Float32Array(256).fill(.1875));
+    canceled.resolve(snapshot(1, 'CANCELED', {interruption: {local_stop_ms: 0}})); await tick();
+    input.capture(new Float32Array(256).fill(.25));
+    assert.equal(h.calls.begin.length, 2);
+    assert.equal(h.calls.append.filter(([op]) => op === 'op-2').length, 0);
+    opened.resolve(asrSession(2)); await tick(); await tick();
+    const bytes = Buffer.concat(h.calls.append.filter(([op]) => op === 'op-2').map(([, , data]) => Buffer.from(data, 'base64')));
+    const actual = Array.from({length: bytes.length / 2}, (_, i) => bytes.readInt16LE(i * 2));
+    assert.deepEqual(actual, [...Array(128).fill(0), ...Array(256).fill(2048), ...Array(256).fill(4096), ...Array(256).fill(6144), ...Array(256).fill(8192)]);
+    oldEnd?.(); h.audio(1, 2); h.event(1, 'token', {text: 'old answer'});
+    h.asr(1, 8, '旧final', {phase: 'final', stable_prefix: '旧final'}); h.event(1, 'transcript', {text: '旧canonical'});
+    h.asr(2, 1, 'いや，冬の話だけ聞きたい', {phase: 'final', stable_prefix: 'いや，冬の話だけ聞きたい'});
+    await tick();
+    h.event(2, 'transcript', {text: 'いや，冬の話だけ聞きたい'});
+    h.event(2, 'transcript', {text: 'いや，冬の話だけ聞きたい'});
+    assert.deepEqual(h.calls.transcript.map(([, text]) => text), ['四季を説明して', 'いや，冬の話だけ聞きたい']);
+    assert.equal(h.calls.token.length, 0);
+    assert.equal(h.calls.end.filter(([op]) => op === 'op-2').length, 1);
+    assert.equal(output.sources.length, oldSource ? 1 : 0);
+    await h.controller.endSession();
+  });
+}
+
+test('C1 Step2 repeated interruptions keep one capture and distinct ASRs，without fixed acknowledgements', async () => {
+  const h = harness(); await h.controller.startSession();
+  for (let id = 1; id <= 3; id++) {
+    h.contexts[0].capture(speechFrame()); await h.controller.stop();
+    h.event(id, 'transcript', {text: `確定${id}`}); h.state(id, 'SYNTHESIZING'); h.audio(id, 1); await tick();
+    h.contexts[0].capture(speechFrame()); await tick(); await tick();
+    assert.equal(h.controller.lastSnapshot.operation_id, `op-${id + 1}`);
+    assert.equal(h.calls.interrupts.length, id);
+    assert.equal(h.calls.begin.length, id + 1);
+    assert.equal(h.streams.length, 1); assert.equal(h.contexts.length, 2);
+    assert.equal(h.contexts[1].sources.length, id);
+  }
+  await h.controller.pauseSession(); await h.controller.startSession();
+  assert.equal(h.calls.start.at(-1).voice_session_epoch, 2);
+  await h.controller.endSession();
+});
+
+test('C1 Step2 a full handoff buffer pauses instead of discarding the onset', async () => {
+  const canceled = deferred();
+  const h = harness({bridge: {InterruptInteraction: () => canceled.promise}});
+  await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
+  h.state(1, 'THINKING'); h.contexts[0].capture(speechFrame());
+  h.contexts[0].capture(new Float32Array(32000).fill(.1));
+  assert.ok(h.streams[0].tracks.every(track => track.stopped));
+  assert.equal(h.controller.sessionSnapshot.state, 'paused');
+  assert.match(h.nodes['voice-status'].textContent, /引継ぎが間に合わなかった/);
+  canceled.resolve(snapshot(1, 'CANCELED')); await tick();
+  assert.equal(h.calls.begin.length, 1);
+  await h.controller.endSession();
+});
+
+test('C1 Step2 local natural ending survives a delayed started ACK during interruption', async () => {
+  const started = deferred(), reports = [];
+  const h = harness({bridge: {
+    InteractionPlayback: (_op, _seq, phase) => phase === 'started' ? started.promise : Promise.resolve(),
+    InterruptInteraction: async request => { reports.push(request); return snapshot(1, 'CANCELED', {interruption: {local_stop_ms: 0}}); },
+  }});
+  await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
+  h.state(1, 'SYNTHESIZING'); h.audio(1, 1); await tick();
+  h.contexts[1].sources[0].end(); h.contexts[0].capture(speechFrame());
+  assert.deepEqual(reports[0].playback, [{sequence: 1, state: 'completed'}]);
+  await tick(); started.resolve(); await tick();
+  assert.equal(h.controller.lastSnapshot.operation_id, 'op-2');
+  await h.controller.endSession();
+});
+
+test('C1 Step2 next Work request inherits settings and only the proven spoken prefix', async () => {
+  const {resumeVoiceEntry, settleVoiceEntry} = await import('./voiceConversation.js');
+  const {conversationHistory} = await import('./conversationHistory.js');
+  const fixture = JSON.parse((await import('node:fs')).readFileSync(new URL('../../../schemas/karte-ephy/v2/fixtures/runtime-delivery.scenario.json', import.meta.url))).cases[0];
+  const entries = [{role: 'user', text: '四季を説明して'}];
+  const settings = {speech: {voice_profile_id: 'selected-voice', style: {pace: 1.1, volume: .7}}, chat: {mode: 'work', project: 'selected-project', source_scope: 'personal_context', max_tokens: 512, temperature: .2}};
+  const h = harness({
+    getRequest: () => ({session_id: 'session', speech: settings.speech, chat: {...settings.chat, messages: conversationHistory(entries)}}),
+    onTranscript(s) { if (s.operation_id === 'op-1') entries.push(resumeVoiceEntry({requestId: s.operation_id, role: 'assistant'}, s)); },
+    onCancel(s) { if (s.operation_id === 'op-1') entries[1] = settleVoiceEntry(entries[1], s); },
+    bridge: {InterruptInteraction: async () => ({...fixture.snapshot, ...snapshot(1, 'CANCELED'), generation_revision: 1})},
+  });
+  await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
+  h.event(1, 'transcript', {text: '四季を説明して'}); h.state(1, 'THINKING');
+  h.contexts[0].capture(speechFrame()); await tick(); await tick();
+  const next = h.calls.start[1];
+  assert.deepEqual(next.speech, settings.speech);
+  for (const [key, value] of Object.entries(settings.chat)) assert.deepEqual(next.chat[key], value);
+  assert.equal(next.chat.messages.length, 2);
+  assert.ok(next.chat.messages[1].content.endsWith('春には花が咲きます．'));
+  assert.ok(!next.chat.messages[1].content.includes('冬は雪が降ります．'));
+  assert.match(next.chat.messages[1].content, /中断された/);
+  h.asr(2, 1, 'いや，冬の話だけ聞きたい', {phase: 'final', stable_prefix: 'いや，冬の話だけ聞きたい'});
+  await tick();
+  h.event(2, 'transcript', {text: 'いや，冬の話だけ聞きたい'});
+  h.event(2, 'transcript', {text: '遅れて届いた別のfinal'});
+  assert.equal(h.controller.lastSnapshot.transcript, 'いや，冬の話だけ聞きたい');
+  await h.controller.endSession();
+});
+
+test('C1 Step2 failed source.stop still mutes body and keeps the next ASR independent', async () => {
+  const h = harness(); await h.controller.startSession();
+  const output = h.contexts[1], gains = [];
+  // The active run already owns its body gain；retain it through source.connect．
+  const originalSource = output.createBufferSource.bind(output);
+  output.createBufferSource = () => { const source = originalSource(); source.connect = target => gains.push(target); return source; };
+  h.contexts[0].capture(speechFrame()); await h.controller.stop(); h.state(1, 'SYNTHESIZING'); h.audio(1, 1); await tick();
+  output.sources[0].stop = () => { throw new Error('device stop failed'); };
+  h.contexts[0].capture(speechFrame());
+  assert.equal(gains[0].gain.value, 0);
+  assert.equal(gains[0].disconnected, true);
+  await tick(); await tick();
+  assert.equal(h.controller.lastSnapshot.operation_id, 'op-2');
+  assert.equal(h.calls.interrupts.length, 1);
+  assert.ok(h.streams[0].tracks.every(t => !t.stopped));
+  await h.controller.endSession();
+});
+
+test('C1 Step2 provider final before handoff drain pauses without accepting a truncated canonical input', async () => {
+  const pending = deferred(); let once = false;
+  const h = harness({bridge: {
+    InterruptInteraction: () => pending.promise,
+    AppendInteractionAudio(op, sequence, bytes) {
+      h.calls.append.push([op, sequence, bytes]);
+      if (op === 'op-2' && !once) { once = true; h.asr(2, 1, 'いや', {phase: 'final', stable_prefix: 'いや'}); }
+      return Promise.resolve();
+    },
+  }});
+  await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
+  h.event(1, 'transcript', {text: '四季を説明して'}); h.state(1, 'THINKING');
+  h.contexts[0].capture(speechFrame()); h.contexts[0].capture(speechFrame());
+  pending.resolve(snapshot(1, 'CANCELED', {interruption: {local_stop_ms: 0}})); await tick(); await tick();
+  assert.equal(h.controller.lastSnapshot.state, 'FAILED');
+  assert.equal(h.controller.lastSnapshot.error_code, 'asr_protocol_error');
+  assert.equal(h.controller.sessionSnapshot.state, 'paused');
+  h.event(2, 'transcript', {text: 'いや'});
+  assert.equal(h.calls.transcript.length, 1);
+  assert.equal(h.calls.end.filter(([op]) => op === 'op-2').length, 0);
+  assert.equal(h.controller.lastSnapshot.preview, 'いや');
+  await h.controller.endSession();
 });

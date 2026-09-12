@@ -102,6 +102,8 @@ export function Ingest(arg1:main.IngestRequest):Promise<Record<string, any>>;
 
 export function InteractionPlayback(arg1:string,arg2:number,arg3:string):Promise<void>;
 
+export function InterruptInteraction(arg1:main.InteractionInterruption):Promise<main.InteractionSnapshot>;
+
 export function ListExportedResults():Promise<Array<main.ExportedFileItem>>;
 
 export function ListPreferenceSessions():Promise<Record<string, any>>;
@@ -133,6 +135,8 @@ export function RecordInteractionFeedback(arg1:string):Promise<main.InteractionE
 export function RecordInteractionFillerTiming(arg1:string,arg2:number,arg3:main.FillerTiming):Promise<void>;
 
 export function RecordInteractionFillerTrace(arg1:string,arg2:number,arg3:main.FillerTrace):Promise<void>;
+
+export function RecordInteractionInputHandoff(arg1:string,arg2:number,arg3:main.InteractionInputHandoffTiming):Promise<void>;
 
 export function ReloadGatewayConfig():Promise<main.ReloadConfigResponse>;
 

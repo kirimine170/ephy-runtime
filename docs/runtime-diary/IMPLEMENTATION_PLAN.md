@@ -1,6 +1,6 @@
 # Runtime会話・日記 C1〜C3 実装計画
 
-2026-09-12．添付`Ephy_Karte_Runtime_C1-C3_Codex_Prompts.md`を基に，Step 1と先行したStep 3の実装を反映した．Step 1は実機受入待ち，Step 2・4以降は未着手である．本書には後続の設計も含まれ，全体の実装済みを意味しない．現在の根拠と受入状態は[STATUS.md](STATUS.md)を正本とする．各Stepは指定された分だけ実行し，次へ自動進行しない．
+2026-09-12．添付`Ephy_Karte_Runtime_C1-C3_Codex_Prompts.md`を基に，Step 1・2と先行したStep 3の実装を反映した．Step 1・2は人による実機受入待ち，Step 4以降は未着手である．本書には後続の設計も含まれ，全体の実装済みを意味しない．現在の根拠と受入状態は[STATUS.md](STATUS.md)を正本とする．各Stepは指定された分だけ実行し，次へ自動進行しない．
 
 ## 1．到達点，責務，既存計画との関係
 
@@ -62,7 +62,7 @@ Step 1はsession継続と自動ターン交替を完成させる．回答待機�
 
 Step 1の連続sessionでは入力AudioContext／MediaStreamをsessionが，出力AudioContextの再生handleを回答runが所有する．ASR segmentは発話単位で閉じる．無発話時は本文を送らず有限時間でASRを更新し，累積5分無活動でsessionをpauseする．従来の手動録音は別の利用モードとして保つ．本文再生中の発話はStep 1の引継ぎ対象外であり，状態UIで回答中／次発話待ちを区別する．
 
-Step 2では500 msのpre-roll ringを同一captureへ追加する．48 kHz／mono PCM16なら48,000 bytesが基準で，resamplingやdevice epoch変更時の上限・破棄も検査する．検出点より前から新しいASR segmentへ順番に送り，検出点のframeを二重送信しない．session継続中も音声をdiskへ書かない．
+Step 2では500 msのpre-roll ringを同一captureへ追加した．48 kHz／mono PCM16なら48,000 bytesが基準で，resamplingやdevice epoch変更時の上限・破棄も検査する．検出点より前から新しいASR segmentへ順番に送り，検出点のframeを二重送信しない．session継続中も音声をdiskへ書かない．実装では引継ぎqueueを2秒，待機を5秒に制限し，超過時はpauseする．ASRの旧session cleanupと次Openを直列化し，LLM／TTS取消完了とは分離する．
 
 C0.4の300 ms待機ACKは初期C1では割込み発話中に再生しない．ACKを必須にせず，入力を重ねずに扱える条件が確定した場合だけ後続で使う．ユーザーが発話している間にASRを止めない．
 

@@ -69,3 +69,25 @@ test('a completed state without confirmed generation metadata fails closed', () 
   assert.equal(entry.terminalState, 'FAILED');
   assert.deepEqual(conversationHistory([entry]), []);
 });
+
+const deliveryFixture = JSON.parse((await import('node:fs')).readFileSync(new URL('../../../schemas/karte-ephy/v2/fixtures/runtime-delivery.scenario.json', import.meta.url)));
+for (const scenario of deliveryFixture.cases) {
+  test(`shared Karte v2 delivery contract: ${scenario.name}`, () => {
+    const snapshot = scenario.snapshot;
+    const started = resumeVoiceEntry({requestId: snapshot.operation_id, role: 'assistant'}, snapshot);
+    const settled = settleVoiceEntry(started, snapshot);
+    const d = settled.voiceDelivery;
+    assert.deepEqual({generation: d.generation, display: d.display, playback: d.playback, speech_units: d.speechUnits}, scenario.expected_assistant);
+    assert.equal(d.playedPrefix, scenario.expected_heard_prefix);
+    assert.equal(d.displayedText, snapshot.response_plan.text);
+    const history = conversationHistory([settled]);
+    if (d.interrupted) {
+      assert.equal(history.length, 1);
+      assert.match(history[0].content, /中断された/);
+      if (d.playedPrefix) assert.ok(history[0].content.endsWith(d.playedPrefix));
+      for (const unit of snapshot.speech_units.filter(unit => unit.state !== 'completed')) {
+        assert.ok(!history[0].content.includes(unit.text));
+      }
+    }
+  });
+}

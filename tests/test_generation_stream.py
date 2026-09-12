@@ -134,12 +134,13 @@ def test_cancel_propagates_and_closes_upstream_without_done():
     asyncio.run(check())
 
 
-def test_gateway_preserves_mode_persona_and_original_route_input_for_continuation(monkeypatch):
+@pytest.mark.parametrize("resolved_mode", ["fast", "work"])
+def test_gateway_preserves_mode_persona_and_original_route_input_for_continuation(monkeypatch, resolved_mode):
     captured = {}
     with TestClient(app) as client:
         def route(request):
             captured["routing_request"] = request
-            return RouteDecision(mode="fast", model_alias="fast", selected_model=app.state.app_config.models["fast"])
+            return RouteDecision(mode=resolved_mode, model_alias=resolved_mode, selected_model=app.state.app_config.models[resolved_mode])
         async def stream(*, model_config, request_payload):
             captured["inference_request"] = request_payload
             yield b'data: {"choices":[{"delta":{"content":"complete"},"finish_reason":"stop"}]}\n\n'
@@ -158,14 +159,19 @@ def test_gateway_preserves_mode_persona_and_original_route_input_for_continuatio
         assert len(route_request.messages) == 1
         assert route_request.messages[0].content == "synthetic original request"
         inference = captured["inference_request"]
-        assert inference.metadata.mode == "auto" and inference.metadata.resolved_mode == "fast"
+        assert inference.metadata.mode == "auto" and inference.metadata.resolved_mode == resolved_mode
         assert inference.metadata.session_mode == "voice" and inference.max_tokens == 512
         assert [message.role for message in inference.messages].count("user") == 1
         system = [message.content for message in inference.messages if message.role == "system"]
-        # Completion guidance is appended after the existing mode and profile policies．
+        # All system policies precede conversation，including explicit continuation．
         assert len(system) >= 2
-        assert app.state.prompt_manager.get_mode_system_prompt("fast") in system[0]
+        assert app.state.prompt_manager.get_mode_system_prompt(resolved_mode) in system[0]
         assert system[-1] == "synthetic bounded continuation guidance"
+        first_user = next(i for i, message in enumerate(inference.messages) if message.role == "user")
+        assert all(message.role == "system" for message in inference.messages[:first_user])
+        assert all(message.role != "system" for message in inference.messages[first_user:])
+        assert inference.messages[-1].role == "assistant"
+        assert inference.messages[-1].content == "synthetic committed prefix"
 
 
 def _sse(payload):

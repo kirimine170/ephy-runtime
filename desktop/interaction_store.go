@@ -13,24 +13,26 @@ import (
 // This allowlisted schema deliberately has no payload, prompt, transcript,
 // response, private context, audio bytes, or free-form provider error field.
 type InteractionTraceEvent struct {
-	SchemaVersion      int                 `json:"schema_version"`
-	EventID            string              `json:"event_id"`
-	TraceID            string              `json:"trace_id"`
-	SessionID          string              `json:"session_id"`
-	TurnID             string              `json:"turn_id"`
-	OperationID        string              `json:"operation_id"`
-	Name               string              `json:"name"`
-	Source             string              `json:"source"`
-	Timestamp          string              `json:"timestamp"`
-	MonotonicMS        int64               `json:"monotonic_ms"`
-	Status             string              `json:"status"`
-	ErrorCode          string              `json:"error_code,omitempty"`
-	ProviderID         string              `json:"provider_id"`
-	ModelID            string              `json:"model_id"`
-	ConfigurationID    string              `json:"configuration_id"`
-	Generation         *GenerationMetadata `json:"generation,omitempty"`
-	GenerationRevision int                 `json:"generation_revision,omitempty"`
-	ASR                *ASRMetadata        `json:"asr,omitempty"`
+	InputHandoff       *InteractionInputHandoffTiming `json:"input_handoff,omitempty"`
+	Interruption       *InteractionInterruptionTiming `json:"interruption,omitempty"`
+	SchemaVersion      int                            `json:"schema_version"`
+	EventID            string                         `json:"event_id"`
+	TraceID            string                         `json:"trace_id"`
+	SessionID          string                         `json:"session_id"`
+	TurnID             string                         `json:"turn_id"`
+	OperationID        string                         `json:"operation_id"`
+	Name               string                         `json:"name"`
+	Source             string                         `json:"source"`
+	Timestamp          string                         `json:"timestamp"`
+	MonotonicMS        int64                          `json:"monotonic_ms"`
+	Status             string                         `json:"status"`
+	ErrorCode          string                         `json:"error_code,omitempty"`
+	ProviderID         string                         `json:"provider_id"`
+	ModelID            string                         `json:"model_id"`
+	ConfigurationID    string                         `json:"configuration_id"`
+	Generation         *GenerationMetadata            `json:"generation,omitempty"`
+	GenerationRevision int                            `json:"generation_revision,omitempty"`
+	ASR                *ASRMetadata                   `json:"asr,omitempty"`
 }
 type TraceValidation struct {
 	Valid       bool             `json:"valid"`
@@ -50,6 +52,13 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 			first[event.Name] = event.MonotonicMS
 		}
 		last[event.Name] = event.MonotonicMS
+		if event.InputHandoff != nil {
+			validation.LatenciesMS["input_handoff_asr_ready"] = int64(event.InputHandoff.ASRReadyMS)
+			validation.LatenciesMS["input_handoff_drained"] = int64(event.InputHandoff.DrainedMS)
+		}
+		if event.Interruption != nil {
+			validation.LatenciesMS["local_stop"] = int64(event.Interruption.LocalStopMS)
+		}
 	}
 	required := []string{"user_speech_start"}
 	if _, listening := first["listening_started"]; listening {
