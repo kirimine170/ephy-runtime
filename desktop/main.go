@@ -18,7 +18,7 @@ const (
 
 func newApplicationOptions(app *App) *options.App {
 	return &options.App{
-		Title:     ephyRuntimeTitle,
+		Title:     residentApplicationTitle(),
 		Width:     1320,
 		Height:    920,
 		MinWidth:  1024,
@@ -30,7 +30,7 @@ func newApplicationOptions(app *App) *options.App {
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: ephyRuntimeSingleInstanceID,
+			UniqueId: residentApplicationID(),
 			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
 				app.showExistingWindow()
 			},

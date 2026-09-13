@@ -2,6 +2,7 @@ import './style.css';
 import {recordingMarkup, mountRecording} from './recording';
 import './voiceInteraction.css';
 import {mountVoiceInteraction} from './voiceInteraction';
+import {residentMarkup, mountResident} from './resident';
 import {conversationHistory, isConversationHistoryEntry} from './conversationHistory';
 import {confirmVoiceEntry, previewVoiceEntry, resumeVoiceEntry, settleVoiceEntry} from './voiceConversation';
 import {voiceSessionCallbacks} from './voiceSession';
@@ -984,6 +985,7 @@ app.innerHTML = `
             <div id="chat-output" class="conversation-thread" role="region" aria-label="Conversation"></div>
             <div id="chat-stream-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
             ${voiceProfilesMarkup()}
+            ${residentMarkup()}
             <div id="voice-controls" class="voice-controls" role="group" aria-label="音声会話">
               <button id="voice-session" class="ghost-btn" type="button">会話を開始</button>
               <button id="voice-pause" class="ghost-btn" type="button" disabled>一時停止</button>
@@ -11192,9 +11194,16 @@ document.getElementById('overview-preset-runtime-hint').addEventListener('click'
 
 // Voice uses the existing thread and Chat gateway，with bounded metadata-only diagnostics．
 voiceProfiles = mountVoiceProfiles({root: document, bridge: interactionBridge, isBusy: () => !!voiceController?.isActive()});
+let residentController;
 voiceController = mountVoiceInteraction({
   root: document,
   canStart: () => !chatSendInFlight,
+  beforeSessionStart: sessionID => residentController?.prepare(sessionID),
+  onSessionState: state => residentController?.onSessionState(state),
+  onCandidateStart(snapshot) {
+    if (snapshot.session_id!==chatConversationId) return;
+    appendChatThreadEntry(resumeVoiceEntry({role:'assistant',requestId:snapshot.operation_id,meta:'会話への参加',text:''},snapshot));
+  },
   bridge: interactionBridge,
   getSessionID: () => chatConversationId,
   subscribe: callback => window.runtime?.EventsOnMultiple ? EventsOn('interaction-event', callback) : () => {},
@@ -11268,3 +11277,7 @@ voiceEvaluation = mountVoiceEvaluation({
   getSessionID: () => chatConversationId,
   isDeveloper: () => developerModeEnabled,
 });
+
+residentController = mountResident({root:document,bridge:interactionBridge,controller:voiceController,getSessionID:()=>chatConversationId,subscribe:callback=>window.runtime?.EventsOnMultiple?EventsOn('resident-event',callback):()=>{},subscribeInteraction:callback=>window.runtime?.EventsOnMultiple?EventsOn('interaction-event',callback):()=>{}});
+
+interactionBridge.GetResidentConfig().then(config=>{if(config.enabled)return voiceProfiles.configurePersistence(`ephy:resident:${config.namespace}:voice`,config.voice_profile_id);}).catch(()=>{});

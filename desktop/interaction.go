@@ -29,13 +29,14 @@ type voiceIdentity interface {
 	Identity() (provider, model, configuration string)
 }
 type VoiceTurnRequest struct {
-	VoiceSessionID    string           `json:"voice_session_id,omitempty"`
-	VoiceSessionEpoch uint64           `json:"voice_session_epoch,omitempty"`
-	SessionID         string           `json:"session_id"`
-	InputKind         string           `json:"input_kind,omitempty"`
-	Chat              ChatRequest      `json:"chat"`
-	GenerationLimits  GenerationLimits `json:"generation_limits"`
-	Speech            SpeechOptions    `json:"speech"`
+	CandidateMemoryIDs []string         `json:"-"`
+	VoiceSessionID     string           `json:"voice_session_id,omitempty"`
+	VoiceSessionEpoch  uint64           `json:"voice_session_epoch,omitempty"`
+	SessionID          string           `json:"session_id"`
+	InputKind          string           `json:"input_kind,omitempty"`
+	Chat               ChatRequest      `json:"chat"`
+	GenerationLimits   GenerationLimits `json:"generation_limits"`
+	Speech             SpeechOptions    `json:"speech"`
 }
 type VoiceHint struct {
 	Pace   float64 `json:"pace"`
@@ -49,6 +50,11 @@ type ResponsePlan struct {
 	Interruptible bool      `json:"interruptible"`
 }
 type InteractionSnapshot struct {
+	MemoryIDs          []string                       `json:"memory_ids,omitempty"`
+	ModelID            string                         `json:"model_id,omitempty"`
+	VoiceID            string                         `json:"voice_id,omitempty"`
+	PromptID           string                         `json:"prompt_id,omitempty"`
+	ConfigurationID    string                         `json:"configuration_id,omitempty"`
 	InputKind          string                         `json:"input_kind,omitempty"`
 	SpeechErrorCode    string                         `json:"speech_error_code,omitempty"`
 	TraceID            string                         `json:"trace_id"`
@@ -94,6 +100,7 @@ type playbackChunk struct {
 	waitingAt, startedAt time.Time
 }
 type interactionTurn struct {
+	approvedCandidate      string
 	recordingKey           string
 	fillerIdentityReady    bool
 	fillerSetupServed      bool
@@ -121,6 +128,8 @@ type interactionTurn struct {
 	speech                 *preparedSpeech
 }
 type InteractionEngine struct {
+	residentInput func(InteractionSnapshot, VoiceTurnRequest, string) bool
+
 	recorder     *recording.Store
 	mu           sync.Mutex
 	voiceSession *voiceSession
@@ -197,6 +206,7 @@ func (e *InteractionEngine) eventLocked(t *interactionTurn, kind string) Interac
 // under the state mutex, including when the UI calls Playback synchronously.
 func (e *InteractionEngine) queueLocked(event InteractionEvent) { e.events <- event }
 func cloneInteractionSnapshot(s InteractionSnapshot) InteractionSnapshot {
+	s.MemoryIDs = append([]string(nil), s.MemoryIDs...)
 	s.Generation = cloneGenerationMetadata(s.Generation)
 	if s.InputHandoff != nil {
 		copy := *s.InputHandoff
@@ -252,6 +262,9 @@ func (e *InteractionEngine) pruneLocked() {
 	}
 }
 func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot, error) {
+	return e.start(request, "")
+}
+func (e *InteractionEngine) start(request VoiceTurnRequest, candidate string) (InteractionSnapshot, error) {
 	if request.InputKind == "" {
 		request.InputKind = "microphone"
 	}
@@ -310,13 +323,20 @@ func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot
 	ctx, cancel := context.WithCancel(context.Background())
 	op := interactionID("operation_")
 	t := &interactionTurn{snapshot: InteractionSnapshot{InputKind: request.InputKind, TraceID: interactionID("trace_"), SessionID: request.SessionID, TurnID: interactionID("turn_"), OperationID: op, State: "IDLE", GenerationRevision: 1}, request: request, ctx: ctx, cancel: cancel, created: time.Now(), chunks: map[int]*playbackChunk{}, source: request.InputKind, requestConfigurationID: request.Chat.ConfigurationID}
+	t.snapshot.MemoryIDs = append([]string(nil), request.CandidateMemoryIDs...)
+	t.snapshot.ModelID = request.Chat.ModelID
+	t.snapshot.VoiceID = request.Speech.VoiceProfileID
+	t.snapshot.ConfigurationID = request.Chat.ConfigurationID
+	t.approvedCandidate = candidate
 	t.speech = prepared
 	e.turns[op] = t
 	e.active = op
 	if request.VoiceSessionID != "" {
 		e.voiceSession.snapshot.State = "listening"
 	}
-	if request.InputKind == "text" {
+	if candidate != "" {
+		// Approved observation is not an invented user question．
+	} else if request.InputKind == "text" {
 		e.traceLocked(t, "text_input_started", "")
 	} else if request.VoiceSessionID == "" {
 		e.traceLocked(t, "user_speech_start", "")
@@ -390,6 +410,8 @@ func (e *InteractionEngine) liveLocked(t *interactionTurn) bool {
 }
 
 type interactionModelKey struct{}
+type interactionPromptKey struct{}
+type interactionMemoryKey struct{}
 
 func reportInteractionModel(ctx context.Context, provider, model, configuration string) {
 	if observer, ok := ctx.Value(interactionModelKey{}).(func(string, string, string)); ok {
@@ -430,6 +452,22 @@ func (e *InteractionEngine) acceptTranscript(t *interactionTurn, result string) 
 	result = strings.TrimSpace(result)
 	if result == "" || len(result) > 16<<10 {
 		e.stageFailure(t, "asr", errors.New("asr_empty_result"))
+		return
+	}
+	e.mu.Lock()
+	if !e.liveLocked(t) {
+		e.mu.Unlock()
+		return
+	}
+	inputSnapshot, inputRequest, residentInput := cloneInteractionSnapshot(t.snapshot), t.request, e.residentInput
+	e.mu.Unlock()
+	if residentInput != nil && residentInput(inputSnapshot, inputRequest, result) {
+		e.mu.Lock()
+		if e.liveLocked(t) {
+			t.snapshot.InputOutcome = "resident_control"
+			e.cancelTurnLocked(t)
+		}
+		e.mu.Unlock()
 		return
 	}
 	e.mu.Lock()
@@ -582,6 +620,20 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 				e.queueLocked(event)
 			})
 		}
+		llmCtx = context.WithValue(llmCtx, interactionMemoryKey{}, func(ids []string) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if e.generationLiveLocked(t, revision, llmCtx) {
+				t.snapshot.MemoryIDs = append([]string{}, ids...)
+			}
+		})
+		llmCtx = context.WithValue(llmCtx, interactionPromptKey{}, func(prompt string) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if e.generationLiveLocked(t, revision, llmCtx) && len(prompt) <= 200 {
+				t.snapshot.PromptID = prompt
+			}
+		})
 		llmCtx = context.WithValue(llmCtx, interactionModelKey{}, func(provider, model, configuration string) {
 			e.mu.Lock()
 			defer e.mu.Unlock()
@@ -599,6 +651,8 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 				combined := sha256.Sum256([]byte(requestConfigurationID + "\x00" + configuration))
 				t.request.Chat.ConfigurationID = hex.EncodeToString(combined[:16])
 			}
+			t.snapshot.ModelID = t.request.Chat.ModelID
+			t.snapshot.ConfigurationID = t.request.Chat.ConfigurationID
 			if !t.fillerIdentityReady {
 				t.fillerIdentityReady = true
 				e.traceLocked(t, "llm_identity_ready", "")
@@ -622,7 +676,7 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 				}
 			})
 		}
-		return assembleGeneration(llmCtx, req, limits, prefix, chat, func(progress GenerationProgress) {
+		onProgress := func(progress GenerationProgress) {
 			e.mu.Lock()
 			if !e.generationLiveLocked(t, revision, llmCtx) {
 				e.mu.Unlock()
@@ -660,7 +714,16 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 					return
 				}
 			}
-		})
+		}
+		if t.approvedCandidate != "" {
+			if err := llmCtx.Err(); err != nil {
+				return nil, err
+			}
+			metadata := GenerationMetadata{SchemaVersion: 2, FinishReason: "stop", ProviderFinishReason: "stop", Complete: true, ReasoningTokenSource: "unavailable"}
+			onProgress(GenerationProgress{CommittedText: t.approvedCandidate, SpeechUnits: []string{generationSpeechText(t.approvedCandidate)}, Metadata: metadata})
+			return &ChatResponse{Answer: t.approvedCandidate, FinishReason: "stop", Generation: &metadata}, nil
+		}
+		return assembleGeneration(llmCtx, req, limits, prefix, chat, onProgress)
 	})
 	if err != nil {
 		e.mu.Lock()

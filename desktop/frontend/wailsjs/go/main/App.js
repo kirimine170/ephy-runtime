@@ -18,6 +18,10 @@ export function ApproveWebSearch(arg1) {
   return window['go']['main']['App']['ApproveWebSearch'](arg1);
 }
 
+export function AuthorizeResidentPlayback(arg1) {
+  return window['go']['main']['App']['AuthorizeResidentPlayback'](arg1);
+}
+
 export function BeginInteractionASR(arg1, arg2) {
   return window['go']['main']['App']['BeginInteractionASR'](arg1, arg2);
 }
@@ -44,6 +48,10 @@ export function CancelInteractionComparison(arg1) {
 
 export function CancelInteractionInterruptionCandidate(arg1, arg2, arg3) {
   return window['go']['main']['App']['CancelInteractionInterruptionCandidate'](arg1, arg2, arg3);
+}
+
+export function CancelResidentCandidate(arg1, arg2) {
+  return window['go']['main']['App']['CancelResidentCandidate'](arg1, arg2);
 }
 
 export function ChangeVoiceSession(arg1, arg2, arg3) {
@@ -74,12 +82,20 @@ export function ConfigureRecording(arg1) {
   return window['go']['main']['App']['ConfigureRecording'](arg1);
 }
 
+export function ConfigureResidentSession(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ConfigureResidentSession'](arg1, arg2, arg3, arg4);
+}
+
 export function ContinueInteraction(arg1) {
   return window['go']['main']['App']['ContinueInteraction'](arg1);
 }
 
 export function CreatePreferenceSession(arg1) {
   return window['go']['main']['App']['CreatePreferenceSession'](arg1);
+}
+
+export function CreateResidentCandidate(arg1) {
+  return window['go']['main']['App']['CreateResidentCandidate'](arg1);
 }
 
 export function DeleteLocalConfigFile(arg1) {
@@ -108,6 +124,10 @@ export function EndInteractionASRWithReason(arg1, arg2) {
 
 export function Eval(arg1) {
   return window['go']['main']['App']['Eval'](arg1);
+}
+
+export function ExitResident() {
+  return window['go']['main']['App']['ExitResident']();
 }
 
 export function ExportInteractionEvaluations(arg1) {
@@ -196,6 +216,14 @@ export function GetRegressionWatchProfiles() {
 
 export function GetRegressionWatchSettings() {
   return window['go']['main']['App']['GetRegressionWatchSettings']();
+}
+
+export function GetResidentConfig() {
+  return window['go']['main']['App']['GetResidentConfig']();
+}
+
+export function GetResidentState(arg1) {
+  return window['go']['main']['App']['GetResidentState'](arg1);
 }
 
 export function GetRuntimeStatus() {
@@ -312,6 +340,10 @@ export function ReloadGatewayConfig() {
 
 export function ReplayInteraction(arg1) {
   return window['go']['main']['App']['ReplayInteraction'](arg1);
+}
+
+export function RetractResidentFeedback(arg1, arg2) {
+  return window['go']['main']['App']['RetractResidentFeedback'](arg1, arg2);
 }
 
 export function RetryRecording() {
@@ -530,6 +562,10 @@ export function StartRecommendedStack() {
   return window['go']['main']['App']['StartRecommendedStack']();
 }
 
+export function StartResidentCandidate(arg1, arg2) {
+  return window['go']['main']['App']['StartResidentCandidate'](arg1, arg2);
+}
+
 export function StartTextInteraction(arg1) {
   return window['go']['main']['App']['StartTextInteraction'](arg1);
 }
@@ -580,6 +616,14 @@ export function StopWatch() {
 
 export function StopWork() {
   return window['go']['main']['App']['StopWork']();
+}
+
+export function SubmitResidentFeedback(arg1) {
+  return window['go']['main']['App']['SubmitResidentFeedback'](arg1);
+}
+
+export function UndoResidentChange(arg1, arg2) {
+  return window['go']['main']['App']['UndoResidentChange'](arg1, arg2);
 }
 
 export function ValidateInteractionTrace(arg1) {

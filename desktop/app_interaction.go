@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -89,7 +88,10 @@ func (a *App) interactionEngine() *InteractionEngine {
 			if ctx := a.currentContext(); ctx != nil {
 				runtime.EventsEmit(ctx, "interaction-event", event)
 			}
-		}, filepath.Join(root, "data", "runtime", "interaction"))
+		}, residentInteractionRoot(root))
+		if residentEnabled() {
+			a.interaction.residentInput = a.interceptResidentInput
+		}
 		if provider, ok := asr.(*WhisperVoiceASR); ok {
 			_, _ = provider.Readiness(context.Background())
 		}
@@ -121,6 +123,18 @@ func (a *App) GetVoiceProfiles() VoiceProfileCatalog {
 }
 
 func (a *App) StartInteraction(request VoiceTurnRequest) (InteractionSnapshot, error) {
+	if residentEnabled() {
+		a.residentMu.Lock()
+		_, configured := a.residentSessions[request.SessionID]
+		a.residentMu.Unlock()
+		if !configured {
+			if _, err := a.ConfigureResidentSession(request.SessionID, false, false, "reactive"); err != nil {
+				return InteractionSnapshot{}, err
+			}
+		}
+		a.captureResidentTarget(request.SessionID)
+		request.Chat.ResidentSessionID = a.residentSessionID(request.SessionID)
+	}
 	request.Chat.SessionID = request.SessionID
 	request.Chat.SessionMode = "voice"
 	if request.InputKind == "text" {

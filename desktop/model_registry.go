@@ -344,6 +344,7 @@ func (a *App) roleProcess(role string) (**exec.Cmd, *bool, func(string), func(*e
 }
 
 func (a *App) ApplyLocalModel(request ApplyLocalModelRequest) (result *LocalModelCatalog, resultErr error) {
+	if err := residentServiceGuard(); err != nil { return nil, err }
 	a.modelLifecycleMu.Lock()
 	defer a.modelLifecycleMu.Unlock()
 	if !a.developerModeEnabled() {

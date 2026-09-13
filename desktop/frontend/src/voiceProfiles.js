@@ -98,6 +98,8 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false, storage 
   let catalogApplied = false;
   let selectionTouched = false;
   let message = '';
+  let persistenceKey = '';
+  const saveSelection = () => { if (persistenceKey) { try { storage?.setItem(persistenceKey, JSON.stringify({voice_profile_id:selected,style})); } catch { setMessage('声の設定を保存できませんでした．'); } } };
   const controlNodes = new Map();
   const controlListeners = [];
 
@@ -153,6 +155,7 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false, storage 
         style = {...style, [key]: value};
         selectionTouched = true;
         setMessage('');
+        saveSelection();
       };
       input.addEventListener('change', handler);
       controlListeners.push([input, handler]);
@@ -243,6 +246,7 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false, storage 
     selectionTouched = true;
     style = {...profile.default_style};
     setMessage('');
+    saveSelection();
     renderControls();
   }
   const onRefresh = () => { void refresh(); };
@@ -252,6 +256,25 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false, storage 
   const ready = refresh();
   return {
     ready, refresh, setBusy,
+    async configurePersistence(key, defaultProfileID='') {
+      await ready;
+      if (disposed || busy || isBusy() || !key) return false;
+      persistenceKey=key;
+      let saved;
+      try { saved=JSON.parse(storage?.getItem(key)||'null'); } catch { saved=null; }
+      const desired=saved?.voice_profile_id||defaultProfileID;
+      if (!PROFILE_ID.test(desired)) return false;
+      const profile=profiles.find(item=>item.voice_profile_id===desired);
+      selected=desired;selectionTouched=true;
+      if (!profile) profiles.push({voice_profile_id:desired,display_name:'選択した声',available:false,default_style:{...STYLE_DEFAULTS},capabilities:{controls:{}}});
+      style={...(profile?.default_style||STYLE_DEFAULTS)};
+      for (const [name,value] of Object.entries(saved?.style||{})) {
+        const control=profile?.capabilities.controls[name];
+        if (control && (control.type==='number'?validNumber(value,control):control.values.includes(value))) style[name]=value;
+      }
+      setMessage(profile?.available?'保存した声と話し方を復元しました．':'保存した声を利用できません．声を選び直してください．');
+      render();return true;
+    },
     isChatSpeechEnabled: () => chatSpeech?.checked !== false,
     readSettings() {
       if ((!catalogApplied && !selectionTouched && typeof bridge?.GetVoiceProfiles === 'function') || !currentProfile()) throw new Error('voice_profile_unavailable');

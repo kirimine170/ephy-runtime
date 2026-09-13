@@ -1952,3 +1952,40 @@ test('typed preflight cancellation creates no operation and a fast terminal stil
   assert.equal(h.calls.transcript.length, 1);
   h.controller.dispose();
 });
+
+test('resident controls relisten after intercepted real final without adding a fake chat message', async () => {
+  const h=harness();await h.controller.startSession();h.contexts[0].capture(speechFrame());await h.controller.stop();
+  h.state(1,'CANCELED',{input_outcome:'resident_control'});await tick();await tick();
+  assert.equal(h.calls.start.length,2);assert.equal(h.streams.length,1);assert.equal(h.calls.transcript.length,0);assert.equal(h.calls.canceled.length,0);
+  await h.controller.endSession();
+});
+test('resident speech stop preserves capture and completes locally before stalled native cancel',async()=>{
+  const canceled=deferred();const h=harness({bridge:{CancelInteraction:()=>canceled.promise}});
+  await h.controller.startSession();h.contexts[0].capture(speechFrame());await h.controller.stop();h.state(1,'SYNTHESIZING',{response_plan:{text:'聞こえた内容'}});h.audio(1,1);await tick();
+  const source=h.contexts[1].sources[0];const pending=h.controller.stopPlayback();
+  assert.equal(source.stopped,true);assert.ok(h.streams[0].tracks.every(track=>!track.stopped));
+  assert.equal(h.controller.snapshotFeedbackTarget().operation_id,'op-1');
+  canceled.resolve(snapshot(1,'CANCELED'));await pending;await tick();
+  assert.equal(h.calls.start.length,2);await h.controller.endSession();
+});
+test('suspended native audio invalidates capture and old playback until explicit resume',async()=>{
+  const h=harness();await h.controller.startSession();h.contexts[0].state='suspended';h.contexts[0].onstatechange();await tick();
+  assert.equal(h.controller.sessionSnapshot.state,'paused');assert.ok(h.streams[0].tracks.every(track=>track.stopped));
+  h.audio(1,1);await tick();assert.equal(h.contexts[1].sources.length,0);
+  assert.equal(await h.controller.startSession(),true);assert.equal(h.calls.start.at(-1).voice_session_epoch,2);await h.controller.endSession();
+});
+
+test('resident feedback keeps last heard response while next question has only a transcript',async()=>{
+ const h=harness();await h.controller.startSession();h.contexts[0].capture(speechFrame());await h.controller.stop();
+ h.state(1,'COMPLETED',{generation:{complete:true},response_plan:{text:'直前の回答．'},speech_units:[{unit_id:'heard',text:'直前の回答．',state:'completed',synthesis_complete:true,playback_started:true}]});await tick();
+ h.contexts[0].capture(speechFrame());await h.controller.stop();h.event(2,'transcript',{text:'次の質問'});h.state(2,'THINKING',{transcript:'次の質問'});
+ assert.equal(h.controller.snapshotFeedbackTarget().operation_id,'op-1');
+ h.event(2,'output',{snapshot:snapshot(2,'THINKING',{response_plan:{text:'次の回答．'}})});
+ assert.equal(h.controller.snapshotFeedbackTarget().operation_id,'op-2');await h.controller.endSession();
+});
+test('prepared candidate audio waits for post-synthesis grant check and cannot escape denial',async()=>{
+ const authorization=deferred();const h=harness({bridge:{StartResidentCandidate:async()=>snapshot(2,'THINKING'),AuthorizeResidentPlayback:()=>authorization.promise}});
+ await h.controller.startSession();assert.equal(await h.controller.startPreparedCandidate('candidate'),true);
+ h.state(2,'SYNTHESIZING');h.audio(2,1);await tick();assert.equal(h.contexts[1].sources.length,0);
+ authorization.resolve(false);await tick();await tick();assert.equal(h.contexts[1].sources.length,0);await h.controller.endSession();
+});

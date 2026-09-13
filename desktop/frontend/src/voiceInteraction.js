@@ -228,9 +228,13 @@ export function mountVoiceInteraction({
   getRequest = () => ({}),
   getSessionID,
   canStart = () => true,
+  beforeSessionStart = async () => {},
+  onSessionState = () => {},
+  lifecycle = globalThis.window,
   onTranscript = () => {},
   onToken = () => {},
   onOutput = () => {},
+  onCandidateStart = () => {},
   onChatEvent = () => {},
   onComplete = () => {},
   onIncomplete = () => {},
@@ -274,6 +278,7 @@ export function mountVoiceInteraction({
   const revisableTranscript = root?.querySelector('#voice-transcript-revisable');
   let voice = null;
   let sessionCapturePending = false;
+  let feedbackSnapshot = null;
   let current = null;
   let disposed = false;
   let nextFiller = 0;
@@ -494,7 +499,8 @@ export function mountVoiceInteraction({
       delete snapshot.transcript;
     }
     run.snapshot = {...run.snapshot, ...snapshot};
-    if (snapshot.input_outcome === 'no_speech' && snapshot.state === 'CANCELED') run.relisten = true;
+    if (run.snapshot.response_plan || run.snapshot.speech_units?.length) feedbackSnapshot = structuredClone(run.snapshot);
+    if (['no_speech', 'resident_control'].includes(snapshot.input_outcome) && snapshot.state === 'CANCELED') run.relisten = true;
     if (run.voice && snapshot.state === 'FAILED' && !run.snapshot.transcript) run.snapshot.preview = run.liveTranscript;
     notifyTranscript(run, run.snapshot.transcript);
     if (run.voice && snapshot.state === 'COMPLETED' && run.interruptionGuard?.transfer()) {
@@ -507,8 +513,8 @@ export function mountVoiceInteraction({
     if (run.snapshot.state === 'COMPLETED') onComplete(run.snapshot);
     else if (run.snapshot.state === 'INCOMPLETE') onIncomplete(run.snapshot);
     else if (run.snapshot.state === 'FAILED') onFailure(run.snapshot);
-    else if (run.snapshot.state === 'CANCELED' && run.snapshot.input_outcome !== 'no_speech') onCancel(run.snapshot);
-    if (run.voice && run.voice === voice && voice.running && run.voiceEpoch === voice.localEpoch) {
+    else if (run.snapshot.state === 'CANCELED' && !['no_speech', 'resident_control'].includes(run.snapshot.input_outcome)) onCancel(run.snapshot);
+    if (run.voice && run.voice === voice && voice.running && run.voiceEpoch === voice.localEpoch && !run.candidateHandoff) {
       if (run.snapshot.state === 'COMPLETED' || run.relisten) {
         voice.lastActivity = run.endpoint?.speech ? now() : voice.lastActivity;
         void Promise.resolve().then(() => { if (voice === run.voice && voice.running && run.voiceEpoch === voice.localEpoch && !active()) return start(true); });
@@ -657,6 +663,7 @@ export function mountVoiceInteraction({
     v.monitors.clear(); v.pcm?.clear();
     if (v.handoffTimer != null) timers.clearTimeout(v.handoffTimer);
     for (const context of [v.inputContext, v.output]) {
+      if (context) context.onstatechange = null;
       try { Promise.resolve(context?.close()).catch(() => {}); } catch { /* Already closed． */ }
     }
   }
@@ -670,6 +677,7 @@ export function mountVoiceInteraction({
     v.action = action;
     v.changing = true; v.running = false; v.localEpoch++;
     v.state = action === 'end' ? 'stopped' : 'paused'; v.reason = reason;
+    onSessionState({state:v.state, reason});
     const canceled = cancelRun();
     releaseSessionCapture(v); render();
     v.changePromise = (async () => {
@@ -701,6 +709,8 @@ export function mountVoiceInteraction({
       v.inputContext = createAudioContext(); v.output = createAudioContext();
       const resumed = Promise.all([v.inputContext.resume(), v.output.resume()]).then(() => true, () => false);
       const conversationID = getSessionID ? getSessionID() : getRequest().session_id;
+      await beforeSessionStart(conversationID);
+      if (!valid()) return false;
       v.pending = previous?.state === 'paused' && previous.snapshot?.conversation_id === conversationID
         ? bridge.ChangeVoiceSession(previous.snapshot.id, previous.snapshot.epoch, 'resume')
         : bridge.StartVoiceSession(conversationID);
@@ -725,8 +735,13 @@ export function mountVoiceInteraction({
       v.processor = v.inputContext.createScriptProcessor(1024, 1, 1);
       v.mute = v.inputContext.createGain(); v.mute.gain.value = 0;
       v.input.connect(v.processor); v.processor.connect(v.mute); v.mute.connect(v.inputContext.destination);
+      for (const context of [v.inputContext, v.output]) context.onstatechange = () => { if (valid() && context.state === 'suspended') void changeSession('pause', '音声接続が休止しました．待受を再開できます．'); };
+      v.lastCaptureAt = Date.now();
       v.processor.onaudioprocess = event => {
         if (!valid()) return;
+        const captureAt = Date.now();
+        if (captureAt - v.lastCaptureAt > 15000) { void changeSession('pause', 'スリープまたは音声の中断から復帰しました．古い音声を破棄しました．待受を再開できます．'); return; }
+        v.lastCaptureAt = captureAt;
         if (getSessionID && getSessionID() !== v.snapshot.conversation_id) { void changeSession('end'); return; }
         const data = event.inputBuffer.getChannelData(0), rate = v.inputContext.sampleRate;
         for (const callback of [...v.monitors]) callback(data, rate);
@@ -754,6 +769,7 @@ export function mountVoiceInteraction({
         }
       };
       for (const track of stream.getTracks()) track.onended = () => { if (valid()) void changeSession('pause', 'マイクが停止したため会話を一時停止しました．'); };
+      onSessionState({state: 'listening', reason: ''});
       return await start(true);
     } catch (error) {
       if (valid()) await changeSession('pause', FAILURES[error?.name === 'NotAllowedError' ? 'microphone_permission_denied' : error?.message] || FAILURES.microphone_unavailable);
@@ -1022,6 +1038,7 @@ export function mountVoiceInteraction({
   }
 
   function cancelRun() {
+    if (current?.snapshot?.response_plan || current?.snapshot?.speech_units?.length) feedbackSnapshot = structuredClone(current.snapshot);
     stopHandoff();
     const run = current;
     if (!active(run)) return Promise.resolve(run?.snapshot);
@@ -1074,6 +1091,12 @@ export function mountVoiceInteraction({
         run.bargeIn?.stop(); run.bargeIn = null;
         run.backchannel?.stop(); run.backchannel = null;
       }
+    if (run.preparedCandidate) {
+      let allowed=false;
+      try {allowed=await bridge.AuthorizeResidentPlayback(run.snapshot.operation_id);} catch {}
+      if(!live(run) || epoch!==run.playbackEpoch){run.decoding=false;return;}
+      if(!allowed){run.decoding=false;run.relisten=true;void cancelRun();return;}
+    }
       const source = run.context.createBufferSource();
       source.buffer = decoded;
       source.connect(run.outputGain);
@@ -1266,6 +1289,19 @@ export function mountVoiceInteraction({
     else if (event.kind === 'audio') enqueue(run, event);
   }
 
+  async function startPreparedCandidate(operationID) {
+    if (!voice?.running || current?.snapshot.state!=='RECORDING' || current?.endpoint?.speech || current?.liveTranscript) return false;
+    const owner=voice,epoch=voice.localEpoch;
+    current.candidateHandoff=true;
+    await cancelRun();
+    if (voice!==owner || !voice.running || voice.localEpoch!==epoch) return false;
+    const run=begin({},false,true); if(!run)return false;run.preparedCandidate=true;
+    try {
+      const request={...getRequest(),voice_session_id:voice.snapshot.id,voice_session_epoch:voice.snapshot.epoch};
+      const pending=bridge.StartResidentCandidate(operationID,request).then(snapshot=>{onCandidateStart(snapshot);return snapshot;});
+      return await identify(run,pending);
+    } catch { run.relisten=true;await cancelRun();return false; }
+  }
   async function adopt(snapshotOrPromise, expected = {}) {
     if (voice && voice.state !== 'stopped') await changeSession('end');
     const run = begin(expected);
@@ -1288,6 +1324,7 @@ export function mountVoiceInteraction({
       const requestPending = typeof requestOrFactory === 'function' ? requestOrFactory() : requestOrFactory;
       if (closing) await closing;
       const request = await requestPending;
+      if (request?.session_id) await beforeSessionStart(request.session_id);
       if (!request || !attached(run)) {
         run.resolveIdentity(null);
         if (active(run)) finish(run, {...run.snapshot, state: 'CANCELED'});
@@ -1326,6 +1363,12 @@ export function mountVoiceInteraction({
     if (current && active()) { current.fillerInvalidated = true; stopFiller(current); }
   };
   mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
+  // Hidden/minimized windows keep capture．Page restoration or a long suspended
+  // audio context invalidates old playback and requires one explicit resume．
+  const onPageShow = event => { if (event.persisted && voice?.running) void changeSession('pause', '復帰しました．古い音声を破棄しました．待受を再開できます．'); };
+  const onWake = () => { if (voice?.running) void changeSession('pause', '音声接続が中断されました．待受を再開できます．'); };
+  lifecycle?.addEventListener?.('pageshow', onPageShow);
+  const unsubscribeWake = bridge.SubscribeResidentWake?.(onWake);
   const onCancelClick = () => { void cancel(); };
   const onFallbackClick = () => { if (['FAILED', 'INCOMPLETE'].includes(current?.snapshot.state)) onFallback(current.snapshot); };
   record?.addEventListener('click', onRecord);
@@ -1335,11 +1378,17 @@ export function mountVoiceInteraction({
   render();
   void refreshReadiness();
   return {
-    start, startText, stop, cancel, adopt, startSession, pauseSession: () => changeSession('pause'), endSession: () => changeSession('end'),
+    start, startText, stop, cancel, adopt, startSession, startPreparedCandidate,
+    isHumanSpeaking() { return !!(current?.endpoint?.speech || current?.liveTranscript || current?.stablePrefix); },
+    stopPreparedCandidate() { if(current?.preparedCandidate){current.relisten=true;void cancelRun();} },
+    stopPlayback() { if (current?.voice) current.relisten = true; return cancelRun(); },
+    snapshotFeedbackTarget() { const snapshot = current?.snapshot?.response_plan || current?.snapshot?.speech_units?.length ? current.snapshot : feedbackSnapshot; return snapshot ? structuredClone(snapshot) : null; }, pauseSession: () => changeSession('pause'), endSession: () => changeSession('end'),
     get sessionSnapshot() { return voice ? {...voice.snapshot, state: voice.state} : null; },
     isActive: () => active() || !!(voice && voice.state !== 'stopped'),
     get lastSnapshot() { return current?.snapshot || null; },
     async dispose() {
+      lifecycle?.removeEventListener?.('pageshow', onPageShow);
+      if (typeof unsubscribeWake === 'function') unsubscribeWake();
       mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
       sessionButton?.removeEventListener('click', onSession);
       pauseButton?.removeEventListener('click', onPause);

@@ -413,7 +413,10 @@ def start(config):
 
 def stop(config):
     report = json.loads((config['home'] / 'processes.json').read_text())
-    services = report['services']
+    stop_services(config, report['services'])
+
+
+def stop_services(config, services):
     # A canceled unsaved-changes dialog stops shutdown before any dependency is terminated．
     for name in ('runtime', 'asr', 'karte', 'gateway', 'irodori', 'searxng', 'qdrant', 'embedding', 'code', 'work', 'fast'):
         record = services.get(name)

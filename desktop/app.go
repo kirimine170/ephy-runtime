@@ -25,6 +25,17 @@ import (
 )
 
 type App struct {
+	residentCandidates       map[string]residentCandidate
+	residentActiveCandidates map[string]residentCandidate
+	residentEpochs           map[string]uint64
+	residentBootID           string
+	residentPending          map[string]chan struct{}
+	residentMu               sync.Mutex
+	residentRequests         chan struct{}
+	residentSessions         map[string]map[string]any
+	residentTargets          map[string]ResidentFeedbackTarget
+	residentModes            map[string]string
+
 	recordingMu            sync.Mutex
 	recorder               *recording.Store
 	recordingInit          bool
@@ -99,6 +110,7 @@ type ChatRequest struct {
 	Messages                      []GatewayMessage `json:"messages,omitempty"`
 	SessionID                     string           `json:"session_id,omitempty"`
 	SessionMode                   string           `json:"session_mode,omitempty"`
+	ResidentSessionID             string           `json:"resident_session_id,omitempty"`
 	ModelID                       string           `json:"model_id,omitempty"`
 	ProviderID                    string           `json:"provider_id,omitempty"`
 	ConfigurationID               string           `json:"configuration_id,omitempty"`
@@ -136,6 +148,7 @@ type GatewayMetadata struct {
 	RoutingMessageCount int      `json:"routing_message_count,omitempty"`
 	SessionID           string   `json:"session_id,omitempty"`
 	SessionMode         string   `json:"session_mode,omitempty"`
+	ResidentSessionID   string   `json:"resident_session_id,omitempty"`
 	Mode                string   `json:"mode"`
 	Project             string   `json:"project,omitempty"`
 	SourcePath          string   `json:"source_path,omitempty"`
@@ -730,7 +743,16 @@ type ExportedFileContent struct {
 
 func NewApp() *App {
 	return &App{
-		baseURL: "http://127.0.0.1:8000",
+		residentCandidates:       make(map[string]residentCandidate),
+		residentActiveCandidates: make(map[string]residentCandidate),
+		residentEpochs:           make(map[string]uint64),
+		residentBootID:           interactionID("resident_"),
+		residentPending:          make(map[string]chan struct{}),
+		baseURL:                  residentGatewayURL(),
+		residentRequests:         make(chan struct{}, 4),
+		residentSessions:         make(map[string]map[string]any),
+		residentTargets:          make(map[string]ResidentFeedbackTarget),
+		residentModes:            make(map[string]string),
 		httpClient: &http.Client{
 			Timeout: 90 * time.Second,
 		},
@@ -854,6 +876,7 @@ func (a *App) chatWithContext(ctx context.Context, request ChatRequest, onToken 
 			RoutingMessageCount: request.generationRoutingMessageCount,
 			SessionID:           request.SessionID,
 			SessionMode:         request.SessionMode,
+			ResidentSessionID:   request.ResidentSessionID,
 			Mode:                mode,
 			Project:             request.Project,
 			SourcePath:          request.SourcePath,
@@ -2815,30 +2838,51 @@ func (a *App) GetRuntimeStatus() *RuntimeStatus {
 }
 
 func (a *App) StartFast() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	return a.startModelProcess("scripts/start_llama_fast.sh", "fast", &a.fastCmd, &a.fastRunning, a.appendFastLog, a.captureFastStream, a.waitFastProcess)
 }
 
 func (a *App) StopFast() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	return a.stopModelProcess("fast", &a.fastCmd, &a.fastRunning, a.appendFastLog)
 }
 
 func (a *App) StartWork() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	return a.startModelProcess("scripts/start_llama_work.sh", "work", &a.workCmd, &a.workRunning, a.appendWorkLog, a.captureWorkStream, a.waitWorkProcess)
 }
 
 func (a *App) StopWork() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	return a.stopModelProcess("work", &a.workCmd, &a.workRunning, a.appendWorkLog)
 }
 
 func (a *App) StartCode() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	return a.startModelProcess("scripts/start_llama_code.sh", "code", &a.codeCmd, &a.codeRunning, a.appendCodeLog, a.captureCodeStream, a.waitCodeProcess)
 }
 
 func (a *App) StopCode() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	return a.stopModelProcess("code", &a.codeCmd, &a.codeRunning, a.appendCodeLog)
 }
 
 func (a *App) StartGateway() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	a.mu.Lock()
 	if a.closing {
 		a.mu.Unlock()
@@ -2899,6 +2943,9 @@ func (a *App) StartGateway() (*RuntimeStatus, error) {
 }
 
 func (a *App) StopGateway() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	a.mu.Lock()
 	cmd := a.gatewayCmd
 	if cmd == nil || cmd.Process == nil || !a.gatewayRunning {
@@ -2925,6 +2972,9 @@ func (a *App) StopGateway() (*RuntimeStatus, error) {
 }
 
 func (a *App) StartEmbedding() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	a.mu.Lock()
 	if a.closing {
 		a.mu.Unlock()
@@ -2976,6 +3026,9 @@ func (a *App) StartEmbedding() (*RuntimeStatus, error) {
 }
 
 func (a *App) StopEmbedding() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	a.mu.Lock()
 	cmd := a.embeddingCmd
 	if cmd == nil || cmd.Process == nil || !a.embeddingRunning {
@@ -3002,6 +3055,9 @@ func (a *App) StopEmbedding() (*RuntimeStatus, error) {
 }
 
 func (a *App) StartQdrant() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	output, err := a.runWorkspaceCommand("bash scripts/start_qdrant.sh")
 	a.mu.Lock()
 	if strings.TrimSpace(output) != "" {
@@ -3018,6 +3074,9 @@ func (a *App) StartQdrant() (*RuntimeStatus, error) {
 }
 
 func (a *App) StopQdrant() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	output, err := a.runWorkspaceCommand("bash scripts/stop_qdrant.sh")
 	a.mu.Lock()
 	if strings.TrimSpace(output) != "" {
@@ -3067,6 +3126,9 @@ func (a *App) Smoke(request SmokeRequest) (*SmokeResponse, error) {
 }
 
 func (a *App) StartWatch(request WatchRequest) (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	a.mu.Lock()
 	if a.closing {
 		a.mu.Unlock()
@@ -3131,6 +3193,9 @@ func (a *App) StartWatch(request WatchRequest) (*RuntimeStatus, error) {
 }
 
 func (a *App) StopWatch() (*RuntimeStatus, error) {
+	if err := residentServiceGuard(); err != nil {
+		return a.GetRuntimeStatus(), err
+	}
 	a.mu.Lock()
 	cmd := a.watchCmd
 	if cmd == nil || cmd.Process == nil || !a.watchRunning {

@@ -319,6 +319,7 @@ export namespace main {
 	    messages?: GatewayMessage[];
 	    session_id?: string;
 	    session_mode?: string;
+	    resident_session_id?: string;
 	    model_id?: string;
 	    provider_id?: string;
 	    configuration_id?: string;
@@ -346,6 +347,7 @@ export namespace main {
 	        this.messages = this.convertValues(source["messages"], GatewayMessage);
 	        this.session_id = source["session_id"];
 	        this.session_mode = source["session_mode"];
+	        this.resident_session_id = source["resident_session_id"];
 	        this.model_id = source["model_id"];
 	        this.provider_id = source["provider_id"];
 	        this.configuration_id = source["configuration_id"];
@@ -1139,6 +1141,11 @@ export namespace main {
 	    }
 	}
 	export class InteractionSnapshot {
+	    memory_ids?: string[];
+	    model_id?: string;
+	    voice_id?: string;
+	    prompt_id?: string;
+	    configuration_id?: string;
 	    input_kind?: string;
 	    speech_error_code?: string;
 	    trace_id: string;
@@ -1163,6 +1170,11 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.memory_ids = source["memory_ids"];
+	        this.model_id = source["model_id"];
+	        this.voice_id = source["voice_id"];
+	        this.prompt_id = source["prompt_id"];
+	        this.configuration_id = source["configuration_id"];
 	        this.input_kind = source["input_kind"];
 	        this.speech_error_code = source["speech_error_code"];
 	        this.trace_id = source["trace_id"];

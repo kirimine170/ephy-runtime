@@ -11,6 +11,8 @@ export function ApplyLocalModel(arg1:main.ApplyLocalModelRequest):Promise<main.L
 
 export function ApproveWebSearch(arg1:string):Promise<Record<string, any>>;
 
+export function AuthorizeResidentPlayback(arg1:string):Promise<boolean>;
+
 export function BeginInteractionASR(arg1:string,arg2:number):Promise<main.ASRSessionRequest>;
 
 export function BeginInteractionInterruptionCandidate(arg1:string,arg2:string,arg3:number,arg4:number):Promise<main.InterruptionCandidateSnapshot>;
@@ -24,6 +26,8 @@ export function CancelInteraction(arg1:string):Promise<main.InteractionSnapshot>
 export function CancelInteractionComparison(arg1:string):Promise<void>;
 
 export function CancelInteractionInterruptionCandidate(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function CancelResidentCandidate(arg1:string,arg2:string):Promise<Record<string, any>>;
 
 export function ChangeVoiceSession(arg1:string,arg2:number,arg3:string):Promise<main.VoiceSessionSnapshot>;
 
@@ -39,9 +43,13 @@ export function CommitInteraction(arg1:string,arg2:string):Promise<void>;
 
 export function ConfigureRecording(arg1:recording.ConfigureRequest):Promise<recording.Status>;
 
+export function ConfigureResidentSession(arg1:string,arg2:boolean,arg3:boolean,arg4:string):Promise<Record<string, any>>;
+
 export function ContinueInteraction(arg1:string):Promise<main.InteractionSnapshot>;
 
 export function CreatePreferenceSession(arg1:main.PreferenceSessionRequest):Promise<Record<string, any>>;
+
+export function CreateResidentCandidate(arg1:Record<string, any>):Promise<Record<string, any>>;
 
 export function DeleteLocalConfigFile(arg1:main.LocalConfigNameRequest):Promise<Array<main.LocalConfigFile>>;
 
@@ -56,6 +64,8 @@ export function EndInteractionASR(arg1:string):Promise<void>;
 export function EndInteractionASRWithReason(arg1:string,arg2:string):Promise<void>;
 
 export function Eval(arg1:main.EvalRequest):Promise<main.EvalResponse>;
+
+export function ExitResident():Promise<void>;
 
 export function ExportInteractionEvaluations(arg1:string):Promise<main.ExportResultResponse>;
 
@@ -100,6 +110,10 @@ export function GetRecordingStatus():Promise<recording.Status>;
 export function GetRegressionWatchProfiles():Promise<Record<string, main.RegressionWatchProfile>>;
 
 export function GetRegressionWatchSettings():Promise<main.RegressionWatchSettings>;
+
+export function GetResidentConfig():Promise<Record<string, any>>;
+
+export function GetResidentState(arg1:string):Promise<Record<string, any>>;
 
 export function GetRuntimeStatus():Promise<main.RuntimeStatus>;
 
@@ -158,6 +172,8 @@ export function RecordInteractionInputHandoff(arg1:string,arg2:number,arg3:main.
 export function ReloadGatewayConfig():Promise<main.ReloadConfigResponse>;
 
 export function ReplayInteraction(arg1:main.InteractionReplayRequest):Promise<main.InteractionSnapshot>;
+
+export function RetractResidentFeedback(arg1:string,arg2:Record<string, any>):Promise<Record<string, any>>;
 
 export function RetryRecording():Promise<recording.Status>;
 
@@ -267,6 +283,8 @@ export function StartQdrant():Promise<main.RuntimeStatus>;
 
 export function StartRecommendedStack():Promise<main.StackActionResponse>;
 
+export function StartResidentCandidate(arg1:string,arg2:main.VoiceTurnRequest):Promise<main.InteractionSnapshot>;
+
 export function StartTextInteraction(arg1:main.VoiceTurnRequest):Promise<main.InteractionSnapshot>;
 
 export function StartVoiceSession(arg1:string):Promise<main.VoiceSessionSnapshot>;
@@ -292,6 +310,10 @@ export function StopRecommendedStack():Promise<main.StackActionResponse>;
 export function StopWatch():Promise<main.RuntimeStatus>;
 
 export function StopWork():Promise<main.RuntimeStatus>;
+
+export function SubmitResidentFeedback(arg1:Record<string, any>):Promise<Record<string, any>>;
+
+export function UndoResidentChange(arg1:string,arg2:Record<string, any>):Promise<Record<string, any>>;
 
 export function ValidateInteractionTrace(arg1:string):Promise<main.TraceValidation>;
 

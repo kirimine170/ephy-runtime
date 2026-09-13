@@ -168,7 +168,7 @@ func validateVoiceProfile(p VoiceProfile) error {
 		}
 	}
 	if (p.Provider == "qwen3-tts" && (p.ClonePromptDigest == "" || p.ReferenceGroupDigest != "")) ||
-		(p.Provider == "irodori-tts" && (p.ClonePromptDigest != "" || p.ReferenceGroupDigest == "")) {
+		((p.Provider == "irodori-tts" || p.Provider == "irodori-audiocpp") && (p.ClonePromptDigest != "" || p.ReferenceGroupDigest == "")) {
 		return errors.New("invalid_voice_profile")
 	}
 	if p.ProvenanceID != "" && !interactionIdentifier.MatchString(p.ProvenanceID) {
@@ -307,7 +307,7 @@ func (r *VoiceTTSRegistry) Profiles(ctx context.Context) VoiceProfileCatalog {
 			}
 			if remote.DefaultProfileID != "" {
 				candidate := providers[remote.DefaultProfileID]
-				if candidate != nil && candidate.Profile().Provider == "irodori-tts" {
+				if candidate != nil && (candidate.Profile().Provider == "irodori-tts" || candidate.Profile().Provider == "irodori-audiocpp") {
 					result.ErrorCode = "invalid_voice_profile"
 				} else {
 					result.DefaultProfileID = remote.DefaultProfileID
