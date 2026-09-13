@@ -169,7 +169,7 @@ def environment(state: Path, info: dict) -> dict:
 def build(state: Path, info: dict) -> None:
     env = environment(state, info)
     output = Path(info['build_dir'])
-    env.update(EPHY_APP_OUTPUT_DIR=str(output), EPHY_REQUIRE_WHISPER='1',
+    env.update(EPHY_APP_OUTPUT_DIR=str(output), EPHY_REQUIRE_WHISPER='1', EPHY_RESIDENT_BUILD='1',
                EPHY_KARTE_SOURCE_ROOT=info['karte_root'], EPHY_APP_BUNDLE_ID='com.wails.ephy-runtime.resident-feedback',
                EPHY_APP_DISPLAY_NAME='Ephy 常駐検証')
     subprocess.run(['npm', 'ci', '--ignore-scripts'], cwd=ROOT / 'desktop/frontend', env=env, check=True)

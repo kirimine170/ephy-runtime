@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -42,6 +43,10 @@ func newApplicationOptions(app *App) *options.App {
 }
 
 func main() {
+	if err := validateResidentLaunch(residentBuildMode); err != nil {
+		println(err.Error())
+		os.Exit(2)
+	}
 	app := NewApp()
 	err := wails.Run(newApplicationOptions(app))
 

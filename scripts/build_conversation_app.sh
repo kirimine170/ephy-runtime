@@ -21,10 +21,14 @@ npm run build
 cd "${EPHY_RUNTIME_ROOT}/desktop"
 mkdir -p "${EPHY_APP_OUTPUT_DIR}"
 BINARY_PATH="${EPHY_APP_OUTPUT_DIR}/ephy-runtime"
+EPHY_BUILD_LDFLAGS="-w -s"
+if [[ "${EPHY_RESIDENT_BUILD:-0}" == "1" ]]; then
+  EPHY_BUILD_LDFLAGS+=" -X main.residentBuildMode=isolated"
+fi
 go build \
   -buildvcs=false \
   -tags "desktop,wv2runtime.download,production" \
-  -ldflags "-w -s" \
+  -ldflags "${EPHY_BUILD_LDFLAGS}" \
   -o "${BINARY_PATH}" \
   .
 

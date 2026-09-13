@@ -1,3 +1,4 @@
+import {createResidentCandidateWait} from './residentCandidateWait.js';
 const LABELS = {paused:'休止中', reactive:'待受中', observe:'観測中', companion:'会話へ参加'};
 const FIELDS={response_length:'返答の長さ',call_name_frequency:'呼びかけの頻度',proactive:'自発発話',restricted_memory_ids:'共有を控える記憶'};
 const VALUES={default:'既定',brief:'短め',detailed:'詳しく',never:'呼ばない',low:'控えめ',moderate:'ほどほど',high:'多め',allowed:'許可',suppressed:'控える'};
@@ -59,12 +60,13 @@ export function submitResidentFeedback({bridge,controller,sessionID,revision,own
  if (/^(止めて|今は話しかけないで|しばらく話しかけないで)[．。!！\s]*$/.test(text)) void controller.stopPlayback();
  return bridge.SubmitResidentFeedback(payload);
 }
-export function mountResident({root,bridge,controller,getSessionID,subscribe=()=>()=>{},subscribeInteraction=()=>()=>{},onObservation=()=>{}}) {
+export function mountResident({root,bridge,controller,getSessionID,subscribe=()=>()=>{},subscribeInteraction=()=>()=>{},onObservation=()=>{},candidateNow=()=>Date.now(),candidateTimers=globalThis}) {
  const node=root.querySelector('#resident-controls');
  const find=id=>root.querySelector(`#resident-${id}`);
  let config=null,state=null,configuredSession='',disposed=false;
  let preparePromise=null,prepareSession='';
  let observationRevision=0,pendingCandidate=null,lastSpokeAt=0;
+ const candidateWait=createResidentCandidateWait({now:candidateNow,timers:candidateTimers,onDecision:decision=>{if(decision==='wait')find('candidate-status').textContent='会話の切れ目を短く待っています．';}});
  const targets=new Map();
  const doc=root.ownerDocument||root;
  const listeners=[];
@@ -72,7 +74,9 @@ export function mountResident({root,bridge,controller,getSessionID,subscribe=()=
  const status=text=>{find('feedback-status').textContent=text;};
  function renderState(value) {
   if (!value?.state && !value?.policy) return;
-  state=value?.state||value;
+  const nextState=value?.state||value;
+  if(state && (state.revision!==nextState.revision || JSON.stringify(state.policy)!==JSON.stringify(nextState.policy)))invalidateCandidate();
+  state=nextState;
   find('policy').textContent=`現在の設定：${Object.entries(state.policy||{}).map(([field,value])=>`${FIELDS[field]||field}は${valueLabel(value)}`).join('，')}．`;
   const history=find('history'); history.replaceChildren();
   for (const change of (state?.changes||[]).slice(0,20)) {
@@ -86,6 +90,7 @@ export function mountResident({root,bridge,controller,getSessionID,subscribe=()=
    history.appendChild(line);}
  }
  async function prepare(sessionID=getSessionID()) {
+  if(configuredSession && configuredSession!==sessionID)invalidateCandidate();
   if (!config) await ready;
   if (!config?.enabled) return;
   const mode=find('mode').value;
@@ -101,7 +106,7 @@ export function mountResident({root,bridge,controller,getSessionID,subscribe=()=
  listen('start','click',()=>{void(async()=>{try{await prepare();if(await controller.startSession())find('mode-status').textContent=LABELS[find('mode').value];}catch(error){status(error.message||'待受を開始できませんでした．');}})();});
  listen('pause','click',()=>{invalidateCandidate();void controller.pauseSession();find('mode-status').textContent=LABELS.paused;});
  listen('stop','click',()=>{invalidateCandidate();void controller.stopPlayback();status('現在の発話を停止しました．マイクの待受は継続します．');});
- listen('exit','click',()=>{void controller.endSession();void bridge.ExitResident();});
+ listen('exit','click',()=>{invalidateCandidate();void controller.endSession();void bridge.ExitResident();});
  for(const id of ['owner','consent','mode','participants','participant-ids','speaker-id'])listen(id,'change',()=>{void(async()=>{invalidateCandidate();await controller.pauseSession();find('mode-status').textContent=LABELS.paused;try{await prepare();status('設定を変更しました．待受を再開できます．');}catch(error){status(error.message||'設定を変更できませんでした．');}})();});
  async function submit(kind,text) {
   // Preserve the actual target before even preparing/reconfiguring the session．
@@ -116,6 +121,7 @@ export function mountResident({root,bridge,controller,getSessionID,subscribe=()=
  listen('suppress','click',()=>{void submit(undefined,'今は話しかけないで');});
  listen('refresh','click',()=>{void bridge.GetResidentState(getSessionID()).then(renderState).catch(()=>status('履歴を取得できませんでした．'));});
  function invalidateCandidate() {
+  candidateWait.cancel();
   controller.stopPreparedCandidate?.();
   observationRevision++;
   if(pendingCandidate){void bridge.CancelResidentCandidate(pendingCandidate.session_id,pendingCandidate.operation_id).catch(()=>{});pendingCandidate=null;}
@@ -131,15 +137,26 @@ export function mountResident({root,bridge,controller,getSessionID,subscribe=()=
   try {
    const result=await bridge.CreateResidentCandidate({session_id:sid,operation_id:operationID,revision,observation:event.observation.slice(0,2048),participants,speaker_id:speaker,observation_allowed:true});
    if(disposed||revision!==observationRevision||sid!==getSessionID())return;
+   if(result.status!=='candidate'){pendingCandidate=null;find('candidate-status').textContent='今は参加できる候補がありません．';return;}
+   if(find('mode').value==='observe'){pendingCandidate=null;find('candidate-status').textContent=`観測候補（再生なし）：${result.candidate.text}`;return;}
+   const participantKey=participants.join(','),speakerID=speaker;
+   const isCurrent=()=>!disposed && revision===observationRevision && sid===getSessionID()
+     && find('mode').value==='companion' && find('participants').checked && state.revision===result.policy_revision
+     && find('participant-ids').value.split(',').map(x=>x.trim()).filter(Boolean).join(',')===participantKey
+     && find('speaker-id').value.trim()===speakerID;
+   const decision=await candidateWait.offer({expiresAt:candidateNow()+Math.min(15,Math.max(0,Number(result.expires_in_seconds)||0))*1000,
+     isCurrent,isHumanSpeaking:()=>controller.isHumanSpeaking(),cooldownUntil:lastSpokeAt?lastSpokeAt+60000:0});
+   if(!isCurrent())return;
+   if(decision!=='speak'){pendingCandidate=null;void bridge.CancelResidentCandidate(sid,operationID).catch(()=>{});find('candidate-status').textContent='今は発言を控え，候補を破棄しました．';return;}
+   const preparing=await controller.startPreparedCandidate(operationID);
+   if(!isCurrent())return;
    pendingCandidate=null;
-   if(result.status!=='candidate'){find('candidate-status').textContent='今は参加できる候補がありません．';return;}
-   if(find('mode').value==='observe'){find('candidate-status').textContent=`観測候補（再生なし）：${result.candidate.text}`;return;}
-   if(controller.isHumanSpeaking() || Date.now()-lastSpokeAt<60000 || state.revision!==result.policy_revision){find('candidate-status').textContent='今は発言を控え，候補を破棄しました．';return;}
-   if(await controller.startPreparedCandidate(operationID)){lastSpokeAt=Date.now();find('candidate-status').textContent='参加する音声を準備しています．再生直前に共有範囲と期限を再確認します．';}
+   if(preparing){lastSpokeAt=candidateNow();find('candidate-status').textContent='参加する音声を準備しています．再生直前に共有範囲と期限を再確認します．';}
    else find('candidate-status').textContent='会話の状態が変わったため候補を破棄しました．';
   } catch {if(revision===observationRevision)find('candidate-status').textContent='記憶確認を利用できませんでした．次の入力で再試行できます．';}
  }
  const unsubscribeInteraction=subscribeInteraction(event=>{
+  if(event.session_id===getSessionID() && (event.kind==='transcript' || (event.kind==='asr_update' && ['partial','stable','final'].includes(event.asr?.phase) && event.asr?.transcript?.trim())))invalidateCandidate();
   const snapshot=event.snapshot;
   if(snapshot?.session_id!==getSessionID() || !snapshot?.response_plan?.text)return;
   targets.set(snapshot.operation_id,structuredClone(snapshot));while(targets.size>20)targets.delete(targets.keys().next().value);
@@ -149,5 +166,5 @@ export function mountResident({root,bridge,controller,getSessionID,subscribe=()=
   if([...targets.keys()].includes(selected))find('target').value=selected;
  });
  const unsubscribe=subscribe(result=>{if(result.session_id!==getSessionID())return;if(result.status==='observed'){status('許可された会話を観測しました．');onObservation(result);void observe(result);return;}renderState(result);status(residentResultText(result));});
- return {ready,prepare,onSessionState(value){if(!config?.enabled)return;if(value.state!=='listening')invalidateCandidate();find('mode-status').textContent=value.state==='listening'?LABELS[find('mode').value]:LABELS.paused;if(value.reason)status(value.reason);},get mode(){return config?.enabled?find('mode').value:'paused';},get enabled(){return config?.enabled===true;},dispose(){disposed=true;invalidateCandidate();unsubscribe?.();unsubscribeInteraction?.();for(const[element,event,handler]of listeners)element?.removeEventListener(event,handler);}};
+ return {ready,prepare,onSessionState(value){if(!config?.enabled)return;if(value.state!=='listening')invalidateCandidate();find('mode-status').textContent=value.state==='listening'?LABELS[find('mode').value]:LABELS.paused;if(value.reason)status(value.reason);},get mode(){return config?.enabled?find('mode').value:'paused';},get enabled(){return config?.enabled===true;},dispose(){disposed=true;invalidateCandidate();candidateWait.dispose();unsubscribe?.();unsubscribeInteraction?.();for(const[element,event,handler]of listeners)element?.removeEventListener(event,handler);}};
 }
