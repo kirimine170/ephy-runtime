@@ -51,7 +51,9 @@ def load_config(path):
     if value.get('schema_version') != 1:
         raise ValueError('Unsupported integration configuration．')
     for key in PATH_KEYS:
-        value[key] = (path.parent / Path(value[key]).expanduser()).resolve()
+        configured = path.parent / Path(value[key]).expanduser()
+        # A venv's Python must keep its symlink path to load that venv's packages．
+        value[key] = Path(os.path.abspath(configured)) if key == 'tts_python' else configured.resolve()
     for key in ('home', 'logs'):
         value[key].mkdir(parents=True, exist_ok=True)
     value['config_path'] = path
@@ -309,6 +311,22 @@ def warm_tts(config, record, token, profile):
     write_json(stamp, expected)
 
 
+def wait_for_karte(config, record, timeout=180):
+    marker = config['data_root'] / '.mdsys/runtime/karte.pid'
+    until = time.monotonic() + timeout
+    while time.monotonic() < until:
+        if process_identity(record['pid']) != record['identity']:
+            raise RuntimeError('Karte exited during initialization．')
+        try:
+            capabilities = json.loads((config['data_root'] / '.mdsys/context/v2/capabilities.json').read_text())
+            if int(marker.read_text()) == record['pid'] and capabilities['protocol_version'] == '2.0':
+                return
+        except (OSError, ValueError, KeyError):
+            pass
+        time.sleep(.2)
+    raise RuntimeError('Karte receiver readiness timed out．')
+
+
 def start(config):
     release, proof = release_files(config)
     records = {}
@@ -357,18 +375,8 @@ def start(config):
         raise RuntimeError('The configured Irodori voice is unavailable．')
     warm_tts(config, records['irodori'], token, profile)
     remember('karte', open_app(config, release / 'Karte.app', env))
-    marker = config['data_root'] / '.mdsys/runtime/karte.pid'
-    until = time.monotonic() + 30
-    while time.monotonic() < until:
-        try:
-            capabilities = json.loads((config['data_root'] / '.mdsys/context/v2/capabilities.json').read_text())
-            if int(marker.read_text()) == records['karte']['pid'] and capabilities['protocol_version'] == '2.0':
-                break
-        except (OSError, ValueError, KeyError):
-            pass
-        time.sleep(.2)
-    else:
-        raise RuntimeError('Karte receiver readiness timed out．')
+    print('Karte：文書と保存先の初期化を確認しています．', flush=True)
+    wait_for_karte(config, records['karte'])
     env['EPHY_KARTE_EXECUTABLE'] = str(release / 'Karte.app/Contents/MacOS/karte')
     remember('gateway', ensure_service(config, 'gateway', 8000, '/health', [ROOT / 'scripts/start_gateway.sh'], env=env))
     gateway = fetch('http://127.0.0.1:8000/health')
@@ -381,8 +389,11 @@ def start(config):
     runtime_env = {**speech_env, 'EPHY_RUNTIME_ROOT': str(ROOT),
                    'EPHY_ASR_PROVIDER': 'whisper-cpp', 'EPHY_ASR_CONFIG': str(release / 'asr.json')}
     remember('runtime', open_app(config, release / 'Ephy Runtime.app', runtime_env))
-    until = time.monotonic() + 30
+    print('Runtime：Whisperの起動を確認しています．', flush=True)
+    until = time.monotonic() + 180
     while time.monotonic() < until:
+        if process_identity(records['runtime']['pid']) != records['runtime']['identity']:
+            raise RuntimeError('Runtime exited during initialization．')
         worker = whisper_child(records['runtime']['pid'], release / 'Ephy Runtime.app/Contents/Helpers/ephy-whisper')
         if worker:
             remember('asr', worker)

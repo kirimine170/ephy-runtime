@@ -162,3 +162,35 @@ def test_config_resolves_relative_absolute_and_user_paths(tmp_path):
     assert config['logs'] == tmp_path / 'logs'
     assert config['karte_root'] == tmp_path / 'assets'
     assert config['node_bin'] == Path.home()
+
+
+@pytest.mark.skipif(stack.sys.platform == 'win32', reason='macOS virtual environment interpreter')
+def test_config_keeps_virtual_environment_python_symlink(tmp_path):
+    base = tmp_path / 'base-python'
+    base.touch()
+    python = tmp_path / 'venv/bin/python'
+    python.parent.mkdir(parents=True)
+    python.symlink_to(base)
+    value = {key: 'assets' for key in stack.PATH_KEYS}
+    value.update(schema_version=1, home='home', logs='logs', tts_python='venv/bin/python')
+    path = tmp_path / 'integration.json'
+    stack.write_json(path, value)
+    assert stack.load_config(path)['tts_python'] == python
+    assert python.resolve() != python
+
+
+def test_karte_ready_wait_covers_slow_first_initialization(tmp_path, monkeypatch):
+    marker = tmp_path / '.mdsys/runtime/karte.pid'
+    stack.write_json(tmp_path / '.mdsys/context/v2/capabilities.json', {'protocol_version': '2.0'})
+    marker.parent.mkdir(parents=True)
+    marker.write_text('1')
+    monkeypatch.setattr(stack, 'process_identity', lambda pid: 'current')
+    monkeypatch.setattr(stack.time, 'monotonic', Mock(side_effect=[0, 0, 45]))
+    monkeypatch.setattr(stack.time, 'sleep', lambda _: marker.write_text('42'))
+    stack.wait_for_karte({'data_root': tmp_path}, {'pid': 42, 'identity': 'current'})
+
+
+def test_karte_exit_fails_readiness_without_waiting_for_deadline(tmp_path, monkeypatch):
+    monkeypatch.setattr(stack, 'process_identity', lambda pid: None)
+    with pytest.raises(RuntimeError, match='exited'):
+        stack.wait_for_karte({'data_root': tmp_path}, {'pid': 42, 'identity': 'original'})
