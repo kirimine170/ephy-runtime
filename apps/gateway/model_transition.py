@@ -52,6 +52,11 @@ class InferenceGateMiddleware:
             response = JSONResponse({"detail": "Model switch in progress; retry shortly"}, status_code=503,
                                     headers={"Retry-After": "3"})
             return await response(scope, receive, send)
+        # Foreground inference takes priority over a bounded resident memory
+        # candidate．Cancel its HTTP wait before starting the conversational turn．
+        participation = getattr(scope["app"].state, "resident_participation", None)
+        if participation is not None:
+            participation.cancel_current()
         gate.active += 1
         try:
             await self.app(scope, receive, send)

@@ -1,10 +1,13 @@
 from contextlib import asynccontextmanager
+import hashlib
+import os
 
 from fastapi import FastAPI
 
 from packages.config_core.loader import load_app_config, reload_app_config
 from packages.eval_core.runner import EvalRunner
 from packages.eval_core.preference_service import PreferenceService
+from packages.eval_core.resident_service import ResidentService
 from packages.llm_runtime.adapter import LlamaCppChatAdapter
 from packages.identity_core.service import IdentityService
 from packages.karte_core.conversation import KarteConversationService
@@ -15,6 +18,8 @@ from packages.rag_core.service import RagService
 from packages.router_core.router import ModelRouter
 from packages.web_search_core.service import WebSearchService
 from .routes import build_router
+from .resident_routes import ResidentPrivacyMiddleware, resident_router
+from .resident_participation import participation_router
 from .model_transition import InferenceGate, InferenceGateMiddleware, transition_router
 
 
@@ -44,7 +49,16 @@ def initialize_app_state(app: FastAPI, config) -> None:
             context_client=karte_context_client,
         ),
         "karte_context_client": karte_context_client,
+        "resident_service": None,
     }
+    if os.environ.get("EPHY_RESIDENT_ENABLED") == "1":
+        instance_id = str(context.identity.identity.instance_id) if context else os.environ.get("EPHY_RESIDENT_INSTANCE_ID", "resident-local")
+        owner_reference = context.identity.ownership.owner_reference if context and context.identity.ownership else "selected-owner"
+        replacement["resident_service"] = ResidentService(
+            store=replacement["preference_service"].store,
+            instance_id=instance_id,
+            owner_key=hashlib.sha256(owner_reference.encode()).hexdigest(),
+        )
     for name, value in replacement.items():
         setattr(app.state, name, value)
 
@@ -76,5 +90,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Local LLM Workbench Gateway", version="0.1.0", lifespan=lifespan)
 app.include_router(build_router())
+app.include_router(resident_router)
+app.include_router(participation_router)
 app.include_router(transition_router)
 app.add_middleware(InferenceGateMiddleware)
+app.add_middleware(ResidentPrivacyMiddleware)

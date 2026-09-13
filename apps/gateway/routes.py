@@ -26,6 +26,7 @@ from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage, Emb
 from packages.rag_core.schemas import IndexBrowseRequest, IndexSourceRequest, IngestRequest, RAGQueryRequest, SearchRequest
 from packages.router_core.schemas import RouteDecision, RoutePlanResponse
 from packages.web_search_core.schemas import WebSearchApproveRequest, WebSearchPlanRequest
+from .resident_routes import resident_service
 
 
 def _stringify_message_content(content) -> str:
@@ -211,6 +212,12 @@ def build_router() -> APIRouter:
 
         try:
             query_text = _latest_user_message_text(payload.messages)
+            # Snapshot before any awaited grounding/model operation．Active requests keep this revision．
+            resident = getattr(request.app.state, "resident_service", None)
+            resident_snapshot = None
+            if payload.metadata and payload.metadata.resident_session_id:
+                resident = resident_service(request)
+                resident_snapshot = await asyncio.to_thread(resident.state, payload.metadata.resident_session_id)
             project, source_path, tags, top_k = _resolve_grounding_scope(payload.metadata)
             local_sources = []
             local_grounding_sources = []
@@ -276,6 +283,11 @@ def build_router() -> APIRouter:
                         "source_count": 0,
                     }
 
+            if resident_snapshot:
+                restricted = set(resident_snapshot["policy"]["restricted_memory_ids"])
+                # Restrictions only remove retrieved records; they cannot grant Karte access．
+                local_sources = [s for s in local_sources if s.get("doc_id") not in restricted]
+                local_grounding_sources = [s for s in local_grounding_sources if s.get("doc_id") not in restricted]
             sources = [*local_sources, *web_sources]
 
             routing_payload = payload
@@ -292,6 +304,8 @@ def build_router() -> APIRouter:
 
             decision: RouteDecision = router_service.route_chat(routing_payload)
             effective_payload = prompt_manager.apply_mode_prompt(payload, decision.mode)
+            if resident_snapshot:
+                effective_payload = resident.apply_policy(effective_payload, resident_snapshot)
             # Only the server's routing decision can select provider policy．
             metadata = effective_payload.metadata or RequestMetadata()
             effective_payload = effective_payload.model_copy(update={
@@ -328,6 +342,12 @@ def build_router() -> APIRouter:
                     route_event = {"provider": decision.selected_model.provider,
                                    "model": decision.selected_model.model,
                                    "configuration_id": configuration_id}
+                    if resident_snapshot:
+                        route_event["resident_revision"] = resident_snapshot["revision"]
+                        route_event["resident_policy_id"] = resident_snapshot["policy_snapshot_id"]
+                        route_event["prompt_id"] = hashlib.sha256(json.dumps([
+                            m.model_dump(mode="json") for m in effective_payload.messages if m.role == "system"
+                        ], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:24]
                     yield f"event: route\ndata: {json.dumps(route_event)}\n\n".encode("utf-8")
                     if web_search_status:
                         yield f"event: web_search_status\ndata: {json.dumps(web_search_status, ensure_ascii=False)}\n\n".encode("utf-8")
@@ -356,6 +376,9 @@ def build_router() -> APIRouter:
 
         if sources:
             response["sources"] = sources
+        if resident_snapshot:
+            response["resident_revision"] = resident_snapshot["revision"]
+            response["resident_policy_id"] = resident_snapshot["policy_snapshot_id"]
         if web_search_status:
             response["web_search_status"] = web_search_status
         if karte_context_status:

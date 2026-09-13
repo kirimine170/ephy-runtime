@@ -45,13 +45,24 @@ class PreferenceStore:
     def database_path(self) -> Path:
         return self.data_root / "preferences.sqlite3"
 
+    def ensure_private_root(self, repository_root: Path) -> Path:
+        """Shared storage guard for A/B and resident feedback．"""
+        root = self.data_root
+        repository = repository_root.resolve()
+        if root == repository or root.is_relative_to(repository) or repository.is_relative_to(root):
+            raise ValueError("EPHY_PREFERENCE_DATA_ROOT must be separate from the Git repository")
+        if any((ancestor / ".git").exists() for ancestor in (root, *root.parents)):
+            raise ValueError("EPHY_PREFERENCE_DATA_ROOT must be outside a Git repository")
+        return root
+
     def _connect(self) -> sqlite3.Connection:
         root = self.data_root
-        root.mkdir(parents=True, exist_ok=True)
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
         database = self.database_path
-        if database.exists() and database.is_symlink():
+        if any(path.is_symlink() for path in (database, Path(f"{database}-wal"), Path(f"{database}-shm"))):
             raise ValueError("Preference database must not be a symlink")
         connection = sqlite3.connect(database, timeout=30)
+        database.chmod(0o600)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
