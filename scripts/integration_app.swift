@@ -9,7 +9,8 @@ case "open":
     configuration.createsNewApplicationInstance = true
     let keys: Set<String> = [
         "PATH", "HOME", "TMPDIR", "LANG", "PYTHONPATH", "KARTE_DATA_DIR", "KARTE_LOG_DIR",
-        "EPHY_RUNTIME_ROOT", "EPHY_ASR_PROVIDER", "EPHY_ASR_CONFIG",
+        "EPHY_RUNTIME_ROOT", "EPHY_LOG_DIR", "EPHY_PREFERENCE_DATA_ROOT",
+        "EPHY_ASR_PROVIDER", "EPHY_ASR_CONFIG",
         "EPHY_TTS_BEARER_TOKEN", "EPHY_TTS_ENDPOINT", "EPHY_RECORDING_HOME",
         "EPHY_KARTE_CONFIG_ROOT", "EPHY_KARTE_CONTROL"
     ]
