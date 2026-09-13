@@ -1,6 +1,6 @@
 # Runtime会話・日記 C1〜C3 実装計画
 
-2026-09-12．添付`Ephy_Karte_Runtime_C1-C3_Codex_Prompts.md`を基に，Step 1・2と先行したStep 3の実装を反映した．Step 1・2は人による実機受入待ち，Step 4以降は未着手である．本書には後続の設計も含まれ，全体の実装済みを意味しない．現在の根拠と受入状態は[STATUS.md](STATUS.md)を正本とする．各Stepは指定された分だけ実行し，次へ自動進行しない．
+2026-09-13．添付`Ephy_Karte_Runtime_C1-C3_Codex_Prompts.md`を基に，Step 1〜4の実装を反映した．Step 4の利用・復旧は[RUNTIME_RECORDING.md](../RUNTIME_RECORDING.md)を参照する．Step 5以降は未着手である．本書には後続の設計も含まれ，全体の実装済みを意味しない．現在の根拠と受入状態は[STATUS.md](STATUS.md)を正本とする．各Stepは指定された分だけ実行し，次へ自動進行しない．
 
 ## 1．到達点，責務，既存計画との関係
 
@@ -74,7 +74,7 @@ C0.4の300 ms待機ACKは初期C1では割込み発話中に再生しない．AC
 
 ## 3．C2の保存と復旧
 
-Step 3ではKarteの`internal/canonical`，`internal/ephyrecordsv2`，`cmd/karte-ephy-control`とv2 schemas／fixturesを実装した．設定・処理・復旧は[KarteのStep 3手順](../../../karte/architecture/RUNTIME_RECORDS_V2_SETUP.md)へ集約する．本節のRuntime queue・記録設定・配送はStep 4の未実装設計である．Step 4はStep 2の中断・再生状況と，現在policyに従うv2 reader，旧direct index除外の完成を前提とする．
+Step 3ではKarteの`internal/canonical`，`internal/ephyrecordsv2`，`cmd/karte-ephy-control`とv2 schemas／fixturesを実装した．設定・処理・復旧は[KarteのStep 3手順](../../../karte/architecture/RUNTIME_RECORDS_V2_SETUP.md)へ集約する．Step 4では本節のRuntime queue・記録設定・配送と，現在policyに従うv2 read-back，旧direct readerと既存RAG copy／cacheの除外を実装した．具体的な保持上限・失敗表示は[RUNTIME_RECORDING.md](../RUNTIME_RECORDING.md)を優先する．
 
 wire field，Karte正本format，policy，ID・revision，transaction境界，保持上限の詳細は[Karte保存契約 v2](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)へ集約する．Runtimeはそれを独自に再定義しない．
 
@@ -177,6 +177,6 @@ Step 3以降はproducer・Job停止→durable queueの保全→Karteのv2 grant�
 
 ## 8．現在の完了範囲と次の指示対象
 
-Step 0の設計・照合，Step 1の実装・自動検証，先行Step 3のKarte実装・自動検証・契約照合まで実施した．統合版と受入の証拠はSTATUSを優先する．実保存先を新しく有効にした事実や，実音声受入の合格へ読み替えない．
+Step 0〜4の実装・契約照合を実施した．自動検証，配布build，利用者受入の証拠はSTATUSを優先する．実装済みを実音声受入の合格へ読み替えない．
 
-次の指示対象はC1 Step 1の既存受入手順とStep 2である．Step 2では入力冒頭，取消後の次ASR，生成・表示・再生開始・自然終了・不明状態を確定する．その後に別指示でStep 4の記録設定・永続queue・v2配送／read-back・旧reader除外を実装する．Step 5〜7とWorkerへ自動進行しない．
+Step 4は記録設定・durable queue・v2配送／read-back・旧reader除外までを対象とする．Step 5〜7とWorkerへ自動進行しない．

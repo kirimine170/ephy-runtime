@@ -94,6 +94,12 @@ func (a *App) interactionEngine() *InteractionEngine {
 			_, _ = provider.Readiness(context.Background())
 		}
 	}
+	a.recordingMu.Lock()
+	recorder := a.recorder
+	a.recordingMu.Unlock()
+	a.interaction.mu.Lock()
+	a.interaction.recorder = recorder
+	a.interaction.mu.Unlock()
 	return a.interaction
 }
 

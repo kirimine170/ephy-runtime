@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"desktop/recording"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -89,6 +91,7 @@ type playbackChunk struct {
 	waitingAt, startedAt time.Time
 }
 type interactionTurn struct {
+	recordingKey           string
 	fillerIdentityReady    bool
 	fillerSetupServed      bool
 	fillerSampleSaved      bool
@@ -115,6 +118,7 @@ type interactionTurn struct {
 	speech                 *preparedSpeech
 }
 type InteractionEngine struct {
+	recorder     *recording.Store
 	mu           sync.Mutex
 	voiceSession *voiceSession
 	asr          VoiceASR
@@ -419,6 +423,22 @@ func (e *InteractionEngine) acceptTranscript(t *interactionTurn, result string) 
 		e.mu.Unlock()
 		return
 	}
+	if e.recorder != nil {
+		kind := "text"
+		var meta *recording.ASR
+		if t.source != "transcript" && t.asr != nil {
+			kind = "asr_final"
+			m := t.asr.metadata
+			meta = &recording.ASR{Provider: m.Provider, ModelRevision: m.ModelRevision, FinalRevision: int64(t.asr.lastRevision)}
+		}
+		key, err := e.recorder.Begin(t.snapshot.OperationID, t.snapshot.SessionID, result, kind, meta)
+		if err != nil {
+			e.failLocked(t, "recording_storage_failed")
+			e.mu.Unlock()
+			return
+		}
+		t.recordingKey = key
+	}
 	t.snapshot.Transcript = result
 	t.request.Chat.Prompt = result
 	t.request.Chat.RequestID = t.snapshot.OperationID
@@ -570,6 +590,11 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 			for _, text := range progress.SpeechUnits {
 				tasks = append(tasks, speechTask{id: e.registerSpeechUnitLocked(t, revision, text), text: text})
 			}
+			if err := e.checkpointRecordingLocked(t); err != nil {
+				e.failLocked(t, "recording_storage_failed")
+				e.mu.Unlock()
+				return
+			}
 			event := e.eventLocked(t, "output")
 			snapshot := cloneInteractionSnapshot(t.snapshot)
 			event.Snapshot = &snapshot
@@ -610,6 +635,11 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 	t.snapshot.Generation = cloneGenerationMetadata(response.Generation)
 	t.snapshot.ResponsePlan = responsePlan(response.Answer)
 	t.generationDone = true
+	if err := e.checkpointRecordingLocked(t); err != nil {
+		e.failLocked(t, "recording_storage_failed")
+		e.mu.Unlock()
+		return
+	}
 	if response.Generation.Complete {
 		if t.tokenCount == 0 {
 			e.traceLocked(t, "llm_first_token", "")
@@ -715,8 +745,16 @@ func (e *InteractionEngine) Continue(op string) (InteractionSnapshot, error) {
 	if t.snapshot.ResponsePlan != nil {
 		prefix = t.snapshot.ResponsePlan.Text
 	}
+	nextRevision := t.snapshot.GenerationRevision + 1
+	if e.recorder != nil {
+		key, err := e.recorder.BeginContinuation(t.snapshot.OperationID, t.snapshot.OperationID+fmt.Sprintf(":generation:%d", nextRevision), t.snapshot.SessionID, len(prefix))
+		if err != nil {
+			return InteractionSnapshot{}, err
+		}
+		t.recordingKey = key
+	}
 	t.ctx, t.cancel = context.WithCancel(context.Background())
-	t.snapshot.GenerationRevision++
+	t.snapshot.GenerationRevision = nextRevision
 	t.snapshot.State = "THINKING"
 	t.snapshot.ErrorCode = ""
 	t.snapshot.Generation = nil
@@ -871,6 +909,10 @@ func (e *InteractionEngine) Playback(op string, seq int, phase string) error {
 		return errors.New("invalid_playback_phase")
 	}
 	e.refreshSpeechUnitsLocked(t)
+	if err := e.checkpointRecordingLocked(t); err != nil {
+		e.failLocked(t, "recording_storage_failed")
+		return errors.New("recording_storage_failed")
+	}
 	e.playbackDeadlineLocked(t)
 	e.completeIfPlayedLocked(t)
 	return nil
@@ -903,13 +945,19 @@ func (e *InteractionEngine) finishLocked(t *interactionTurn, state, name, code s
 	if state == "COMPLETED" && t.snapshot.State != "PLAYING" && !(t.snapshot.State == "THINKING" && t.generationDone) {
 		state, name, code = "FAILED", "turn_failed", "invalid_completion_state"
 	}
+	e.refreshSpeechUnitsForStateLocked(t, state)
+	t.snapshot.ErrorCode = code
+	if err := e.finishRecordingLocked(t, state); err != nil {
+		state, name, code = "FAILED", "turn_failed", "recording_storage_failed"
+		t.snapshot.ErrorCode = code
+		e.refreshSpeechUnitsForStateLocked(t, state)
+	}
 	trace := e.recordTraceLocked(t, name, code, false)
 	if err := e.store.save(t.snapshot.OperationID, t.events); err != nil {
 		state, name, code = "FAILED", "turn_failed", "trace_storage_failed"
 		t.events = t.events[:len(t.events)-1]
 		trace = e.recordTraceLocked(t, name, code, false)
 	}
-	e.refreshSpeechUnitsForStateLocked(t, state)
 	t.snapshot.ErrorCode = code
 	event := e.eventLocked(t, "trace")
 	event.Trace = trace

@@ -10,9 +10,13 @@ import httpx
 from packages.config_core.loader import ROOT_DIR, VectorDBConfig
 from .schemas import IndexedChunk, SearchResult
 from .store import JsonChunkStore
+from packages.karte_core.protected import protected_chunk, remove_managed_copy
 
 
 class VectorStore:
+    def sanitize_protected(self) -> int:
+        raise NotImplementedError
+
     def replace_for_paths(self, paths: set[str], chunks: list[IndexedChunk], vector_size: int) -> int:
         raise NotImplementedError
 
@@ -27,6 +31,12 @@ class VectorStore:
 class ResilientVectorStore(VectorStore):
     primary: VectorStore
     fallback: LocalJsonVectorStore
+
+    def sanitize_protected(self) -> int:
+        # Recording setup requires both stores to be checked，including the
+        # inactive fallback．An unavailable primary is not a successful purge．
+        count = self.fallback.sanitize_protected()
+        return count + self.primary.sanitize_protected()
 
     def replace_for_paths(self, paths: set[str], chunks: list[IndexedChunk], vector_size: int) -> int:
         fallback_count = self.fallback.replace_for_paths(paths=paths, chunks=chunks, vector_size=vector_size)
@@ -64,7 +74,12 @@ class ResilientVectorStore(VectorStore):
 class LocalJsonVectorStore(VectorStore):
     store: JsonChunkStore
 
+    def sanitize_protected(self) -> int:
+        self.store.load()  # Load durably removes blocked cached chunks/copies．
+        return 0
+
     def replace_for_paths(self, paths: set[str], chunks: list[IndexedChunk], vector_size: int) -> int:
+        chunks = [chunk for chunk in chunks if not protected_chunk(chunk)]
         existing = self.store.load()
         retained = [
             chunk
@@ -105,7 +120,17 @@ class QdrantVectorStore(VectorStore):
     config: VectorDBConfig
     client: httpx.Client = field(default_factory=lambda: httpx.Client(timeout=30.0))
 
+    def sanitize_protected(self) -> int:
+        response = self.client.get(self._url(""))
+        if response.status_code == 404:
+            return 0
+        response.raise_for_status()
+        # load_chunks filters and removes the actual returned point IDs．
+        self.load_chunks()
+        return 0
+
     def replace_for_paths(self, paths: set[str], chunks: list[IndexedChunk], vector_size: int) -> int:
+        chunks = [chunk for chunk in chunks if not protected_chunk(chunk)]
         self._ensure_collection(vector_size=vector_size)
         existing_ids = self._find_point_ids_by_path_prefix(paths)
         if existing_ids:
@@ -135,6 +160,7 @@ class QdrantVectorStore(VectorStore):
         response.raise_for_status()
         result = response.json().get("result", {})
         results = result.get("points", []) if isinstance(result, dict) else result
+        results = self._filter_protected_points(results)
         return [
             build_search_result_from_payload(
                 payload=item.get("payload", {}),
@@ -163,12 +189,21 @@ class QdrantVectorStore(VectorStore):
             response.raise_for_status()
             result = response.json().get("result", {})
             points = result.get("points", [])
+            points = self._filter_protected_points(points)
             chunks.extend(build_indexed_chunk_from_payload(point.get("payload", {})) for point in points)
             offset = result.get("next_page_offset")
             if offset is None:
                 break
 
         return chunks
+
+    def _filter_protected_points(self, points: list[dict]) -> list[dict]:
+        blocked = [point for point in points if protected_chunk(point.get("payload", {}))]
+        if blocked:
+            for point in blocked:
+                remove_managed_copy(point.get("payload", {}))
+            self._delete_points([str(point["id"]) for point in blocked])
+        return [point for point in points if point not in blocked]
 
     def _ensure_collection(self, vector_size: int) -> None:
         response = self.client.get(self._url(""))

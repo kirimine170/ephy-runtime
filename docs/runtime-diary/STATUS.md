@@ -1,8 +1,19 @@
 # Runtime会話・日記 C1〜C3 状況
 
-最終更新：2026-09-13．**ASR改善計画A〜Eを常駐Whisper，途中表示，VAD終端，割込み，アプリbuildへ接続した**．公開朗読100件の比較からlarge-v3-turbo F16を選択した．モデルVADで小声と短い指示の取りこぼしを減らし，無発話はLLMへ送らず待受へ戻す．実測と未達，人による再試験は[LOCAL_WHISPER_ASR.md](../LOCAL_WHISPER_ASR.md)を参照する．Frontend 299 testsとGo全体のrace検査は成功した．自然な実マイク会話と実再生停止の品質受入は未完了である．先行Step 3のKarte基盤は維持し，Step 4以降の実会話記録は有効化していない．
+最終更新：2026-09-13．**C2 Step 4のRuntime→Karte自動記録を実装した**．記録ON後のuser finalをLLM開始前にprivate queueへ保全し，assistantの確定本文とC1の生成・再生状態をv2で自動配送する．receiptと現在policyでの読戻しを照合して保存済みにする．large-v3-turboのASR経路と既存モデル・voice設定を維持する．利用・復旧・制限は[RUNTIME_RECORDING.md](../RUNTIME_RECORDING.md)を参照する．
 
-次の担当は[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)，[Runtime ADR-0014](../adr/ADR-0014-runtime-conversation-diary-boundaries.md)，[Karte保存契約 v2](../../../karte/architecture/KARTE_RUNTIME_DIARY_V2.md)を読み，ユーザーが指定したStepだけを進める．全Stepを一括実行するgoalは設定しない．
+## Step 4／C2 Runtime
+
+| 区分 | 状態 |
+|---|---|
+| 実装済み | 記録設定・ON/OFF，Git外のdurable queue，user final先行保全，assistant checkpoint，単一dispatcher，安定ID／seq，再送・restart，receipt／ID／hashと現在policyによる読戻し，状態UI |
+| 旧経路の保護 | v2所有ledger・markerに基づくdirect reader拒否，既存RAG copy／JSON cache／Qdrant pointの失効，file／process toolからprivate本文・credentialへのアクセス遮断．初回ONにはGatewayの準備gateが必須 |
+| 自動検証 | 100 turns／200 events，実SIGKILL復旧，OFF中の本文非採取，中断，容量・disk failure，7種のreceipt／read-back不一致，実Karte CLIで32 turns／64 eventsと取消を確認．Python全体636 passed／3 skipped，Frontend 301 passed，Go全体race，Karte records／canonical／contextのraceと保存6境界のfault，validator，45 JSON byte照合が成功．native Karteの受信処理でも4往復／8 eventsを8,512 msで保存・read-backし，producer再起動後のseq／ID重複なしとOFFを確認した．初回grant公開待ち，text生成途中の確定境界checkpoint，assistant保存失敗の伝播，子プロセスと重なったwriter lock解放を回帰検査へ追加した．最終配布buildのsource／hashはローカル受入manifestに固定する |
+| 対応するKarte | `90c69c58945e4eb00ec5f13c73b444ff298443d2`をpin．schema／protocol 2.0のまま．新しいKarte契約変更なし |
+| 利用者受入 | 初期設定はOFF．対応build・Karte・Gatewayを準備してから，利用者によるtext／音声，中断，OFF，再起動の一周を確認する |
+| 次の範囲 | C3の要約・日記Job，翌日の想起・訂正は未実装．Step 5以降へ自動進行しない |
+
+以下はStep 4より前の実装・受入の履歴である．「Step 4未実装」「実記録を有効化していない」は各節を記録した時点の状態を示す．
 
 ## 2026-09-13 ノイズ対策の追補
 

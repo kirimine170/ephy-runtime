@@ -12,3 +12,10 @@ body {
 #app {
     height: 100vh;
 }
+
+.conversation-recording { margin: 0 0 12px; border: 1px solid var(--border, #d8dee8); border-radius: 10px; background: var(--panel-bg, #fff); }
+.conversation-recording > summary { padding: 10px 14px; cursor: pointer; font-size: 12px; }
+.recording-panel { padding: 0 16px 16px; max-height: 60vh; overflow: auto; }
+.recording-panel p { font-size: 12px; line-height: 1.7; }
+.recording-record { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 0; font-size: 12px; }
+#recording-readback { max-height: 360px; white-space: pre-wrap; overflow-wrap: anywhere; }

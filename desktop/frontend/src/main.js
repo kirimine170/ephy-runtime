@@ -1,4 +1,5 @@
 import './style.css';
+import {recordingMarkup, mountRecording} from './recording';
 import './voiceInteraction.css';
 import {mountVoiceInteraction} from './voiceInteraction';
 import {conversationHistory, isConversationHistoryEntry} from './conversationHistory';
@@ -170,6 +171,7 @@ let voiceEvaluation = null;
 let voiceProfiles = null;
 let chatThreadEntries = [];
 let chatConversationId = createKarteConversationId();
+let recordingController;
 let chatOccurredAt = formatLocalISOString();
 let latestChatSources = [];
 let activeChatSourceIndex = 0;
@@ -978,6 +980,7 @@ app.innerHTML = `
                 <div id="chat-route-output" class="runtime-result"></div>
               </details>
             </div>
+            ${recordingMarkup()}
             <div id="chat-output" class="conversation-thread" role="region" aria-label="Conversation"></div>
             <div id="chat-stream-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
             ${voiceProfilesMarkup()}
@@ -2012,7 +2015,7 @@ function createChatRequestId() {
 
 function createKarteConversationId() {
   const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  return `conversation-${randomPart}`;
+  return randomPart;
 }
 
 function getChatModeLabel(mode) {
@@ -2072,6 +2075,7 @@ function startNewChat() {
   void voiceController?.cancel();
   chatThreadEntries = [];
   chatConversationId = createKarteConversationId();
+  void recordingController?.newConversation(chatConversationId);
   voiceEvaluation?.refresh();
   chatOccurredAt = formatLocalISOString();
   latestChatSources = [];
@@ -2359,7 +2363,7 @@ async function planKarteConversation(requestId, overrides = {}) {
 }
 
 async function autoPlanKarteConversation(requestId) {
-  if (!karteAvailable) return null;
+  if (!karteAvailable || recordingController?.ownsAutomaticRecording()) return null;
   return planAndMaybePublishKarteConversation(requestId);
 }
 
@@ -7787,6 +7791,7 @@ async function continueChatGeneration(requestId) {
         queryOverride: continuationPrompt,
         origin: 'chat',
         requestId: continuationRequestId,
+        continuationOf: requestId,
       });
       finalizeStreamingChat({
         requestId: continuationRequestId,
@@ -7818,6 +7823,8 @@ async function continueChatGeneration(requestId) {
       temperature: 0.2,
       max_tokens: getChatMaxTokens(mode),
       request_id: continuationRequestId,
+      session_id: chatConversationId,
+      continuation_of: requestId,
       stream: true,
     });
     finalizeStreamingChat({
@@ -7860,7 +7867,7 @@ async function runPresetVerificationWorkflow(preset) {
   setOutput('runtime-config-status', ok ? `Preset verification completed: ${preset.name}` : `Preset verification found issues: ${preset.name}`);
 }
 
-async function runRagRequest({answer, queryOverride = '', origin = 'library', requestId = ''}) {
+async function runRagRequest({answer, queryOverride = '', origin = 'library', requestId = '', continuationOf = ''}) {
   const query = queryOverride || document.getElementById('rag-query').value;
   const project = document.getElementById('rag-project').value;
   const sourcePath = document.getElementById('rag-source-path').value.trim();
@@ -7882,6 +7889,8 @@ async function runRagRequest({answer, queryOverride = '', origin = 'library', re
       top_k: topK,
       answer: true,
       request_id: requestId,
+      session_id: origin === 'chat' ? chatConversationId : '',
+      continuation_of: continuationOf,
       stream: origin === 'chat',
     });
     const sourceCount = response.sources?.length || 0;
@@ -8941,6 +8950,9 @@ bindValidationAction('runtime-preset-validation');
 
 async function initializeWorkbench() {
   workspaceChrome.initialize();
+  recordingController = mountRecording({bridge: interactionBridge, onConversation: (id) => { chatConversationId = id; }});
+  await recordingController.refresh();
+  window.setInterval(recordingController.refresh, 4000);
   activateTab('chat');
   renderChatThread();
   renderChatSourcesPane({sources: [], title: 'Sources'});

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import stat
+from packages.karte_core.protected import model_private_roots, protected_path
 
 
 SENSITIVE_NAMES = frozenset(
@@ -137,6 +138,13 @@ class WorkspacePathGuard:
                 continue
 
     def _reject_sensitive(self, path: Path) -> None:
+        try:
+            if any(path.is_relative_to(root) for root in model_private_roots()) or protected_path(path):
+                raise PathPolicyError("policy_reader_required", "Karte policy access is required")
+        except ValueError as exc:
+            if isinstance(exc, PathPolicyError):
+                raise
+            raise PathPolicyError("policy_reader_required", "Karte ownership could not be verified") from None
         relative_parts = tuple(part.lower() for part in path.relative_to(self.root).parts)
         for part in relative_parts:
             if part == ".env" or part.startswith(".env."):

@@ -22,6 +22,11 @@ func (a *App) shutdown(_ context.Context) {
 		a.interaction.Close()
 	}
 	a.interactionMu.Unlock()
+	a.recordingMu.Lock()
+	if a.recorder != nil {
+		a.recorder.Close()
+	}
+	a.recordingMu.Unlock()
 	a.mu.Lock()
 	a.closing = true
 	for _, cmd := range []*exec.Cmd{a.fastCmd, a.workCmd, a.codeCmd, a.embeddingCmd, a.watchCmd, a.gatewayCmd} {

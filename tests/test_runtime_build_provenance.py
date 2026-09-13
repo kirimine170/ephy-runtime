@@ -57,3 +57,20 @@ def test_bundle_provenance_checks_the_packaged_helper(tmp_path):
     helper.write_bytes(b'stale helper')
     with pytest.raises(ValueError, match='Bundled ASR helper'):
         provenance.finish(root, before, binary, tmp_path / 'bad.json')
+
+
+def test_bundle_provenance_rejects_replaced_karte_control(tmp_path):
+    root = repository(tmp_path / 'repo')
+    before = provenance.source_snapshot(root)
+    contents = tmp_path / 'app/Contents'
+    for directory in ['MacOS', 'Helpers', 'Resources']:
+        (contents / directory).mkdir(parents=True)
+    binary = contents / 'MacOS/ephy-runtime'; binary.write_bytes(b'app')
+    helper = contents / 'Helpers/karte-ephy-control'; helper.write_bytes(b'control')
+    digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+    (contents / 'Resources/karte-control-provenance.json').write_text(json.dumps({'executable_sha256':digest, 'protocol_version':'2.0', 'source_revision':'pinned', 'source_dirty':False}))
+    result = provenance.finish(root, before, binary, tmp_path / 'proof.json')
+    assert result['karte_control_sha256'] == digest and result['karte_source_revision'] == 'pinned'
+    helper.write_bytes(b'replaced control')
+    with pytest.raises(ValueError, match='Bundled Karte control'):
+        provenance.finish(root, before, binary, tmp_path / 'bad.json')

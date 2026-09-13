@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+from .protected import protected_path
+
 
 @dataclass(frozen=True)
 class KarteSourceIssue:
@@ -106,6 +108,8 @@ class KarteSourceAdapter:
 
     def _read_candidate(self, candidate: Path) -> tuple[KarteDocument | None, KarteSourceIssue | None]:
         relative_path = self._relative_path(candidate)
+        if protected_path(candidate):
+            return None, KarteSourceIssue("policy_reader_required", relative_path, "Karte v2 authorization is required")
         try:
             resolved = candidate.resolve(strict=True)
         except (FileNotFoundError, RuntimeError):
