@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "home": "../../../local-runtimes/ephy.nosync",
+  "logs": "../../../logs/runtime",
+  "karte_root": "../../karte",
+  "data_root": "../data/runtime/karte-data",
+  "preference_data": "../../../local-data/preferences",
+  "asr_source": "../../../local-runtimes/asr/upstream",
+  "asr_models": "../../../local-runtimes/asr/models",
+  "asr_model_id": "large-v3-turbo-f16",
+  "tts_python": "../../../local-runtimes/irodori/Irodori-TTS-Server/.venv/bin/python",
+  "tts_config": "../../../local-data/speech/irodori/service-config.json",
+  "tts_token_file": "../../../local-data/speech/irodori/bearer-token",
+  "voice_profile_id": "voice-irodori-anime-exp",
+  "node_bin": "../../../local-runtimes/node-22.13.0/bin"
+}

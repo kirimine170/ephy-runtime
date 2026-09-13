@@ -2,6 +2,12 @@
 set -euo pipefail
 
 EPHY_RUNTIME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+EPHY_APP_OUTPUT_DIR="${EPHY_APP_OUTPUT_DIR:-${EPHY_RUNTIME_ROOT}/desktop/build/bin}"
+
+if [[ "${EPHY_REQUIRE_WHISPER:-0}" == "1" && ! -f "${EPHY_RUNTIME_ROOT}/bin/ephy-whisper" ]]; then
+  echo 'Build the configured Whisper helper before building the integration app．' >&2
+  exit 1
+fi
 
 EPHY_BUILD_SNAPSHOT="$(mktemp)"
 trap 'rm -f "${EPHY_BUILD_SNAPSHOT}"' EXIT
@@ -11,8 +17,8 @@ cd "${EPHY_RUNTIME_ROOT}/desktop/frontend"
 npm run build
 
 cd "${EPHY_RUNTIME_ROOT}/desktop"
-mkdir -p build/bin
-BINARY_PATH="${EPHY_RUNTIME_ROOT}/desktop/build/bin/ephy-runtime"
+mkdir -p "${EPHY_APP_OUTPUT_DIR}"
+BINARY_PATH="${EPHY_APP_OUTPUT_DIR}/ephy-runtime"
 go build \
   -buildvcs=false \
   -tags "desktop,wv2runtime.download,production" \
@@ -23,7 +29,7 @@ go build \
 echo "Built ${BINARY_PATH}"
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  APP_BUNDLE="${EPHY_RUNTIME_ROOT}/desktop/build/bin/ephy-runtime.app"
+  APP_BUNDLE="${EPHY_APP_OUTPUT_DIR}/ephy-runtime.app"
   APP_BINARY="${APP_BUNDLE}/Contents/MacOS/ephy-runtime"
   INFO_PLIST="${APP_BUNDLE}/Contents/Info.plist"
   mkdir -p "${APP_BUNDLE}/Contents/MacOS" "${APP_BUNDLE}/Contents/Resources"
@@ -68,4 +74,4 @@ fi
 EPHY_PROVENANCE_BINARY="${BINARY_PATH}"
 if [[ "$(uname -s)" == "Darwin" ]]; then EPHY_PROVENANCE_BINARY="${APP_BINARY}"; fi
 python3 "${EPHY_RUNTIME_ROOT}/scripts/runtime_build_provenance.py" finish "${EPHY_BUILD_SNAPSHOT}" \
-  --binary "${EPHY_PROVENANCE_BINARY}" --output "${EPHY_RUNTIME_ROOT}/desktop/build/bin/runtime-build-provenance.json"
+  --binary "${EPHY_PROVENANCE_BINARY}" --output "${EPHY_APP_OUTPUT_DIR}/runtime-build-provenance.json"
