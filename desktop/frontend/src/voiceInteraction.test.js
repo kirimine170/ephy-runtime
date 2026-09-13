@@ -257,6 +257,7 @@ function harness(options = {}) {
   if (options.showASR) nodes['voice-asr-status'] = button();
   const calls = {start: [], readiness: [], begin: [], append: [], end: [], commit: [], cancel: [], interrupts: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
   calls.candidateBegin = []; calls.candidateAppend = []; calls.candidateCancel = [];
+  calls.textStart = []; calls.chat = [];
   const candidateRequest = op => ({operation_id: op, session_id: 'session', turn_id: `turn-${op.slice(3)}`, segment_id: `candidate-segment-${op}`, sample_rate: 16000});
   const contexts = [];
   const streams = [];
@@ -266,6 +267,7 @@ function harness(options = {}) {
     async ChangeVoiceSession(id, epoch, action) { return {id, epoch: action === 'resume' ? epoch + 1 : epoch, conversation_id: 'session', state: action === 'end' ? 'stopped' : action === 'pause' ? 'paused' : 'starting'}; },
     async GetInteractionASRReadiness() { calls.readiness.push(true); return {state: 'ready', can_start: true}; },
     async StartInteraction(request) { calls.start.push(request); calls.request = request; return snapshot(++identity); },
+    async StartTextInteraction(request) { calls.textStart.push(request); return snapshot(++identity, 'RECORDING', {input_kind: 'text'}); },
     async BeginInteractionASR(operationID, sampleRate) {
       calls.begin.push([operationID, sampleRate]);
       return {operation_id: operationID, session_id: 'session', turn_id: `turn-${operationID.slice(3)}`, segment_id: `segment-${operationID.slice(3)}`, sample_rate: sampleRate};
@@ -308,6 +310,7 @@ function harness(options = {}) {
     onTranscript: (...args) => calls.transcript.push(args),
     onToken: (...args) => calls.token.push(args),
     onOutput: (...args) => calls.output.push(args),
+    onChatEvent: (...args) => calls.chat.push(args),
     onComplete: (...args) => calls.complete.push(args),
     onIncomplete: (...args) => calls.incomplete.push(args),
     onFailure: (...args) => calls.failure.push(args),
@@ -1767,6 +1770,29 @@ test('C1 Step2 provider final before handoff drain pauses without accepting a tr
   await h.controller.endSession();
 });
 
+test('a next-speech candidate during finalization does not invalidate the submitted ASR input', async () => {
+  const opened = deferred();
+  const h = harness({bridge: {BeginInteractionInterruptionCandidate: () => opened.promise}});
+  await h.controller.startSession();
+  h.contexts[0].capture(speechFrame());
+  await h.controller.stop();
+  h.contexts[0].capture(interruptionFrame());
+  await tick();
+  h.asr(1, 1, '前の発話です', {phase: 'final', stable_prefix: '前の発話です'});
+  await tick();
+  h.event(1, 'transcript', {text: '前の発話です'});
+  h.state(1, 'THINKING');
+  h.event(1, 'token', {text: '回答を続けます．'});
+  assert.deepEqual(h.calls.fail, []);
+  assert.equal(h.calls.transcript.length, 1);
+  assert.equal(h.calls.token.at(-1)[1], '回答を続けます．');
+  assert.equal(h.calls.end.length, 1);
+  assert.equal(h.controller.sessionSnapshot.state, 'responding');
+  await h.controller.endSession();
+  opened.resolve(null);
+  await tick();
+});
+
 for (const phase of ['THINKING', 'SYNTHESIZING', 'PLAYING']) test(`noise bursts preserve ${phase} and later output events`, async () => {
   const h = harness({endpointConfig: {onsetMS: 1, rms: .001}});
   await h.controller.startSession(); h.contexts[0].capture(speechFrame()); await h.controller.stop();
@@ -1879,4 +1905,87 @@ test('Whisper readiness polls warmup，disables starting and displays selected m
   assert.match(h.nodes['voice-asr-status'].textContent, /準備完了/);
   assert.equal(h.streams.length, 0);
   await h.controller.dispose(); assert.equal(h.timeouts.size, 0);
+});
+
+test('typed chat uses the selected speech settings and plays without microphone，ASR or filler', async () => {
+  const h = harness({bridge: {GetInteractionFiller() { throw new Error('typed filler must not open a microphone'); }}});
+  const request = {session_id: 'session', speech: {voice_profile_id: 'irodori-anime', style: {affect: 'cute'}}, chat: {mode: 'work', prompt: '合成テスト', max_tokens: 4096, messages: [{role: 'assistant', content: '履歴'}]}};
+  assert.equal(await h.controller.startText(request), true);
+  assert.deepEqual(h.calls.textStart, [{...request, input_kind: 'text'}]);
+  assert.equal(await h.controller.startText(request), false);
+  h.state(1, 'THINKING', {input_kind: 'text', transcript: '合成テスト'});
+  h.event(1, 'chat', {chat: {kind: 'delta', channel: 'thinking', delta: '合成推論'}});
+  h.event(99, 'chat', {chat: {kind: 'sources', sources: ['stale']}});
+  h.audio(1, 1);
+  await tick();
+  assert.equal(h.contexts[0].sources.length, 1);
+  h.contexts[0].sources[0].end();
+  await tick();
+  h.state(1, 'COMPLETED', {input_kind: 'text', transcript: '合成テスト', generation: {complete: true, finish_reason: 'stop'}, response_plan: {text: '回答です．'}});
+  assert.equal(h.calls.transcript.length, 1);
+  assert.equal(h.calls.chat.length, 1);
+  assert.equal(h.calls.complete.length, 1);
+  assert.equal(h.streams.length, 0);
+  assert.equal(h.calls.begin.length, 0);
+  assert.equal(h.calls.start.length, 0);
+  assert.equal(h.calls.candidateBegin.length, 0);
+  assert.equal(await h.controller.startText(request), true);
+  await h.controller.cancel();
+  assert.equal(h.controller.isActive(), false);
+  h.controller.dispose();
+});
+
+test('typed preflight cancellation creates no operation and a fast terminal still acknowledges submission', async () => {
+  const pending = deferred();
+  const h = harness();
+  const starting = h.controller.startText(() => pending.promise);
+  const canceled = h.controller.cancel();
+  pending.resolve({chat: {prompt: '合成入力'}});
+  assert.equal(await starting, false);
+  await canceled;
+  assert.equal(h.calls.textStart.length, 0);
+  assert.equal(h.streams.length, 0);
+  assert.equal(await h.controller.startText(null), false);
+  h.bridge.StartTextInteraction = async () => snapshot(1, 'COMPLETED', {input_kind: 'text', transcript: '合成入力', generation: {complete: true}, response_plan: {text: '回答です．'}});
+  assert.equal(await h.controller.startText({chat: {prompt: '合成入力'}}), true);
+  assert.equal(h.calls.complete.length, 1);
+  assert.equal(h.calls.transcript.length, 1);
+  h.controller.dispose();
+});
+
+test('resident controls relisten after intercepted real final without adding a fake chat message', async () => {
+  const h=harness();await h.controller.startSession();h.contexts[0].capture(speechFrame());await h.controller.stop();
+  h.state(1,'CANCELED',{input_outcome:'resident_control'});await tick();await tick();
+  assert.equal(h.calls.start.length,2);assert.equal(h.streams.length,1);assert.equal(h.calls.transcript.length,0);assert.equal(h.calls.canceled.length,0);
+  await h.controller.endSession();
+});
+test('resident speech stop preserves capture and completes locally before stalled native cancel',async()=>{
+  const canceled=deferred();const h=harness({bridge:{CancelInteraction:()=>canceled.promise}});
+  await h.controller.startSession();h.contexts[0].capture(speechFrame());await h.controller.stop();h.state(1,'SYNTHESIZING',{response_plan:{text:'聞こえた内容'}});h.audio(1,1);await tick();
+  const source=h.contexts[1].sources[0];const pending=h.controller.stopPlayback();
+  assert.equal(source.stopped,true);assert.ok(h.streams[0].tracks.every(track=>!track.stopped));
+  assert.equal(h.controller.snapshotFeedbackTarget().operation_id,'op-1');
+  canceled.resolve(snapshot(1,'CANCELED'));await pending;await tick();
+  assert.equal(h.calls.start.length,2);await h.controller.endSession();
+});
+test('suspended native audio invalidates capture and old playback until explicit resume',async()=>{
+  const h=harness();await h.controller.startSession();h.contexts[0].state='suspended';h.contexts[0].onstatechange();await tick();
+  assert.equal(h.controller.sessionSnapshot.state,'paused');assert.ok(h.streams[0].tracks.every(track=>track.stopped));
+  h.audio(1,1);await tick();assert.equal(h.contexts[1].sources.length,0);
+  assert.equal(await h.controller.startSession(),true);assert.equal(h.calls.start.at(-1).voice_session_epoch,2);await h.controller.endSession();
+});
+
+test('resident feedback keeps last heard response while next question has only a transcript',async()=>{
+ const h=harness();await h.controller.startSession();h.contexts[0].capture(speechFrame());await h.controller.stop();
+ h.state(1,'COMPLETED',{generation:{complete:true},response_plan:{text:'直前の回答．'},speech_units:[{unit_id:'heard',text:'直前の回答．',state:'completed',synthesis_complete:true,playback_started:true}]});await tick();
+ h.contexts[0].capture(speechFrame());await h.controller.stop();h.event(2,'transcript',{text:'次の質問'});h.state(2,'THINKING',{transcript:'次の質問'});
+ assert.equal(h.controller.snapshotFeedbackTarget().operation_id,'op-1');
+ h.event(2,'output',{snapshot:snapshot(2,'THINKING',{response_plan:{text:'次の回答．'}})});
+ assert.equal(h.controller.snapshotFeedbackTarget().operation_id,'op-2');await h.controller.endSession();
+});
+test('prepared candidate audio waits for post-synthesis grant check and cannot escape denial',async()=>{
+ const authorization=deferred();const h=harness({bridge:{StartResidentCandidate:async()=>snapshot(2,'THINKING'),AuthorizeResidentPlayback:()=>authorization.promise}});
+ await h.controller.startSession();assert.equal(await h.controller.startPreparedCandidate('candidate'),true);
+ h.state(2,'SYNTHESIZING');h.audio(2,1);await tick();assert.equal(h.contexts[1].sources.length,0);
+ authorization.resolve(false);await tick();await tick();assert.equal(h.contexts[1].sources.length,0);await h.controller.endSession();
 });

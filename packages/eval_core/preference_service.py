@@ -338,16 +338,7 @@ class PreferenceService:
         return resolved, scenarios
 
     def _ensure_safe_data_root(self) -> Path:
-        data_root = self._store.data_root
-        if (
-            data_root == self._repository_root
-            or data_root.is_relative_to(self._repository_root)
-            or self._repository_root.is_relative_to(data_root)
-        ):
-            raise ValueError(
-                "EPHY_PREFERENCE_DATA_ROOT must be separate from the Git repository"
-            )
-        return data_root
+        return self._store.ensure_private_root(self._repository_root)
 
     async def _generate_pair(
         self,

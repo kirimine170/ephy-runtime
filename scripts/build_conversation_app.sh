@@ -2,6 +2,14 @@
 set -euo pipefail
 
 EPHY_RUNTIME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+EPHY_APP_OUTPUT_DIR="${EPHY_APP_OUTPUT_DIR:-${EPHY_RUNTIME_ROOT}/desktop/build/bin}"
+EPHY_APP_BUNDLE_ID="${EPHY_APP_BUNDLE_ID:-com.wails.ephy-runtime}"
+EPHY_APP_DISPLAY_NAME="${EPHY_APP_DISPLAY_NAME:-Ephy Runtime}"
+
+if [[ "${EPHY_REQUIRE_WHISPER:-0}" == "1" && ! -f "${EPHY_RUNTIME_ROOT}/bin/ephy-whisper" ]]; then
+  echo 'Build the configured Whisper helper before building the integration app．' >&2
+  exit 1
+fi
 
 EPHY_BUILD_SNAPSHOT="$(mktemp)"
 trap 'rm -f "${EPHY_BUILD_SNAPSHOT}"' EXIT
@@ -11,19 +19,23 @@ cd "${EPHY_RUNTIME_ROOT}/desktop/frontend"
 npm run build
 
 cd "${EPHY_RUNTIME_ROOT}/desktop"
-mkdir -p build/bin
-BINARY_PATH="${EPHY_RUNTIME_ROOT}/desktop/build/bin/ephy-runtime"
+mkdir -p "${EPHY_APP_OUTPUT_DIR}"
+BINARY_PATH="${EPHY_APP_OUTPUT_DIR}/ephy-runtime"
+EPHY_BUILD_LDFLAGS="-w -s"
+if [[ "${EPHY_RESIDENT_BUILD:-0}" == "1" ]]; then
+  EPHY_BUILD_LDFLAGS+=" -X main.residentBuildMode=isolated"
+fi
 go build \
   -buildvcs=false \
   -tags "desktop,wv2runtime.download,production" \
-  -ldflags "-w -s" \
+  -ldflags "${EPHY_BUILD_LDFLAGS}" \
   -o "${BINARY_PATH}" \
   .
 
 echo "Built ${BINARY_PATH}"
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  APP_BUNDLE="${EPHY_RUNTIME_ROOT}/desktop/build/bin/ephy-runtime.app"
+  APP_BUNDLE="${EPHY_APP_OUTPUT_DIR}/ephy-runtime.app"
   APP_BINARY="${APP_BUNDLE}/Contents/MacOS/ephy-runtime"
   INFO_PLIST="${APP_BUNDLE}/Contents/Info.plist"
   mkdir -p "${APP_BUNDLE}/Contents/MacOS" "${APP_BUNDLE}/Contents/Resources"
@@ -38,6 +50,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     plutil -insert LSMinimumSystemVersion -string 10.13.0 "${INFO_PLIST}"
     plutil -insert NSHighResolutionCapable -bool true "${INFO_PLIST}"
   fi
+  plutil -replace CFBundleIdentifier -string "${EPHY_APP_BUNDLE_ID}" "${INFO_PLIST}"
+  plutil -replace CFBundleName -string "${EPHY_APP_DISPLAY_NAME}" "${INFO_PLIST}"
   # Wails WebKit capture and the on-device ASR helper are attributed to this app．
   plutil -replace NSMicrophoneUsageDescription -string "音声入力と，有効にしたフィラーの割込み検出にマイクを使います．音声は保存しません．" "${INFO_PLIST}"
   plutil -replace NSSpeechRecognitionUsageDescription -string "録音した発話を端末内で文字に変換します．" "${INFO_PLIST}"
@@ -60,7 +74,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   xattr -d com.apple.FinderInfo "${APP_BUNDLE}" 2>/dev/null || true
   # Sign inside out．A forced deep signature would re-sign the ASR helper
   # with the outer identifier and invalidate its recorded build hash．
-  codesign --force --sign - --identifier com.wails.ephy-runtime "${APP_BUNDLE}"
+  codesign --force --sign - --identifier "${EPHY_APP_BUNDLE_ID}" "${APP_BUNDLE}"
   codesign --verify --strict --deep "${APP_BUNDLE}"
   echo "Updated ${APP_BUNDLE}"
 fi
@@ -68,4 +82,4 @@ fi
 EPHY_PROVENANCE_BINARY="${BINARY_PATH}"
 if [[ "$(uname -s)" == "Darwin" ]]; then EPHY_PROVENANCE_BINARY="${APP_BINARY}"; fi
 python3 "${EPHY_RUNTIME_ROOT}/scripts/runtime_build_provenance.py" finish "${EPHY_BUILD_SNAPSHOT}" \
-  --binary "${EPHY_PROVENANCE_BINARY}" --output "${EPHY_RUNTIME_ROOT}/desktop/build/bin/runtime-build-provenance.json"
+  --binary "${EPHY_PROVENANCE_BINARY}" --output "${EPHY_APP_OUTPUT_DIR}/runtime-build-provenance.json"

@@ -91,3 +91,15 @@ for (const scenario of deliveryFixture.cases) {
     }
   });
 }
+
+test('a displayed typed answer remains in history after speech failure or playback cancellation', () => {
+  for (const state of ['COMPLETED', 'CANCELED', 'FAILED']) {
+    const begin = {...snapshot(), input_kind: 'text'};
+    const started = resumeVoiceEntry({requestId: 'op', role: 'assistant'}, begin);
+    const finished = {...snapshot(state, '文字の回答です．', 1, {complete: true}), input_kind: 'text', speech_error_code: state === 'COMPLETED' ? 'tts_failed' : '', interruption: {}, speech_units: [{state: 'interrupted', text: '文字の回答です．'}]};
+    const entry = settleVoiceEntry(started, finished);
+    assert.equal(entry.inputKind, 'text');
+    assert.match(entry.meta, /チャット/);
+    assert.deepEqual(conversationHistory([entry]), [{role: 'assistant', content: '文字の回答です．'}]);
+  }
+});

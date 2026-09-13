@@ -29,13 +29,14 @@ type voiceIdentity interface {
 	Identity() (provider, model, configuration string)
 }
 type VoiceTurnRequest struct {
-	VoiceSessionID    string           `json:"voice_session_id,omitempty"`
-	VoiceSessionEpoch uint64           `json:"voice_session_epoch,omitempty"`
-	SessionID         string           `json:"session_id"`
-	InputKind         string           `json:"input_kind,omitempty"`
-	Chat              ChatRequest      `json:"chat"`
-	GenerationLimits  GenerationLimits `json:"generation_limits"`
-	Speech            SpeechOptions    `json:"speech"`
+	CandidateMemoryIDs []string         `json:"-"`
+	VoiceSessionID     string           `json:"voice_session_id,omitempty"`
+	VoiceSessionEpoch  uint64           `json:"voice_session_epoch,omitempty"`
+	SessionID          string           `json:"session_id"`
+	InputKind          string           `json:"input_kind,omitempty"`
+	Chat               ChatRequest      `json:"chat"`
+	GenerationLimits   GenerationLimits `json:"generation_limits"`
+	Speech             SpeechOptions    `json:"speech"`
 }
 type VoiceHint struct {
 	Pace   float64 `json:"pace"`
@@ -49,6 +50,13 @@ type ResponsePlan struct {
 	Interruptible bool      `json:"interruptible"`
 }
 type InteractionSnapshot struct {
+	MemoryIDs          []string                       `json:"memory_ids,omitempty"`
+	ModelID            string                         `json:"model_id,omitempty"`
+	VoiceID            string                         `json:"voice_id,omitempty"`
+	PromptID           string                         `json:"prompt_id,omitempty"`
+	ConfigurationID    string                         `json:"configuration_id,omitempty"`
+	InputKind          string                         `json:"input_kind,omitempty"`
+	SpeechErrorCode    string                         `json:"speech_error_code,omitempty"`
 	TraceID            string                         `json:"trace_id"`
 	SessionID          string                         `json:"session_id"`
 	TurnID             string                         `json:"turn_id"`
@@ -66,6 +74,7 @@ type InteractionSnapshot struct {
 	SpeechUnits        []InteractionSpeechUnit        `json:"speech_units"`
 }
 type InteractionEvent struct {
+	Chat               *ChatStreamEvent       `json:"chat,omitempty"`
 	Kind               string                 `json:"kind"`
 	TraceID            string                 `json:"trace_id"`
 	SessionID          string                 `json:"session_id"`
@@ -91,6 +100,7 @@ type playbackChunk struct {
 	waitingAt, startedAt time.Time
 }
 type interactionTurn struct {
+	approvedCandidate      string
 	recordingKey           string
 	fillerIdentityReady    bool
 	fillerSetupServed      bool
@@ -118,6 +128,8 @@ type interactionTurn struct {
 	speech                 *preparedSpeech
 }
 type InteractionEngine struct {
+	residentInput func(InteractionSnapshot, VoiceTurnRequest, string) bool
+
 	recorder     *recording.Store
 	mu           sync.Mutex
 	voiceSession *voiceSession
@@ -145,7 +157,7 @@ const maxInteractionEvents = 128
 const maxInteractionAge = 7 * 24 * time.Hour
 
 func NewInteractionEngine(asr VoiceASR, tts VoiceTTS, chat func(context.Context, ChatRequest, func(string)) (*ChatResponse, error), emit func(InteractionEvent), storeDir string) *InteractionEngine {
-	e := &InteractionEngine{asr: asr, tts: tts, chat: chat, emit: emit, turns: map[string]*interactionTurn{}, events: make(chan InteractionEvent, 1024), done: make(chan struct{}), store: newInteractionTraceStore(storeDir), Timeouts: InteractionTimeouts{30 * time.Second, 90 * time.Second, 60 * time.Second, 30 * time.Second}}
+	e := &InteractionEngine{asr: asr, tts: tts, chat: chat, emit: emit, turns: map[string]*interactionTurn{}, events: make(chan InteractionEvent, 1024), done: make(chan struct{}), store: newInteractionTraceStore(storeDir), Timeouts: InteractionTimeouts{30 * time.Second, generationTimeout, 60 * time.Second, 30 * time.Second}}
 	e.asrWake = make(chan struct{}, 1)
 	e.asrSlot = make(chan struct{}, 1)
 	go e.dispatch()
@@ -174,7 +186,7 @@ func (e *InteractionEngine) dispatch() {
 			live := turn != nil && !interactionTerminal(turn.snapshot.State) && event.GenerationRevision == turn.snapshot.GenerationRevision
 			current := turn != nil && event.GenerationRevision == turn.snapshot.GenerationRevision
 			e.mu.Unlock()
-			if !current || ((event.Kind == "audio" || event.Kind == "token" || event.Kind == "transcript" || event.Kind == "output") && !live) {
+			if !current || ((event.Kind == "audio" || event.Kind == "token" || event.Kind == "transcript" || event.Kind == "output" || event.Kind == "chat") && !live) {
 				continue
 			}
 			if e.emit != nil {
@@ -194,6 +206,7 @@ func (e *InteractionEngine) eventLocked(t *interactionTurn, kind string) Interac
 // under the state mutex, including when the UI calls Playback synchronously.
 func (e *InteractionEngine) queueLocked(event InteractionEvent) { e.events <- event }
 func cloneInteractionSnapshot(s InteractionSnapshot) InteractionSnapshot {
+	s.MemoryIDs = append([]string(nil), s.MemoryIDs...)
 	s.Generation = cloneGenerationMetadata(s.Generation)
 	if s.InputHandoff != nil {
 		copy := *s.InputHandoff
@@ -215,8 +228,9 @@ func cloneInteractionSnapshot(s InteractionSnapshot) InteractionSnapshot {
 }
 func (e *InteractionEngine) transitionLocked(t *interactionTurn, state string) error {
 	old := t.snapshot.State
+	textWithoutSpeech := t.request.InputKind == "text" && t.snapshot.SpeechErrorCode != "" && t.generationDone
 	allowed := map[string]string{"IDLE": "RECORDING", "RECORDING": "TRANSCRIBING", "TRANSCRIBING": "THINKING", "THINKING": "SYNTHESIZING", "SYNTHESIZING": "PLAYING", "PLAYING": "COMPLETED", "CANCELING": "CANCELED"}
-	if interactionTerminal(old) || (allowed[old] != state && state != "CANCELING" && state != "FAILED" && state != "INCOMPLETE" && !(state == "COMPLETED" && old == "THINKING" && t.generationDone)) {
+	if interactionTerminal(old) || (allowed[old] != state && state != "CANCELING" && state != "FAILED" && state != "INCOMPLETE" && !(state == "COMPLETED" && ((old == "THINKING" && t.generationDone) || textWithoutSpeech))) {
 		return errors.New("invalid_interaction_transition")
 	}
 	t.snapshot.State = state
@@ -248,10 +262,13 @@ func (e *InteractionEngine) pruneLocked() {
 	}
 }
 func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot, error) {
+	return e.start(request, "")
+}
+func (e *InteractionEngine) start(request VoiceTurnRequest, candidate string) (InteractionSnapshot, error) {
 	if request.InputKind == "" {
 		request.InputKind = "microphone"
 	}
-	if request.InputKind != "microphone" && request.InputKind != "transcript" {
+	if request.InputKind != "microphone" && request.InputKind != "transcript" && request.InputKind != "text" {
 		return InteractionSnapshot{}, errors.New("invalid_input_kind")
 	}
 	encoded, err := json.Marshal(request)
@@ -294,7 +311,7 @@ func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot
 	if len(e.events) > 512 {
 		return InteractionSnapshot{}, errors.New("interaction_consumer_slow")
 	}
-	if e.asr == nil || e.tts == nil || e.chat == nil {
+	if (e.asr == nil && request.InputKind == "microphone") || e.tts == nil || e.chat == nil {
 		return InteractionSnapshot{}, errors.New("voice_unavailable")
 	}
 	if e.store.err != nil {
@@ -305,14 +322,23 @@ func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot
 	e.pruneLocked()
 	ctx, cancel := context.WithCancel(context.Background())
 	op := interactionID("operation_")
-	t := &interactionTurn{snapshot: InteractionSnapshot{TraceID: interactionID("trace_"), SessionID: request.SessionID, TurnID: interactionID("turn_"), OperationID: op, State: "IDLE", GenerationRevision: 1}, request: request, ctx: ctx, cancel: cancel, created: time.Now(), chunks: map[int]*playbackChunk{}, source: request.InputKind, requestConfigurationID: request.Chat.ConfigurationID}
+	t := &interactionTurn{snapshot: InteractionSnapshot{InputKind: request.InputKind, TraceID: interactionID("trace_"), SessionID: request.SessionID, TurnID: interactionID("turn_"), OperationID: op, State: "IDLE", GenerationRevision: 1}, request: request, ctx: ctx, cancel: cancel, created: time.Now(), chunks: map[int]*playbackChunk{}, source: request.InputKind, requestConfigurationID: request.Chat.ConfigurationID}
+	t.snapshot.MemoryIDs = append([]string(nil), request.CandidateMemoryIDs...)
+	t.snapshot.ModelID = request.Chat.ModelID
+	t.snapshot.VoiceID = request.Speech.VoiceProfileID
+	t.snapshot.ConfigurationID = request.Chat.ConfigurationID
+	t.approvedCandidate = candidate
 	t.speech = prepared
 	e.turns[op] = t
 	e.active = op
 	if request.VoiceSessionID != "" {
 		e.voiceSession.snapshot.State = "listening"
 	}
-	if request.VoiceSessionID == "" {
+	if candidate != "" {
+		// Approved observation is not an invented user question．
+	} else if request.InputKind == "text" {
+		e.traceLocked(t, "text_input_started", "")
+	} else if request.VoiceSessionID == "" {
 		e.traceLocked(t, "user_speech_start", "")
 	} else {
 		e.traceLocked(t, "listening_started", "")
@@ -338,11 +364,15 @@ func (e *InteractionEngine) Commit(op string, audio []byte, transcript string) e
 		e.mu.Unlock()
 		return errors.New("invalid_interaction_transition")
 	}
-	if transcript != "" {
+	if transcript != "" && t.request.InputKind != "text" {
 		t.source = "transcript"
 	}
-	e.traceLocked(t, "user_speech_end", "")
-	e.traceLocked(t, "endpoint_commit", "")
+	if t.request.InputKind == "text" {
+		e.traceLocked(t, "text_submitted", "")
+	} else {
+		e.traceLocked(t, "user_speech_end", "")
+		e.traceLocked(t, "endpoint_commit", "")
+	}
 	_ = e.transitionLocked(t, "TRANSCRIBING")
 	e.mu.Unlock()
 	data := append([]byte(nil), audio...)
@@ -380,6 +410,8 @@ func (e *InteractionEngine) liveLocked(t *interactionTurn) bool {
 }
 
 type interactionModelKey struct{}
+type interactionPromptKey struct{}
+type interactionMemoryKey struct{}
 
 func reportInteractionModel(ctx context.Context, provider, model, configuration string) {
 	if observer, ok := ctx.Value(interactionModelKey{}).(func(string, string, string)); ok {
@@ -387,6 +419,10 @@ func reportInteractionModel(ctx context.Context, provider, model, configuration 
 	}
 }
 func (e *InteractionEngine) run(t *interactionTurn, audio []byte, transcript string) {
+	if t.request.InputKind == "text" {
+		e.acceptTranscript(t, transcript)
+		return
+	}
 	e.mu.Lock()
 	if !e.liveLocked(t) {
 		e.mu.Unlock()
@@ -423,6 +459,22 @@ func (e *InteractionEngine) acceptTranscript(t *interactionTurn, result string) 
 		e.mu.Unlock()
 		return
 	}
+	inputSnapshot, inputRequest, residentInput := cloneInteractionSnapshot(t.snapshot), t.request, e.residentInput
+	e.mu.Unlock()
+	if residentInput != nil && residentInput(inputSnapshot, inputRequest, result) {
+		e.mu.Lock()
+		if e.liveLocked(t) {
+			t.snapshot.InputOutcome = "resident_control"
+			e.cancelTurnLocked(t)
+		}
+		e.mu.Unlock()
+		return
+	}
+	e.mu.Lock()
+	if !e.liveLocked(t) {
+		e.mu.Unlock()
+		return
+	}
 	if e.recorder != nil {
 		kind := "text"
 		var meta *recording.ASR
@@ -443,8 +495,12 @@ func (e *InteractionEngine) acceptTranscript(t *interactionTurn, result string) 
 	t.request.Chat.Prompt = result
 	t.request.Chat.RequestID = t.snapshot.OperationID
 	t.request.Chat.SessionID = t.snapshot.SessionID
-	t.request.Chat.SessionMode = "voice"
-	e.traceLocked(t, "asr_final", "")
+	if t.request.InputKind == "text" {
+		t.request.Chat.SessionMode = "default"
+	} else {
+		t.request.Chat.SessionMode = "voice"
+		e.traceLocked(t, "asr_final", "")
+	}
 	ev := e.eventLocked(t, "transcript")
 	ev.Text = result
 	e.queueLocked(ev)
@@ -479,6 +535,9 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 	go func() {
 		units := 0
 		remaining := e.Timeouts.TTS
+		if t.request.InputKind == "text" {
+			remaining = generationTimeout
+		}
 		for {
 			var task speechTask
 			select {
@@ -522,6 +581,22 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 			})
 			remaining -= time.Since(started)
 			if err != nil {
+				if t.request.InputKind == "text" {
+					// Readout is optional for a typed request．Keep draining the
+					// bounded queue so speech failure cannot cancel its answer．
+					for {
+						select {
+						case <-ctx.Done():
+							speechDone <- speechResult{units: units, err: ctx.Err()}
+							return
+						case _, ok := <-speech:
+							if !ok {
+								speechDone <- speechResult{units: units, err: err}
+								return
+							}
+						}
+					}
+				}
 				// Fail immediately so a stopped consumer cannot leave the LLM producer
 				// waiting on a full speech queue. Idle waits do not spend the TTS budget.
 				e.stageFailure(t, "tts", err)
@@ -533,6 +608,32 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 	}()
 	response, err := runInteractionStage(ctx, e.Timeouts.LLM, func(llmCtx context.Context) (*ChatResponse, error) {
 		defer close(speech)
+		if t.request.InputKind == "text" {
+			llmCtx = context.WithValue(llmCtx, interactionChatEventKey{}, func(chatEvent ChatStreamEvent) {
+				e.mu.Lock()
+				defer e.mu.Unlock()
+				if !e.generationLiveLocked(t, revision, ctx) {
+					return
+				}
+				event := e.eventLocked(t, "chat")
+				event.Chat = &chatEvent
+				e.queueLocked(event)
+			})
+		}
+		llmCtx = context.WithValue(llmCtx, interactionMemoryKey{}, func(ids []string) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if e.generationLiveLocked(t, revision, llmCtx) {
+				t.snapshot.MemoryIDs = append([]string{}, ids...)
+			}
+		})
+		llmCtx = context.WithValue(llmCtx, interactionPromptKey{}, func(prompt string) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if e.generationLiveLocked(t, revision, llmCtx) && len(prompt) <= 200 {
+				t.snapshot.PromptID = prompt
+			}
+		})
 		llmCtx = context.WithValue(llmCtx, interactionModelKey{}, func(provider, model, configuration string) {
 			e.mu.Lock()
 			defer e.mu.Unlock()
@@ -550,6 +651,8 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 				combined := sha256.Sum256([]byte(requestConfigurationID + "\x00" + configuration))
 				t.request.Chat.ConfigurationID = hex.EncodeToString(combined[:16])
 			}
+			t.snapshot.ModelID = t.request.Chat.ModelID
+			t.snapshot.ConfigurationID = t.request.Chat.ConfigurationID
 			if !t.fillerIdentityReady {
 				t.fillerIdentityReady = true
 				e.traceLocked(t, "llm_identity_ready", "")
@@ -573,7 +676,7 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 				}
 			})
 		}
-		return assembleGeneration(llmCtx, req, limits, prefix, chat, func(progress GenerationProgress) {
+		onProgress := func(progress GenerationProgress) {
 			e.mu.Lock()
 			if !e.generationLiveLocked(t, revision, llmCtx) {
 				e.mu.Unlock()
@@ -611,7 +714,16 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 					return
 				}
 			}
-		})
+		}
+		if t.approvedCandidate != "" {
+			if err := llmCtx.Err(); err != nil {
+				return nil, err
+			}
+			metadata := GenerationMetadata{SchemaVersion: 2, FinishReason: "stop", ProviderFinishReason: "stop", Complete: true, ReasoningTokenSource: "unavailable"}
+			onProgress(GenerationProgress{CommittedText: t.approvedCandidate, SpeechUnits: []string{generationSpeechText(t.approvedCandidate)}, Metadata: metadata})
+			return &ChatResponse{Answer: t.approvedCandidate, FinishReason: "stop", Generation: &metadata}, nil
+		}
+		return assembleGeneration(llmCtx, req, limits, prefix, chat, onProgress)
 	})
 	if err != nil {
 		e.mu.Lock()
@@ -648,6 +760,10 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 	} else {
 		e.traceLocked(t, "llm_incomplete", "incomplete_response")
 	}
+	output := e.eventLocked(t, "output")
+	confirmed := cloneInteractionSnapshot(t.snapshot)
+	output.Snapshot = &confirmed
+	e.queueLocked(output)
 	e.mu.Unlock()
 	var spoken speechResult
 	select {
@@ -655,7 +771,7 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 	case <-ctx.Done():
 		return
 	}
-	if spoken.err != nil {
+	if spoken.err != nil && t.request.InputKind != "text" {
 		e.stageFailure(t, "tts", spoken.err)
 		return
 	}
@@ -665,7 +781,15 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 		return
 	}
 	t.producerDone = true
-	if spoken.units == 0 {
+	if spoken.err != nil {
+		t.snapshot.SpeechErrorCode = "tts_failed"
+		if errors.Is(spoken.err, context.DeadlineExceeded) {
+			t.snapshot.SpeechErrorCode = "tts_timeout"
+		} else if knownSpeechError(spoken.err.Error()) {
+			t.snapshot.SpeechErrorCode = spoken.err.Error()
+		}
+		e.traceLocked(t, "tts_failed", t.snapshot.SpeechErrorCode)
+	} else if spoken.units == 0 {
 		e.traceLocked(t, "tts_skipped", "")
 	} else {
 		e.traceLocked(t, "tts_completed", "")
@@ -942,7 +1066,8 @@ func (e *InteractionEngine) failLocked(t *interactionTurn, code string) {
 // Commit durable terminal metadata before exposing the terminal state. A storage
 // failure therefore produces one FAILED outcome, never COMPLETED followed by FAILED.
 func (e *InteractionEngine) finishLocked(t *interactionTurn, state, name, code string) {
-	if state == "COMPLETED" && t.snapshot.State != "PLAYING" && !(t.snapshot.State == "THINKING" && t.generationDone) {
+	textWithoutSpeech := t.request.InputKind == "text" && t.snapshot.SpeechErrorCode != "" && t.generationDone
+	if state == "COMPLETED" && t.snapshot.State != "PLAYING" && !(t.snapshot.State == "THINKING" && t.generationDone) && !textWithoutSpeech {
 		state, name, code = "FAILED", "turn_failed", "invalid_completion_state"
 	}
 	e.refreshSpeechUnitsForStateLocked(t, state)

@@ -100,6 +100,8 @@ func applyGenerationUsage(generation *GenerationMetadata, raw map[string]any) er
 	return nil
 }
 
+type interactionChatEventKey struct{}
+
 func (a *App) consumeGenerationStream(ctx context.Context, payload GatewayChatRequest, requestID string, onToken func(string)) (*ChatResponse, error) {
 	recording, _ := ctx.Value(recordingStreamContextKey{}).(*recordingStream)
 	emit := func(event ChatStreamEvent) {
@@ -109,6 +111,10 @@ func (a *App) consumeGenerationStream(ctx context.Context, payload GatewayChatRe
 		if onToken != nil {
 			if event.Kind == "delta" && event.Channel == "answer" {
 				onToken(event.Delta)
+			} else if event.Kind == "sources" || event.Kind == "web_search_status" || event.Kind == "karte_context_status" || (event.Kind == "delta" && event.Channel == "thinking") {
+				if observer, ok := ctx.Value(interactionChatEventKey{}).(func(ChatStreamEvent)); ok {
+					observer(event)
+				}
 			}
 			return
 		}
@@ -169,11 +175,15 @@ func (a *App) consumeGenerationStream(ctx context.Context, payload GatewayChatRe
 				Provider        string `json:"provider"`
 				Model           string `json:"model"`
 				ConfigurationID string `json:"configuration_id"`
+				PromptID        string `json:"prompt_id"`
 			}
 			if generation.TerminalSSE || json.Unmarshal([]byte(data), &route) != nil {
 				return incompleteTransport()
 			}
 			reportInteractionModel(ctx, route.Provider, route.Model, route.ConfigurationID)
+			if observer, ok := ctx.Value(interactionPromptKey{}).(func(string)); ok {
+				observer(route.PromptID)
+			}
 			return nil
 		case "web_search_status":
 			var status WebSearchStatus
@@ -199,6 +209,9 @@ func (a *App) consumeGenerationStream(ctx context.Context, payload GatewayChatRe
 				return incompleteTransport()
 			}
 			response.Sources = sourcePayload.Sources
+			if observer, ok := ctx.Value(interactionMemoryKey{}).(func([]string)); ok {
+				observer(residentSourceMemoryIDs(response.Sources))
+			}
 			emit(ChatStreamEvent{RequestID: requestID, Kind: eventType, Sources: response.Sources})
 			return nil
 		}

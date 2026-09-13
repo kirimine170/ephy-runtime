@@ -2,6 +2,7 @@ import './style.css';
 import {recordingMarkup, mountRecording} from './recording';
 import './voiceInteraction.css';
 import {mountVoiceInteraction} from './voiceInteraction';
+import {residentMarkup, mountResident} from './resident';
 import {conversationHistory, isConversationHistoryEntry} from './conversationHistory';
 import {confirmVoiceEntry, previewVoiceEntry, resumeVoiceEntry, settleVoiceEntry} from './voiceConversation';
 import {voiceSessionCallbacks} from './voiceSession';
@@ -984,6 +985,7 @@ app.innerHTML = `
             <div id="chat-output" class="conversation-thread" role="region" aria-label="Conversation"></div>
             <div id="chat-stream-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
             ${voiceProfilesMarkup()}
+            ${residentMarkup()}
             <div id="voice-controls" class="voice-controls" role="group" aria-label="音声会話">
               <button id="voice-session" class="ghost-btn" type="button">会話を開始</button>
               <button id="voice-pause" class="ghost-btn" type="button" disabled>一時停止</button>
@@ -7642,6 +7644,20 @@ async function runChatFromForm() {
   if (chatSendInFlight) {
     return {ok: false, detail: 'Chat request already in progress.'};
   }
+  if (voiceProfiles?.isChatSpeechEnabled()) {
+    const session = chatConversationId;
+    const speech = () => voiceProfiles.readSettings();
+    const chat = {mode, prompt, messages: conversationHistory(chatThreadEntries),
+      ...buildChatGroundingPayload(), temperature: 0.2, max_tokens: getChatMaxTokens(mode), stream: true};
+    const started = await voiceController.startText(async () => {
+      const selectedSpeech = speech();
+      const web = await prepareWebSearch(prompt);
+      return web ? {session_id: session, speech: selectedSpeech,
+        generation_limits: {max_segments: 1}, chat: {...chat, ...web}} : null;
+    });
+    if (started && session === chatConversationId && promptInput.value === prompt) promptInput.value = '';
+    return {ok: started, detail: started ? 'Chat response started.' : 'Chat was not started.'};
+  }
   let webSearch;
   try {
     webSearch = await prepareWebSearch(prompt);
@@ -11178,9 +11194,16 @@ document.getElementById('overview-preset-runtime-hint').addEventListener('click'
 
 // Voice uses the existing thread and Chat gateway，with bounded metadata-only diagnostics．
 voiceProfiles = mountVoiceProfiles({root: document, bridge: interactionBridge, isBusy: () => !!voiceController?.isActive()});
+let residentController;
 voiceController = mountVoiceInteraction({
   root: document,
   canStart: () => !chatSendInFlight,
+  beforeSessionStart: sessionID => residentController?.prepare(sessionID),
+  onSessionState: state => residentController?.onSessionState(state),
+  onCandidateStart(snapshot) {
+    if (snapshot.session_id!==chatConversationId) return;
+    appendChatThreadEntry(resumeVoiceEntry({role:'assistant',requestId:snapshot.operation_id,meta:'会話への参加',text:''},snapshot));
+  },
   bridge: interactionBridge,
   getSessionID: () => chatConversationId,
   subscribe: callback => window.runtime?.EventsOnMultiple ? EventsOn('interaction-event', callback) : () => {},
@@ -11197,7 +11220,8 @@ voiceController = mountVoiceInteraction({
   onTranscript(snapshot, text) {
     voiceEvaluation?.refresh();
     if (!chatThreadEntries.some(entry => entry.requestId === snapshot.operation_id)) {
-      beginStreamingChat({requestId: snapshot.operation_id, prompt: text, modeLabel: '音声'});
+      beginStreamingChat({requestId: snapshot.operation_id, prompt: text,
+        modeLabel: snapshot.input_kind === 'text' ? getChatModeLabel(document.getElementById('chat-mode').value) : '音声'});
     } else {
       activeChatStreamRequestId = snapshot.operation_id;
       announceChatStream(document, 'streaming');
@@ -11208,6 +11232,19 @@ voiceController = mountVoiceInteraction({
   },
   onToken(snapshot, text) { updateChatThreadEntry(snapshot.operation_id, entry => previewVoiceEntry(entry, snapshot, text)); },
   onOutput(snapshot) { updateChatThreadEntry(snapshot.operation_id, entry => confirmVoiceEntry(entry, snapshot)); },
+  onChatEvent(snapshot, event) {
+    if (!event) return;
+    if (event.kind === 'delta' && event.channel === 'thinking') {
+      applyChatStreamDelta({requestId: snapshot.operation_id, channel: 'thinking', delta: event.delta});
+    } else if (event.kind === 'sources') {
+      renderChatSourcesPane({sources: event.sources || [], title: 'Used Sources'});
+    } else if (event.kind === 'karte_context_status') {
+      setChatDropStatus(formatKarteContextStatus(event.karte_context_status || {}));
+    } else if (event.kind === 'web_search_status') {
+      const status = event.web_search_status || {};
+      setChatWebStatus(status.status === 'completed' ? `Web · ${status.source_count || 0} sources` : 'Web unavailable', status.status === 'completed' ? 'active' : 'warning');
+    }
+  },
   onComplete: finalizeVoiceChat,
   onIncomplete: finalizeVoiceChat,
   onCancel: finalizeVoiceChat,
@@ -11240,3 +11277,7 @@ voiceEvaluation = mountVoiceEvaluation({
   getSessionID: () => chatConversationId,
   isDeveloper: () => developerModeEnabled,
 });
+
+residentController = mountResident({root:document,bridge:interactionBridge,controller:voiceController,getSessionID:()=>chatConversationId,subscribe:callback=>window.runtime?.EventsOnMultiple?EventsOn('resident-event',callback):()=>{},subscribeInteraction:callback=>window.runtime?.EventsOnMultiple?EventsOn('interaction-event',callback):()=>{}});
+
+interactionBridge.GetResidentConfig().then(config=>{if(config.enabled)return voiceProfiles.configurePersistence(`ephy:resident:${config.namespace}:voice`,config.voice_profile_id);}).catch(()=>{});

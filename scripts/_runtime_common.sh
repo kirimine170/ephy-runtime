@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUNTIME_DIR="${ROOT_DIR}/data/runtime"
-LOG_DIR="${RUNTIME_DIR}/logs"
+LOG_DIR="${EPHY_LOG_DIR:-${RUNTIME_DIR}/logs}"
 PID_DIR="${RUNTIME_DIR}/pids"
 QDRANT_RUNTIME_DIR="${RUNTIME_DIR}/qdrant"
 QDRANT_STORAGE_DIR="${ROOT_DIR}/data/index/qdrant"

@@ -1,0 +1,40 @@
+{
+  "default_profile_id": "",
+  "providers": {
+    "irodori-audiocpp": {
+      "source_revision": "ff1bcc4555ff99c4383329b0b21b52a18cc8b3cd",
+      "model_revision": "1509fa38c945c13ffd645d8def423f0c4cb21254",
+      "model_path": "/absolute/assets/irodori-tts-v4.1-anime-q8_0.gguf",
+      "model_sha256": "cef628aa1ce784993025789c24d05b4b9e60fa039d40453bc8bdea32f4cb99e7",
+      "library_path": "/absolute/audio-build/bin/libaudiocpp.0.1.0.dylib",
+      "library_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "build_manifest_path": "/absolute/assets/build-manifest.json",
+      "build_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "abi_version": 256,
+      "build_version": "dev",
+      "backend": "metal",
+      "codec_backend": "same",
+      "threads": 4,
+      "seed": 420,
+      "num_steps": 40,
+      "cfg": {
+        "text": 3.0,
+        "caption": 3.0,
+        "speaker": 5.0
+      },
+      "style_mapping_revision": "irodori-finite-v1",
+      "asset_store_path": "/absolute/permitted-assets"
+    }
+  },
+  "profiles": [
+    {
+      "voice_profile_id": "voice-irodori-audiocpp-exp",
+      "provider": "irodori-audiocpp",
+      "display_name": "Irodori Anime audio.cpp experiment",
+      "model_revision": "1509fa38c945c13ffd645d8def423f0c4cb21254",
+      "language": "ja-JP",
+      "reference_group_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+      "provenance_id": "replace-with-existing-permitted-provenance"
+    }
+  ]
+}

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -65,7 +64,7 @@ func (a *App) postJSONContext(ctx context.Context, path string, payload any, out
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := a.httpClient.Do(request)
+	response, err := a.clientForPath(path).Do(request)
 	if err != nil {
 		return err
 	}
@@ -89,7 +88,10 @@ func (a *App) interactionEngine() *InteractionEngine {
 			if ctx := a.currentContext(); ctx != nil {
 				runtime.EventsEmit(ctx, "interaction-event", event)
 			}
-		}, filepath.Join(root, "data", "runtime", "interaction"))
+		}, residentInteractionRoot(root))
+		if residentEnabled() {
+			a.interaction.residentInput = a.interceptResidentInput
+		}
 		if provider, ok := asr.(*WhisperVoiceASR); ok {
 			_, _ = provider.Readiness(context.Background())
 		}
@@ -121,8 +123,23 @@ func (a *App) GetVoiceProfiles() VoiceProfileCatalog {
 }
 
 func (a *App) StartInteraction(request VoiceTurnRequest) (InteractionSnapshot, error) {
+	if residentEnabled() {
+		a.residentMu.Lock()
+		_, configured := a.residentSessions[request.SessionID]
+		a.residentMu.Unlock()
+		if !configured {
+			if _, err := a.ConfigureResidentSession(request.SessionID, false, false, "reactive"); err != nil {
+				return InteractionSnapshot{}, err
+			}
+		}
+		a.captureResidentTarget(request.SessionID)
+		request.Chat.ResidentSessionID = a.residentSessionID(request.SessionID)
+	}
 	request.Chat.SessionID = request.SessionID
 	request.Chat.SessionMode = "voice"
+	if request.InputKind == "text" {
+		request.Chat.SessionMode = "default"
+	}
 	request.Chat.Stream = true
 	if request.Chat.Mode == "" {
 		request.Chat.Mode = "auto"
@@ -138,6 +155,25 @@ func (a *App) StartInteraction(request VoiceTurnRequest) (InteractionSnapshot, e
 	digest := sha256.Sum256(config)
 	request.Chat.ConfigurationID = hex.EncodeToString(digest[:8])
 	return a.interactionEngine().Start(request)
+}
+
+// Text shares generation，speech，recording and cancellation with voice，while
+// retaining the ordinary chat persona and never acquiring microphone or ASR．
+func (a *App) StartTextInteraction(request VoiceTurnRequest) (InteractionSnapshot, error) {
+	request.InputKind = "text"
+	request.VoiceSessionID, request.VoiceSessionEpoch = "", 0
+	if _, err := conversationMessages(request.Chat); err != nil {
+		return InteractionSnapshot{}, err
+	}
+	snapshot, err := a.StartInteraction(request)
+	if err != nil {
+		return snapshot, err
+	}
+	if err := a.interactionEngine().Commit(snapshot.OperationID, nil, request.Chat.Prompt); err != nil {
+		_, _ = a.interactionEngine().Cancel(snapshot.OperationID)
+		return InteractionSnapshot{}, err
+	}
+	return snapshot, nil
 }
 
 // Readiness creates no interaction turn and requests no microphone access．

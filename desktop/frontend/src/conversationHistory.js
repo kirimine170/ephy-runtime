@@ -3,8 +3,9 @@
 export function isConversationHistoryEntry(entry) {
   if (!entry || !['user', 'assistant'].includes(entry.role) || entry.streaming || !entry.text || entry.meta === 'error') return false;
   if (entry.role === 'assistant') {
-    if (entry.voice && entry.terminalState !== 'COMPLETED') return false;
-    if (entry.terminalState && entry.terminalState !== 'COMPLETED') return false;
+    const displayedTextAnswer = entry.inputKind === 'text' && entry.voiceDelivery?.generation === 'completed';
+    if (!displayedTextAnswer && entry.voice && entry.terminalState !== 'COMPLETED') return false;
+    if (!displayedTextAnswer && entry.terminalState && entry.terminalState !== 'COMPLETED') return false;
     if (['length', 'tool_calls', 'timeout', 'transport_eof', 'canceled', 'unknown'].includes(entry.finishReason)) return false;
   }
   return true;
@@ -16,7 +17,7 @@ export function conversationHistory(entries) {
   let bytes = 0;
   const encoder = new TextEncoder();
   for (const entry of [...entries].reverse()) {
-    const interruption = entry?.role === 'assistant' && entry.voice && !entry.streaming
+    const interruption = entry?.role === 'assistant' && entry.voice && entry.inputKind !== 'text' && !entry.streaming
       && entry.terminalState === 'CANCELED' && entry.voiceDelivery?.interrupted;
     if (!interruption && !isConversationHistoryEntry(entry)) continue;
     const content = interruption ? '[音声応答はユーザーの発話で中断された．自然終了を確認できた発話単位のみを以下に残す．中断した単位のどの単語まで届いたかは不明．]'

@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -18,7 +19,7 @@ const (
 
 func newApplicationOptions(app *App) *options.App {
 	return &options.App{
-		Title:     ephyRuntimeTitle,
+		Title:     residentApplicationTitle(),
 		Width:     1320,
 		Height:    920,
 		MinWidth:  1024,
@@ -30,7 +31,7 @@ func newApplicationOptions(app *App) *options.App {
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: ephyRuntimeSingleInstanceID,
+			UniqueId: residentApplicationID(),
 			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
 				app.showExistingWindow()
 			},
@@ -42,6 +43,10 @@ func newApplicationOptions(app *App) *options.App {
 }
 
 func main() {
+	if err := validateResidentLaunch(residentBuildMode); err != nil {
+		println(err.Error())
+		os.Exit(2)
+	}
 	app := NewApp()
 	err := wails.Run(newApplicationOptions(app))
 

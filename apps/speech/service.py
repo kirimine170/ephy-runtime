@@ -56,7 +56,9 @@ def synthesis_config_digest(config: dict[str, Any], provider: str) -> str:
     except SpeechError:
         return ""  # Synthetic／legacy catalogs cannot enable filler assets．
     keys = ("source_revision", "model_revision", "codec_revision", "silentcipher_revision",
-            "device", "precision", "dtype", "seed", "num_steps", "cfg", "output_budget")
+            "device", "precision", "dtype", "seed", "num_steps", "cfg", "output_budget",
+            "library_sha256", "model_sha256", "build_manifest_sha256", "build_version", "abi_version",
+            "backend", "codec_backend", "threads", "style_mapping_revision")
     public = {key: value[key] for key in keys if key in value}
     return hashlib.sha256(json.dumps(public, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
@@ -225,7 +227,7 @@ class SpeechService:
         default = self.config.get("default_profile_id", "")
         if default and default not in self.profiles:
             raise SpeechError("invalid_speech_text")
-        if default and self.profiles[default]["provider"] == "irodori-tts":
+        if default and self.profiles[default]["provider"] in {"irodori-tts", "irodori-audiocpp"}:
             raise SpeechError("invalid_voice_config")
         self.default_profile_id = default
         self.worker = worker or ProcessWorker(self.config)
@@ -237,6 +239,13 @@ class SpeechService:
     def _configured(self, provider: str) -> bool:
         try:
             value = provider_config(self.config, provider)
+            if provider == "irodori-audiocpp":
+                from .audiocpp import SOURCE_REVISION, MODEL_REVISION, MODEL_SHA256, ABI_VERSION
+                return (Path(value["asset_store_path"]).is_dir() and
+                        value.get("source_revision") == SOURCE_REVISION and
+                        value.get("model_revision") == MODEL_REVISION and value.get("model_sha256") == MODEL_SHA256 and
+                        value.get("abi_version") == ABI_VERSION and Path(value["library_path"]).is_file() and
+                        Path(value["model_path"]).is_file() and Path(value["build_manifest_path"]).is_file())
             common = Path(value["asset_store_path"]).is_dir() and importlib.util.find_spec("torch") is not None
             if provider == "qwen3-tts":
                 return (common and value.get("source_revision") == QWEN_SOURCE_REVISION and

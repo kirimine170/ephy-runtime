@@ -49,7 +49,7 @@ function harness(options = {}) {
     const find = node => node.id === selector.slice(1) ? node : node.children.map(find).find(Boolean);
     return find(root) || null;
   };
-  for (const id of ['voice-profile-select', 'voice-profile-refresh', 'voice-style-controls', 'voice-profile-status', 'chat-prompt', 'send-chat']) {
+  for (const id of ['chat-speech-enabled', 'voice-profile-select', 'voice-profile-refresh', 'voice-style-controls', 'voice-profile-status', 'chat-prompt', 'send-chat']) {
     const node = root.createElement(id.endsWith('select') ? 'select' : 'div');
     node.id = id;
     root.appendChild(node);
@@ -418,4 +418,32 @@ test('unavailable voice Start reports voice error before microphone or ASR acces
   assert.equal(calls, 0);
   await voice.dispose();
   h.controller.dispose();
+});
+
+test('chat readout defaults on and the explicit off choice survives remount without saving voice identity', async () => {
+  const values = new Map();
+  const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value)};
+  const h = harness({bridge: {}, storage});
+  await h.controller.ready;
+  assert.equal(h.controller.isChatSpeechEnabled(), true);
+  h.node('chat-speech-enabled').checked = false;
+  h.node('chat-speech-enabled').change('');
+  h.controller.setBusy(true);
+  assert.equal(h.node('chat-speech-enabled').disabled, true);
+  h.controller.dispose();
+  const next = harness({bridge: {}, storage});
+  assert.equal(next.controller.isChatSpeechEnabled(), false);
+  assert.deepEqual([...values], [['ephy:chat-speech-enabled', 'false']]);
+  next.controller.dispose();
+});
+
+test('resident voice and bounded style restore independently of ordinary profile defaults',async()=>{
+ const values=new Map();const storage={getItem:key=>values.get(key),setItem:(key,value)=>values.set(key,value)};
+ const bridge={GetVoiceProfiles:async()=>catalog(profile('normal-voice'),profile('resident-voice'))};
+ const first=harness({bridge,storage});await first.controller.configurePersistence('ephy:resident:test:voice','resident-voice');
+ first.node('voice-style-volume').change('.6');first.node('voice-style-affect').change('warm');first.controller.dispose();
+ const restored=harness({bridge,storage});await restored.controller.configurePersistence('ephy:resident:test:voice','normal-voice');
+ assert.equal(restored.controller.readSettings().voice_profile_id,'resident-voice');assert.equal(restored.controller.readSettings().style.volume,.6);assert.equal(restored.controller.readSettings().style.affect,'warm');
+ const normal=harness({bridge,storage});await normal.controller.ready;assert.equal(normal.controller.readSettings().voice_profile_id,'normal-voice');assert.equal(normal.controller.readSettings().style.volume,1);
+ restored.controller.dispose();normal.controller.dispose();
 });

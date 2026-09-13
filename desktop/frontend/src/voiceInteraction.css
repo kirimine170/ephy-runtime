@@ -29,3 +29,13 @@
 .voice-comparison section { min-width: 0; padding: 10px; border: 1px solid #deddd6; border-radius: 8px; }
 .voice-comparison h4 { margin: 0 0 8px; }
 @media (max-width: 700px) { .voice-comparison { grid-template-columns: 1fr; } }
+
+.resident-controls { border: 1px solid var(--line, #d1c6b4); border-radius: 12px; padding: 12px; margin: 8px 0; background: var(--panel, #fffdf7); }
+.resident-controls[hidden] { display: none; }
+.resident-controls .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.resident-controls select, .resident-controls input { max-width: 100%; }
+.resident-controls input:not([type=checkbox]) { min-width: 170px; }
+#resident-feedback-status { min-height: 1.3em; }
+#resident-history { max-height: 260px; overflow: auto; }
+
+.resident-enabled #voice-session,.resident-enabled #voice-pause,.resident-enabled #voice-end,.resident-enabled #voice-record,.resident-enabled #voice-cancel { display:none; }

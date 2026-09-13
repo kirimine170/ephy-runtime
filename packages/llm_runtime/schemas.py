@@ -18,6 +18,7 @@ class RequestMetadata(BaseModel):
     completion_guidance: str | None = Field(default=None, max_length=2000)
     routing_message_count: int | None = Field(default=None, ge=1, le=32)
     session_mode: Literal["default", "voice", "writing", "tech"] = "default"
+    resident_session_id: str | None = Field(default=None, min_length=1, max_length=200)
     project: str | None = None
     source_path: str | None = None
     source_scope: str | None = None
