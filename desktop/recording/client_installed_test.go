@@ -42,11 +42,36 @@ func TestInstalledKarteDeliveryRestartReceiptReadbackAndRevocation(t *testing.T)
 		t.Fatal(e)
 	}
 	defer func() { s.Close() }()
+	// Match the native 500 ms processor cadence．Registration alone does not
+	// publish capabilities，so ON must wait before the first event can run．
+	advertised := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(filepath.Join(o.Home, "producer.json")); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		time.Sleep(200 * time.Millisecond)
+		advertised <- exec.Command(control, "-data-root", data, "-config-root", config, "process").Run()
+	}()
 	status, e := s.Configure(context.Background(), ConfigureRequest{DataRoot: data, Project: "synthetic", Timezone: "Asia/Tokyo", Enabled: true})
 	if e != nil || !status.Settings.Enabled {
 		t.Fatal(e)
 	}
-	run("process")
+	root, e := os.OpenRoot(data)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = loadCapabilities(root, status.Settings)
+	root.Close()
+	if e != nil {
+		t.Fatal("ON returned before native grant advertisement", e)
+	}
+	if e = <-advertised; e != nil {
+		t.Fatal(e)
+	}
 	conv := status.Settings.ConversationID
 	for i := 0; i < 32; i++ {
 		key, e := s.Begin(uuid.NewString(), conv, "synthetic user", "text", nil)

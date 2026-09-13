@@ -247,6 +247,26 @@ func (s *Store) Configure(ctx context.Context, r ConfigureRequest) (Status, erro
 		if e = s.saveSettings(); e != nil {
 			return finish(e)
 		}
+		// The human control command commits registration before the native
+		// receiver's next capabilities publication．Do not start the producer
+		// against the previous (unregistered) advertisement．
+		readyCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if _, e = loadCapabilities(root, s.settings); e == nil {
+				break
+			}
+			if e.Error() == "unsupported_protocol" {
+				return finish(e)
+			}
+			select {
+			case <-readyCtx.Done():
+				return finish(errors.New("karte_receiver_not_ready"))
+			case <-ticker.C:
+			}
+		}
 	} else if _, e = loadCapabilities(root, s.settings); e != nil {
 		return finish(e)
 	}
