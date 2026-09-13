@@ -13,6 +13,7 @@ from threading import Lock, Thread
 import time
 
 from pydantic import JsonValue
+from packages.karte_core.protected import model_private_roots
 
 from .approval import InMemoryApprovalStore
 from .path_guard import PathPolicyError, WorkspacePathGuard
@@ -348,6 +349,8 @@ class MutationToolExecutor:
     @staticmethod
     def _sandbox_profile(root: Path) -> str:
         escaped_root = str(root).replace("\\", "\\\\").replace('"', '\\"')
+        protected = ''.join('(deny file-read* file-write* (subpath "'+str(path).replace('\\','\\\\').replace('"','\\"')+'")) '
+                            for path in model_private_roots())
         return (
             '(version 1) '
             '(allow default) '
@@ -357,7 +360,8 @@ class MutationToolExecutor:
             '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/private/var/folders")) '
             f'(allow file-read* (subpath "{escaped_root}")) '
             '(deny file-write*) '
-            f'(allow file-write* (subpath "{escaped_root}"))'
+            f'(allow file-write* (subpath "{escaped_root}")) '
+            + protected
         )
 
     @staticmethod

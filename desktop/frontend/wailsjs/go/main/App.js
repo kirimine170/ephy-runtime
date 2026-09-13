@@ -70,6 +70,10 @@ export function CommitInteraction(arg1, arg2) {
   return window['go']['main']['App']['CommitInteraction'](arg1, arg2);
 }
 
+export function ConfigureRecording(arg1) {
+  return window['go']['main']['App']['ConfigureRecording'](arg1);
+}
+
 export function ContinueInteraction(arg1) {
   return window['go']['main']['App']['ContinueInteraction'](arg1);
 }
@@ -182,6 +186,10 @@ export function GetProjectPresets() {
   return window['go']['main']['App']['GetProjectPresets']();
 }
 
+export function GetRecordingStatus() {
+  return window['go']['main']['App']['GetRecordingStatus']();
+}
+
 export function GetRegressionWatchProfiles() {
   return window['go']['main']['App']['GetRegressionWatchProfiles']();
 }
@@ -270,6 +278,10 @@ export function ReadExportedResult(arg1) {
   return window['go']['main']['App']['ReadExportedResult'](arg1);
 }
 
+export function ReadRecordedConversation(arg1) {
+  return window['go']['main']['App']['ReadRecordedConversation'](arg1);
+}
+
 export function RecordExecution(arg1) {
   return window['go']['main']['App']['RecordExecution'](arg1);
 }
@@ -300,6 +312,10 @@ export function ReloadGatewayConfig() {
 
 export function ReplayInteraction(arg1) {
   return window['go']['main']['App']['ReplayInteraction'](arg1);
+}
+
+export function RetryRecording() {
+  return window['go']['main']['App']['RetryRecording']();
 }
 
 export function RoutePlan(arg1) {
@@ -428,6 +444,10 @@ export function SetGatewayURL(arg1) {
 
 export function SetKarteAutoSubmit(arg1) {
   return window['go']['main']['App']['SetKarteAutoSubmit'](arg1);
+}
+
+export function SetRecordingConversation(arg1) {
+  return window['go']['main']['App']['SetRecordingConversation'](arg1);
 }
 
 export function SetRegressionWatchProfiles(arg1) {

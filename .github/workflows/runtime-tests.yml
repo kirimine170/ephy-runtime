@@ -57,6 +57,12 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the pinned Karte receiver
+        uses: actions/checkout@v4
+        with:
+          repository: kirimine170/Karte
+          ref: 90c69c58945e4eb00ec5f13c73b444ff298443d2
+          path: .contract/karte
       - uses: actions/setup-go@v5
         with:
           go-version-file: desktop/go.mod
@@ -66,7 +72,10 @@ jobs:
           node-version: "22"
       - run: npm ci && npm run build
         working-directory: desktop/frontend
-      - run: go test ./...
+      - name: Build Karte v2 control for the synthetic delivery gate
+        run: go build -o "$RUNNER_TEMP/karte-ephy-control" ./cmd/karte-ephy-control
+        working-directory: .contract/karte
+      - run: EPHY_TEST_KARTE_CONTROL="$RUNNER_TEMP/karte-ephy-control" go test -race ./...
         working-directory: desktop
       - name: Verify bounded PCM resampling
         run: |

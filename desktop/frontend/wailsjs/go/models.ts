@@ -315,6 +315,7 @@ export namespace main {
 	    }
 	}
 	export class ChatRequest {
+	    continuation_of?: string;
 	    messages?: GatewayMessage[];
 	    session_id?: string;
 	    session_mode?: string;
@@ -341,6 +342,7 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.continuation_of = source["continuation_of"];
 	        this.messages = this.convertValues(source["messages"], GatewayMessage);
 	        this.session_id = source["session_id"];
 	        this.session_mode = source["session_mode"];
@@ -2053,6 +2055,8 @@ export namespace main {
 	    }
 	}
 	export class QueryRequest {
+	    session_id?: string;
+	    continuation_of?: string;
 	    query: string;
 	    project?: string;
 	    source_path?: string;
@@ -2068,6 +2072,8 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session_id = source["session_id"];
+	        this.continuation_of = source["continuation_of"];
 	        this.query = source["query"];
 	        this.project = source["project"];
 	        this.source_path = source["source_path"];
@@ -3054,6 +3060,496 @@ export namespace main {
 	        this.name = source["name"];
 	        this.status = source["status"];
 	        this.detail = source["detail"];
+	    }
+	}
+}
+
+export namespace recording {
+
+	export class ASR {
+	    provider: string;
+	    model_revision: string;
+	    final_revision: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ASR(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.model_revision = source["model_revision"];
+	        this.final_revision = source["final_revision"];
+	    }
+	}
+	export class Assistant {
+	    generation: string;
+	    display: string;
+	    playback: string;
+	    speech_units: SpeechUnit[];
+
+	    static createFrom(source: any = {}) {
+	        return new Assistant(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.generation = source["generation"];
+	        this.display = source["display"];
+	        this.playback = source["playback"];
+	        this.speech_units = this.convertValues(source["speech_units"], SpeechUnit);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Claim {
+	    class: string;
+	    text: string;
+	    source_refs: SourceRef[];
+
+	    static createFrom(source: any = {}) {
+	        return new Claim(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.class = source["class"];
+	        this.text = source["text"];
+	        this.source_refs = this.convertValues(source["source_refs"], SourceRef);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ConfigureRequest {
+	    data_root: string;
+	    project: string;
+	    timezone: string;
+	    enabled: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ConfigureRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.data_root = source["data_root"];
+	        this.project = source["project"];
+	        this.timezone = source["timezone"];
+	        this.enabled = source["enabled"];
+	    }
+	}
+	export class Derivation {
+	    kind: string;
+	    input_refs: SourceRef[];
+	    model_id: string;
+	    model_revision: string;
+	    template_id: string;
+	    template_revision: string;
+	    generated_at: string;
+	    job_id: string;
+	    claims: Claim[];
+
+	    static createFrom(source: any = {}) {
+	        return new Derivation(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.input_refs = this.convertValues(source["input_refs"], SourceRef);
+	        this.model_id = source["model_id"];
+	        this.model_revision = source["model_revision"];
+	        this.template_id = source["template_id"];
+	        this.template_revision = source["template_revision"];
+	        this.generated_at = source["generated_at"];
+	        this.job_id = source["job_id"];
+	        this.claims = this.convertValues(source["claims"], Claim);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Event {
+	    conversation_id: string;
+	    scope_id: string;
+	    producer_instance_id: string;
+	    event_id: string;
+	    event_seq: number;
+	    event_revision: number;
+	    turn_id: string;
+	    event_type: string;
+	    input_kind?: string;
+	    text: string;
+	    occurred_at: string;
+	    timezone: string;
+	    local_date: string;
+	    asr?: ASR;
+	    assistant?: Assistant;
+	    consent_epoch: number;
+	    corrects?: EventRef;
+	    correction_reason?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Event(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.conversation_id = source["conversation_id"];
+	        this.scope_id = source["scope_id"];
+	        this.producer_instance_id = source["producer_instance_id"];
+	        this.event_id = source["event_id"];
+	        this.event_seq = source["event_seq"];
+	        this.event_revision = source["event_revision"];
+	        this.turn_id = source["turn_id"];
+	        this.event_type = source["event_type"];
+	        this.input_kind = source["input_kind"];
+	        this.text = source["text"];
+	        this.occurred_at = source["occurred_at"];
+	        this.timezone = source["timezone"];
+	        this.local_date = source["local_date"];
+	        this.asr = this.convertValues(source["asr"], ASR);
+	        this.assistant = this.convertValues(source["assistant"], Assistant);
+	        this.consent_epoch = source["consent_epoch"];
+	        this.corrects = this.convertValues(source["corrects"], EventRef);
+	        this.correction_reason = source["correction_reason"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EventRef {
+	    event_id: string;
+	    event_revision: number;
+
+	    static createFrom(source: any = {}) {
+	        return new EventRef(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.event_id = source["event_id"];
+	        this.event_revision = source["event_revision"];
+	    }
+	}
+	export class ReadResult {
+	    target: Target;
+	    record: RecordSpec;
+	    scope_id: string;
+	    state: string;
+	    source_refs: SourceRef[];
+	    markdown?: string;
+	    events?: Event[];
+	    derivation?: Derivation;
+
+	    static createFrom(source: any = {}) {
+	        return new ReadResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target = this.convertValues(source["target"], Target);
+	        this.record = this.convertValues(source["record"], RecordSpec);
+	        this.scope_id = source["scope_id"];
+	        this.state = source["state"];
+	        this.source_refs = this.convertValues(source["source_refs"], SourceRef);
+	        this.markdown = source["markdown"];
+	        this.events = this.convertValues(source["events"], Event);
+	        this.derivation = this.convertValues(source["derivation"], Derivation);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecordSpec {
+	    record_type: string;
+	    title: string;
+	    conversation_id?: string;
+	    segment_no?: number;
+	    timezone: string;
+	    local_date: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RecordSpec(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.record_type = source["record_type"];
+	        this.title = source["title"];
+	        this.conversation_id = source["conversation_id"];
+	        this.segment_no = source["segment_no"];
+	        this.timezone = source["timezone"];
+	        this.local_date = source["local_date"];
+	    }
+	}
+	export class RecordStatus {
+	    conversation_id: string;
+	    saved: number;
+	    local: number;
+	    pending: number;
+	    failed: number;
+	    state: string;
+	    code?: string;
+	    target: Target;
+
+	    static createFrom(source: any = {}) {
+	        return new RecordStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.conversation_id = source["conversation_id"];
+	        this.saved = source["saved"];
+	        this.local = source["local"];
+	        this.pending = source["pending"];
+	        this.failed = source["failed"];
+	        this.state = source["state"];
+	        this.code = source["code"];
+	        this.target = this.convertValues(source["target"], Target);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Settings {
+	    configured: boolean;
+	    enabled: boolean;
+	    data_root: string;
+	    project: string;
+	    timezone: string;
+	    conversation_id: string;
+	    scope_id: string;
+	    producer_instance_id: string;
+	    policy_id: string;
+	    recording_epoch: number;
+
+	    static createFrom(source: any = {}) {
+	        return new Settings(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configured = source["configured"];
+	        this.enabled = source["enabled"];
+	        this.data_root = source["data_root"];
+	        this.project = source["project"];
+	        this.timezone = source["timezone"];
+	        this.conversation_id = source["conversation_id"];
+	        this.scope_id = source["scope_id"];
+	        this.producer_instance_id = source["producer_instance_id"];
+	        this.policy_id = source["policy_id"];
+	        this.recording_epoch = source["recording_epoch"];
+	    }
+	}
+	export class SourceRef {
+	    doc_id: string;
+	    revision: number;
+	    sha256: string;
+	    conversation_id: string;
+	    turn_ids: string[];
+	    events: EventRef[];
+
+	    static createFrom(source: any = {}) {
+	        return new SourceRef(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.doc_id = source["doc_id"];
+	        this.revision = source["revision"];
+	        this.sha256 = source["sha256"];
+	        this.conversation_id = source["conversation_id"];
+	        this.turn_ids = source["turn_ids"];
+	        this.events = this.convertValues(source["events"], EventRef);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SpeechUnit {
+	    unit_id: string;
+	    state: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SpeechUnit(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.unit_id = source["unit_id"];
+	        this.state = source["state"];
+	    }
+	}
+	export class Status {
+	    settings: Settings;
+	    state: string;
+	    code?: string;
+	    saved: number;
+	    local: number;
+	    pending: number;
+	    failed: number;
+	    queue_bytes: number;
+	    capacity_warning: boolean;
+	    records: RecordStatus[];
+
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.settings = this.convertValues(source["settings"], Settings);
+	        this.state = source["state"];
+	        this.code = source["code"];
+	        this.saved = source["saved"];
+	        this.local = source["local"];
+	        this.pending = source["pending"];
+	        this.failed = source["failed"];
+	        this.queue_bytes = source["queue_bytes"];
+	        this.capacity_warning = source["capacity_warning"];
+	        this.records = this.convertValues(source["records"], RecordStatus);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Target {
+	    doc_id: string;
+	    revision: number;
+	    sha256: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Target(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.doc_id = source["doc_id"];
+	        this.revision = source["revision"];
+	        this.sha256 = source["sha256"];
 	    }
 	}
 }

@@ -32,6 +32,14 @@ def finish(root, before, binary, output):
               'build_tags': 'desktop,wv2runtime.download,production'}
     if binary.parent.name == 'MacOS' and binary.parent.parent.name == 'Contents':
         contents = binary.parent.parent
+        control = contents / 'Helpers/karte-ephy-control'
+        if control.exists():
+            control_source = json.loads((contents / 'Resources/karte-control-provenance.json').read_text())
+            actual_control = hashlib.sha256(control.read_bytes()).hexdigest()
+            if actual_control != control_source['executable_sha256'] or control_source['protocol_version'] != '2.0' or control_source['source_dirty']:
+                raise ValueError('Bundled Karte control differs from its pinned provenance')
+            result['karte_control_sha256'] = actual_control
+            result['karte_source_revision'] = control_source['source_revision']
         helper = contents / 'Helpers/ephy-whisper'
         if helper.exists():
             provenance = contents / 'Resources/whisper-build-provenance.json'

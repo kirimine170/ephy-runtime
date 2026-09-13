@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"desktop/recording"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,10 @@ import (
 )
 
 type App struct {
+	recordingMu            sync.Mutex
+	recorder               *recording.Store
+	recordingInit          bool
+	recordingError         string
 	interactionEvalMu      sync.Mutex
 	interactionComparisons map[string]*interactionComparison
 	comparisonCancels      map[string]context.CancelFunc
@@ -85,6 +90,7 @@ type ModelItem struct {
 }
 
 type ChatRequest struct {
+	ContinuationOf                string `json:"continuation_of,omitempty"`
 	generationMessages            []GatewayMessage
 	generationInstruction         string
 	generationRoutingMessageCount int
@@ -280,14 +286,16 @@ type SearchRequest struct {
 }
 
 type QueryRequest struct {
-	Query      string   `json:"query"`
-	Project    string   `json:"project,omitempty"`
-	SourcePath string   `json:"source_path,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
-	TopK       int      `json:"top_k"`
-	Answer     bool     `json:"answer"`
-	RequestID  string   `json:"request_id,omitempty"`
-	Stream     bool     `json:"stream,omitempty"`
+	SessionID      string   `json:"session_id,omitempty"`
+	ContinuationOf string   `json:"continuation_of,omitempty"`
+	Query          string   `json:"query"`
+	Project        string   `json:"project,omitempty"`
+	SourcePath     string   `json:"source_path,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
+	TopK           int      `json:"top_k"`
+	Answer         bool     `json:"answer"`
+	RequestID      string   `json:"request_id,omitempty"`
+	Stream         bool     `json:"stream,omitempty"`
 }
 
 type EvalRequest struct {
@@ -735,6 +743,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.ctxMu.Unlock()
 	a.workspaceRoot = detectWorkspaceRoot()
+	a.recordingStore()
 	if strings.TrimSpace(os.Getenv("EPHY_ASR_PROVIDER")) == "whisper-cpp" {
 		// Start asynchronous model warmup before the Conversation view is opened．
 		// This does not open a microphone or start a voice session．
@@ -1014,9 +1023,12 @@ func (a *App) Search(request SearchRequest) (*SearchResponse, error) {
 }
 
 func (a *App) Query(request QueryRequest) (*QueryResponse, error) {
+	request.SessionID = ""
+	request.ContinuationOf = ""
 	if request.Stream {
 		return a.queryStream(request)
 	}
+	request.RequestID = ""
 	var response QueryResponse
 	err := a.postJSON("/v1/rag/query", request, &response)
 	return &response, err
@@ -1036,7 +1048,11 @@ func (a *App) queryStream(request QueryRequest) (*QueryResponse, error) {
 	sources := []SearchItem{}
 	finishReason := ""
 
-	err := a.streamGatewayResponse("/v1/rag/query", request, func(eventType string, data string) error {
+	wire := request
+	wire.RequestID = ""
+	wire.SessionID = ""
+	wire.ContinuationOf = ""
+	err := a.streamGatewayResponse("/v1/rag/query", wire, func(eventType string, data string) error {
 		if data == "[DONE]" {
 			return nil
 		}
@@ -2397,27 +2413,20 @@ func (a *App) RunRuntimeServiceAction(request RuntimeServiceActionRequest) (*Wor
 }
 
 func (a *App) RunChatAction(request ChatRequest) (*ChatResponse, error) {
-	response, err := a.Chat(request)
-	status := "ok"
-	detail := ""
-	if response != nil {
-		detail = strings.TrimSpace(response.Answer)
+	var response *ChatResponse
+	var err error
+	if request.SessionID != "" {
+		response, err = a.recordedTextChat(request)
+	} else {
+		response, err = a.Chat(request)
 	}
+	status := "ok"
 	if err != nil {
 		status = "error"
-		detail = err.Error()
 	}
-	_, _ = a.RecordExecution(ExecutionHistoryItem{
-		Kind:    "chat",
-		Title:   fmt.Sprintf("Chat (%s)", fallbackString(strings.TrimSpace(request.Mode), "auto")),
-		Status:  status,
-		Summary: truncateString(strings.TrimSpace(request.Prompt), 120),
-		Detail:  detail,
-		Payload: marshalJSONString(map[string]any{
-			"mode":   request.Mode,
-			"prompt": request.Prompt,
-		}),
-	})
+	// Conversation content has one canonical owner．Execution diagnostics carry
+	// only fixed metadata，also when recording is OFF．
+	_, _ = a.RecordExecution(ExecutionHistoryItem{Kind: "chat", Title: "Chat", Status: status, Summary: "Conversation request", Detail: "", Payload: marshalJSONString(map[string]any{"mode": request.Mode, "input_chars": len([]rune(request.Prompt))})})
 	return response, err
 }
 
@@ -2552,7 +2561,21 @@ func (a *App) RunRagSearchAction(request SearchRequest) (*SearchResponse, error)
 }
 
 func (a *App) RunRagQueryAction(request QueryRequest) (*QueryResponse, error) {
-	response, err := a.Query(request)
+	var response *QueryResponse
+	var err error
+	if request.SessionID != "" {
+		response, err = a.recordedQuery(request)
+	} else {
+		response, err = a.Query(request)
+	}
+	if request.SessionID != "" {
+		status := "ok"
+		if err != nil {
+			status = "error"
+		}
+		_, _ = a.RecordExecution(ExecutionHistoryItem{Kind: "rag", Title: "Conversation with sources", Status: status, Summary: "Conversation request", Payload: marshalJSONString(map[string]any{"input_chars": len([]rune(request.Query))})})
+		return response, err
+	}
 	status := "ok"
 	detail := ""
 	if err != nil {

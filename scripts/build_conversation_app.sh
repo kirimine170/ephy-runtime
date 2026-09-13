@@ -42,6 +42,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   plutil -replace NSMicrophoneUsageDescription -string "音声入力と，有効にしたフィラーの割込み検出にマイクを使います．音声は保存しません．" "${INFO_PLIST}"
   plutil -replace NSSpeechRecognitionUsageDescription -string "録音した発話を端末内で文字に変換します．" "${INFO_PLIST}"
   install -m 0755 "${BINARY_PATH}" "${APP_BINARY}"
+  python3 "${EPHY_RUNTIME_ROOT}/scripts/build_recording_control.py" --app "${APP_BUNDLE}"
   if [[ -f "${EPHY_RUNTIME_ROOT}/bin/ephy-whisper" ]]; then
     # Weights remain in the explicitly configured external asset directory．
     mkdir -p "${APP_BUNDLE}/Contents/Helpers" "${APP_BUNDLE}/Contents/Resources/whisper-notices"

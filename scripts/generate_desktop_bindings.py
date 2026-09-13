@@ -7,7 +7,22 @@ import subprocess
 
 def normalize_models(source: str) -> str:
     source = '\n'.join(line.rstrip() for line in source.splitlines()).rstrip() + '\n'
-    # Wails v2 emits class declarations with one tab，inside one namespace．
+    namespaces = list(re.finditer(r'^export namespace (\w+) \{\n', source, re.MULTILINE))
+    if not namespaces:
+        return source
+    blocks = {}
+    for i, namespace in enumerate(namespaces):
+        name = namespace.group(1)
+        if name in blocks:
+            raise ValueError('Duplicate generated namespace')
+        block = source[namespace.start():namespaces[i + 1].start() if i + 1 < len(namespaces) else len(source)]
+        blocks[name] = _normalize_namespace(block)
+    return source[:namespaces[0].start()] + '\n'.join(blocks[name] for name in sorted(blocks))
+
+
+def _normalize_namespace(source: str) -> str:
+    # Class names are scoped to their Go package namespace．Sorting across
+    # namespace boundaries can silently attach a class to the wrong package．
     matches = list(re.finditer(r'^\texport class (\w+) \{\n', source, re.MULTILINE))
     if not matches:
         return source

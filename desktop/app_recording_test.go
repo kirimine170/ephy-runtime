@@ -1,0 +1,204 @@
+package main
+
+import (
+	"context"
+	"desktop/recording"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+func newAppRecordingStore(t *testing.T) (*recording.Store, string) {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(base, "spool")
+	if err = os.Mkdir(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	settings := recording.Settings{Configured: true, Enabled: true, DataRoot: filepath.Join(base, "karte"), Project: "synthetic", Timezone: "Asia/Tokyo", ConversationID: uuid.NewString(), ScopeID: uuid.NewString(), ProducerID: uuid.NewString(), PolicyID: uuid.NewString(), Epoch: 1}
+	b, _ := json.Marshal(settings)
+	if err = os.WriteFile(filepath.Join(home, "settings.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := recording.New(recording.Options{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	return s, home
+}
+func readSpoolEvents(t *testing.T, home string) []recording.Event {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(home, "turns", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []recording.Event
+	for _, file := range files {
+		b, e := os.ReadFile(file)
+		if e != nil {
+			t.Fatal(e)
+		}
+		var tr struct {
+			Items []struct {
+				Event *recording.Event `json:"event"`
+			} `json:"items"`
+		}
+		if e = json.Unmarshal(b, &tr); e != nil {
+			t.Fatal(e)
+		}
+		for _, item := range tr.Items {
+			if item.Event != nil {
+				events = append(events, *item.Event)
+			}
+		}
+	}
+	return events
+}
+func TestRecordingVoiceFinalIsDurableBeforeLLMAndTraceHasNoBody(t *testing.T) {
+	s, home := newAppRecordingStore(t)
+	h := newInteractionGenerationHarness(t, testVoiceTTS{}, func(ctx context.Context, req ChatRequest, onToken func(string)) (*ChatResponse, error) {
+		events := readSpoolEvents(t, home)
+		if len(events) != 1 || events[0].Type != "user_final" || events[0].Text != req.Prompt {
+			t.Error("LLM started before final was durable")
+		}
+		onToken("確認済みの回答です．")
+		r := completedVoiceResponse("確認済みの回答です．")
+		r.Thinking = "internal reasoning must not be recorded"
+		return r, nil
+	})
+	h.engine.recorder = s
+	started := h.start(t, s.Snapshot().Settings.ConversationID, GenerationLimits{})
+	awaitInteraction(t, h.engine, started.OperationID, "COMPLETED")
+	events := readSpoolEvents(t, home)
+	if len(events) != 2 || events[1].Assistant == nil || events[1].Assistant.Generation != "completed" || events[1].Assistant.Playback != "completed" {
+		t.Fatalf("wrong result: %+v", events)
+	}
+	if strings.Contains(events[1].Text, "reasoning") || strings.Contains(events[1].Text, "history-marker") {
+		t.Fatal("unconfirmed source entered recording")
+	}
+	b, err := os.ReadFile(filepath.Join(h.store, started.OperationID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"private-prompt-marker", "確認済み", "reasoning must"} {
+		if strings.Contains(string(b), forbidden) {
+			t.Fatal("body leaked into trace")
+		}
+	}
+}
+func TestRecordingTextAndRagUseSameConversationAndNoExecutionBody(t *testing.T) {
+	s, home := newAppRecordingStore(t)
+	conv := s.Snapshot().Settings.ConversationID
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(readSpoolEvents(t, home)) == 0 {
+			t.Error("request preceded preservation")
+		}
+		if r.URL.Path == "/v1/rag/query" {
+			var payload map[string]any
+			json.NewDecoder(r.Body).Decode(&payload)
+			if payload["session_id"] != nil || payload["continuation_of"] != nil || payload["request_id"] != nil {
+				t.Error("local identity leaked into incompatible query wire")
+			}
+			fmt.Fprint(w, `{"answer":"synthetic RAG answer","finish_reason":"stop","sources":[]}`)
+			return
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"synthetic text answer","reasoning_content":"private internal reasoning"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	app := NewApp()
+	app.workspaceRoot = t.TempDir()
+	app.baseURL = server.URL
+	app.recorder = s
+	app.recordingInit = true
+	if _, e := app.RunChatAction(ChatRequest{SessionID: conv, RequestID: "text1", Prompt: "synthetic text user", Mode: "fast"}); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := app.RunRagQueryAction(QueryRequest{SessionID: conv, RequestID: "rag1", Query: "synthetic rag user", Answer: true}); e != nil {
+		t.Fatal(e)
+	}
+	events := readSpoolEvents(t, home)
+	if len(events) != 4 {
+		t.Fatal("conversation path was not recorded")
+	}
+	for _, e := range events {
+		if e.ConversationID != conv || strings.Contains(e.Text, "private internal") {
+			t.Fatal("identity or reasoning contamination")
+		}
+	}
+	b, e := os.ReadFile(app.executionHistoryFilePath())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, forbidden := range []string{"synthetic text user", "synthetic text answer", "synthetic rag user", "synthetic RAG answer", "private internal"} {
+		if strings.Contains(string(b), forbidden) {
+			t.Fatal("conversation duplicated in execution history")
+		}
+	}
+}
+
+func TestRecordingInterruptionKeepsCommittedPrefixAndPlaybackObservation(t *testing.T) {
+	s, home := newAppRecordingStore(t)
+	ready := make(chan struct{})
+	startedAudio := make(chan struct{}, 1)
+	engine := NewInteractionEngine(testVoiceASR{}, testVoiceTTS{stream: func(ctx context.Context, text string, emit func([]byte) error) error {
+		if e := emit(testVoiceWAV()); e != nil {
+			return e
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}}, func(ctx context.Context, r ChatRequest, onToken func(string)) (*ChatResponse, error) {
+		onToken("確定した接頭辞です．")
+		close(ready)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}, func(InteractionEvent) {}, t.TempDir())
+	engine.recorder = s
+	engine.emit = func(event InteractionEvent) {
+		if event.Kind == "audio" {
+			_ = engine.Playback(event.OperationID, event.Sequence, "started")
+			startedAudio <- struct{}{}
+		}
+	}
+	defer engine.Close()
+	start, e := engine.Start(VoiceTurnRequest{SessionID: s.Snapshot().Settings.ConversationID, InputKind: "transcript", Chat: ChatRequest{Mode: "fast", MaxTokens: 128}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = engine.Commit(start.OperationID, nil, "割込み前の発言"); e != nil {
+		t.Fatal(e)
+	}
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("generation did not commit")
+	}
+	select {
+	case <-startedAudio:
+	case <-time.After(2 * time.Second):
+		t.Fatal("playback did not start")
+	}
+	if _, e = engine.Cancel(start.OperationID); e != nil {
+		t.Fatal(e)
+	}
+	awaitInteraction(t, engine, start.OperationID, "CANCELED")
+	events := readSpoolEvents(t, home)
+	if len(events) != 2 {
+		t.Fatal("missing interrupted result")
+	}
+	result := events[1]
+	if result.Text != "確定した接頭辞です．" || result.Assistant.Generation != "canceled" || result.Assistant.Display != "confirmed_prefix" || result.Assistant.Playback == "completed" || result.Assistant.SpeechUnits[0].State == "completed" {
+		t.Fatalf("invented completion: %+v", result)
+	}
+}

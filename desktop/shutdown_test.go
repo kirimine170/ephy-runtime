@@ -71,6 +71,11 @@ func TestStartupPreparesSelectedWhisperWithoutOpeningVoiceInput(t *testing.T) {
 	for _, provider := range []string{"whisper-cpp", "macos-speech", ""} {
 		t.Run(provider, func(t *testing.T) {
 			t.Setenv("EPHY_ASR_PROVIDER", provider)
+			privateRoot, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("EPHY_RECORDING_HOME", filepath.Join(privateRoot, "recording"))
 			a := NewApp()
 			a.startup(context.Background())
 			defer a.shutdown(context.Background())

@@ -13,6 +13,7 @@ from packages.llm_runtime.schemas import ChatCompletionRequest, RequestMetadata
 from packages.prompt_core.loader import PromptManager
 from packages.router_core.router import ModelRouter
 from packages.karte_core.source import KarteDocument, KarteSourceAdapter
+from packages.karte_core.protected import protected_path, protected_chunk
 from .chunker import chunk_text, split_markdown_sections
 from .embedding import build_embedder
 from .loaders import load_document_sections
@@ -198,6 +199,7 @@ class RagService:
             tags=payload.tags,
             top_k=candidate_k,
         )
+        ranked = [item for item in ranked if not protected_chunk(item)]
         reranked = self._reranker.rerank(retrieval_query, ranked, limit=top_k)
         return {"query": payload.query, "results": [result.model_dump() for result in reranked]}
 
@@ -393,6 +395,8 @@ class RagService:
 
     @classmethod
     def _is_supported(cls, path: Path) -> bool:
+        if protected_path(path):
+            return False
         suffix = path.suffix.lower()
         name = path.name.lower()
         if suffix in cls._TEXT_EXTENSIONS or suffix in cls._CODE_EXTENSIONS:
@@ -422,6 +426,8 @@ class RagService:
 
         files = self._iter_files(path=source_root, recursive=recursive)
         for file_path in files:
+            if protected_path(file_path):
+                continue
             relative_path = file_path.resolve().relative_to(source_root)
             destination_path = destination_root / relative_path
             destination_path.parent.mkdir(parents=True, exist_ok=True)

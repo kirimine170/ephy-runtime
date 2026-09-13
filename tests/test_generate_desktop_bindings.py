@@ -17,3 +17,13 @@ def test_duplicate_generated_class_is_rejected():
     import pytest
     with pytest.raises(ValueError, match='Duplicate'):
         normalize_models('export namespace main {\n\texport class A {\n\t}\n\texport class A {\n\t}\n}\n')
+
+
+def test_multiple_namespaces_preserve_class_ownership_and_same_named_types():
+    main = 'export namespace main {\n\texport class Target {\n\t    value: recording.Target;\n\t}\n}\n'
+    recording = 'export namespace recording {\n\texport class Target {\n\t    value: string;\n\t}\n}\n'
+    result = normalize_models(recording + main)
+    assert result == normalize_models(main + recording)
+    assert result == normalize_models(result)
+    assert result.index('value: recording.Target') < result.index('export namespace recording')
+    assert result.index('value: string') > result.index('export namespace recording')

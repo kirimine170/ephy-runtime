@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import httpx
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -360,6 +361,15 @@ def build_router() -> APIRouter:
         if karte_context_status:
             response["karte_context_status"] = karte_context_status
         return response
+
+    @router.post("/v1/karte/records/prepare")
+    async def prepare_runtime_records(request: Request) -> dict:
+        client = _karte_context_client(request)
+        try:
+            await asyncio.to_thread(request.app.state.rag_service._vector_store.sanitize_protected)
+        except (OSError, ValueError, RuntimeError, httpx.HTTPError):
+            raise HTTPException(status_code=503, detail="recording_access_guard_unavailable") from None
+        return {"safety_version": 1, "safe": True, "data_root": str(client.data_root)}
 
     @router.post("/v1/karte/context/search")
     async def karte_context_search(payload: KarteContextSearchRequest, request: Request) -> dict:
