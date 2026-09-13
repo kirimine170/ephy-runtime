@@ -90,6 +90,7 @@ type ModelItem struct {
 }
 
 type ChatRequest struct {
+	recording                     *recordingStream
 	ContinuationOf                string `json:"continuation_of,omitempty"`
 	generationMessages            []GatewayMessage
 	generationInstruction         string
@@ -286,6 +287,7 @@ type SearchRequest struct {
 }
 
 type QueryRequest struct {
+	recording      *recordingStream
 	SessionID      string   `json:"session_id,omitempty"`
 	ContinuationOf string   `json:"continuation_of,omitempty"`
 	Query          string   `json:"query"`
@@ -831,6 +833,9 @@ func (a *App) Chat(request ChatRequest) (*ChatResponse, error) {
 
 // Text and voice share payload，history，persona，router，Karte and SSE handling．
 func (a *App) chatWithContext(ctx context.Context, request ChatRequest, onToken func(string)) (*ChatResponse, error) {
+	if request.recording != nil {
+		ctx = context.WithValue(ctx, recordingStreamContextKey{}, request.recording)
+	}
 	messages, err := conversationMessages(request)
 	if err != nil {
 		return nil, err
@@ -1047,13 +1052,21 @@ func (a *App) queryStream(request QueryRequest) (*QueryResponse, error) {
 	var thinkingBuilder strings.Builder
 	sources := []SearchItem{}
 	finishReason := ""
+	doneReceived := false
 
 	wire := request
 	wire.RequestID = ""
 	wire.SessionID = ""
 	wire.ContinuationOf = ""
 	err := a.streamGatewayResponse("/v1/rag/query", wire, func(eventType string, data string) error {
+		if doneReceived {
+			return incompleteTransport()
+		}
 		if data == "[DONE]" {
+			if finishReason == "" {
+				return incompleteTransport()
+			}
+			doneReceived = true
 			return nil
 		}
 		if eventType == "error" {
@@ -1077,7 +1090,10 @@ func (a *App) queryStream(request QueryRequest) (*QueryResponse, error) {
 
 		chunk, err := parseStreamChunk(eventType, data)
 		if err != nil {
-			return nil
+			return incompleteTransport()
+		}
+		if finishReason != "" && (chunk.Answer != "" || chunk.Thinking != "" || chunk.FinishReason != "") {
+			return incompleteTransport()
 		}
 		if chunk.Thinking != "" {
 			thinkingBuilder.WriteString(chunk.Thinking)
@@ -1090,6 +1106,9 @@ func (a *App) queryStream(request QueryRequest) (*QueryResponse, error) {
 		}
 		if chunk.Answer != "" {
 			answerBuilder.WriteString(chunk.Answer)
+			if err := request.recording.progress(answerBuilder.String(), false, false); err != nil {
+				return err
+			}
 			a.emitChatStreamEvent(ChatStreamEvent{
 				RequestID: request.RequestID,
 				Kind:      "delta",
@@ -1102,6 +1121,9 @@ func (a *App) queryStream(request QueryRequest) (*QueryResponse, error) {
 		}
 		return nil
 	})
+	if err == nil && !doneReceived {
+		err = incompleteTransport()
+	}
 	if err != nil {
 		a.emitChatStreamEvent(ChatStreamEvent{RequestID: request.RequestID, Kind: "error", Error: err.Error()})
 		return nil, err
@@ -1112,6 +1134,10 @@ func (a *App) queryStream(request QueryRequest) (*QueryResponse, error) {
 		Thinking:     thinkingBuilder.String(),
 		Sources:      sources,
 		FinishReason: finishReason,
+	}
+	if err := request.recording.progress(response.Answer, true, finishReason == "stop"); err != nil {
+		a.emitChatStreamEvent(ChatStreamEvent{RequestID: request.RequestID, Kind: "error", Error: err.Error()})
+		return response, err
 	}
 	a.emitChatStreamEvent(ChatStreamEvent{
 		RequestID:    request.RequestID,

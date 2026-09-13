@@ -101,6 +101,7 @@ func applyGenerationUsage(generation *GenerationMetadata, raw map[string]any) er
 }
 
 func (a *App) consumeGenerationStream(ctx context.Context, payload GatewayChatRequest, requestID string, onToken func(string)) (*ChatResponse, error) {
+	recording, _ := ctx.Value(recordingStreamContextKey{}).(*recordingStream)
 	emit := func(event ChatStreamEvent) {
 		if ctx.Err() != nil {
 			return
@@ -248,6 +249,9 @@ func (a *App) consumeGenerationStream(ctx context.Context, payload GatewayChatRe
 				generation.FirstVisibleContentAt = now
 			}
 			answer.WriteString(chunk.Answer)
+			if err := recording.progress(answer.String(), false, false); err != nil {
+				return err
+			}
 			emit(ChatStreamEvent{RequestID: requestID, Kind: "delta", Channel: "answer", Delta: chunk.Answer})
 		}
 		if value, exists := choice["finish_reason"]; exists && value != nil {
@@ -275,6 +279,10 @@ func (a *App) consumeGenerationStream(ctx context.Context, payload GatewayChatRe
 	}
 	generation.Complete = generation.FinishReason == "stop"
 	response.FinishReason = generation.FinishReason
+	if err := recording.progress(response.Answer, true, generation.Complete); err != nil {
+		emit(ChatStreamEvent{RequestID: requestID, Kind: "error", Error: err.Error()})
+		return response, err
+	}
 	// Raw is deliberately metadata-only for a streamed request．
 	response.Raw = map[string]any{"stream": true, "generation": cloneGenerationMetadata(generation)}
 	emit(ChatStreamEvent{RequestID: requestID, Kind: "done", Thinking: response.Thinking,

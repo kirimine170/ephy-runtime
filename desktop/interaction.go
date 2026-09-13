@@ -590,7 +590,11 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 			for _, text := range progress.SpeechUnits {
 				tasks = append(tasks, speechTask{id: e.registerSpeechUnitLocked(t, revision, text), text: text})
 			}
-			e.checkpointRecordingLocked(t)
+			if err := e.checkpointRecordingLocked(t); err != nil {
+				e.failLocked(t, "recording_storage_failed")
+				e.mu.Unlock()
+				return
+			}
 			event := e.eventLocked(t, "output")
 			snapshot := cloneInteractionSnapshot(t.snapshot)
 			event.Snapshot = &snapshot
@@ -631,7 +635,11 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 	t.snapshot.Generation = cloneGenerationMetadata(response.Generation)
 	t.snapshot.ResponsePlan = responsePlan(response.Answer)
 	t.generationDone = true
-	e.checkpointRecordingLocked(t)
+	if err := e.checkpointRecordingLocked(t); err != nil {
+		e.failLocked(t, "recording_storage_failed")
+		e.mu.Unlock()
+		return
+	}
 	if response.Generation.Complete {
 		if t.tokenCount == 0 {
 			e.traceLocked(t, "llm_first_token", "")
@@ -901,7 +909,10 @@ func (e *InteractionEngine) Playback(op string, seq int, phase string) error {
 		return errors.New("invalid_playback_phase")
 	}
 	e.refreshSpeechUnitsLocked(t)
-	e.checkpointRecordingLocked(t)
+	if err := e.checkpointRecordingLocked(t); err != nil {
+		e.failLocked(t, "recording_storage_failed")
+		return errors.New("recording_storage_failed")
+	}
 	e.playbackDeadlineLocked(t)
 	e.completeIfPlayedLocked(t)
 	return nil
@@ -934,15 +945,20 @@ func (e *InteractionEngine) finishLocked(t *interactionTurn, state, name, code s
 	if state == "COMPLETED" && t.snapshot.State != "PLAYING" && !(t.snapshot.State == "THINKING" && t.generationDone) {
 		state, name, code = "FAILED", "turn_failed", "invalid_completion_state"
 	}
+	e.refreshSpeechUnitsForStateLocked(t, state)
+	t.snapshot.ErrorCode = code
+	if err := e.finishRecordingLocked(t, state); err != nil {
+		state, name, code = "FAILED", "turn_failed", "recording_storage_failed"
+		t.snapshot.ErrorCode = code
+		e.refreshSpeechUnitsForStateLocked(t, state)
+	}
 	trace := e.recordTraceLocked(t, name, code, false)
 	if err := e.store.save(t.snapshot.OperationID, t.events); err != nil {
 		state, name, code = "FAILED", "turn_failed", "trace_storage_failed"
 		t.events = t.events[:len(t.events)-1]
 		trace = e.recordTraceLocked(t, name, code, false)
 	}
-	e.refreshSpeechUnitsForStateLocked(t, state)
 	t.snapshot.ErrorCode = code
-	e.finishRecordingLocked(t, state)
 	event := e.eventLocked(t, "trace")
 	event.Trace = trace
 	e.queueLocked(event)

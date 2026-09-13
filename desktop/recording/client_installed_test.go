@@ -41,7 +41,11 @@ func TestInstalledKarteDeliveryRestartReceiptReadbackAndRevocation(t *testing.T)
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer func() { s.Close() }()
+	defer func() {
+		if s != nil {
+			s.Close()
+		}
+	}()
 	// Match the native 500 ms processor cadence．Registration alone does not
 	// publish capabilities，so ON must wait before the first event can run．
 	advertised := make(chan error, 1)

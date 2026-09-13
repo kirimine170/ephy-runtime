@@ -154,6 +154,26 @@ func TestQueueCapacityAndSingleWriter(t *testing.T) {
 	}
 }
 
+func TestCloseReleasesWriterDespiteInheritedChildDescriptor(t *testing.T) {
+	s, o := testStore(t)
+	child := exec.Command("sh", "-c", "read token")
+	child.ExtraFiles = []*os.File{s.lock}
+	input, err := child.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { input.Close(); _ = child.Wait() }()
+	s.Close()
+	restarted, err := New(o)
+	if err != nil {
+		t.Fatal("forked helper kept the closed producer lock", err)
+	}
+	restarted.Close()
+}
+
 func TestOpenAssistantsReserveCapacityBeforeFurtherInput(t *testing.T) {
 	s, _ := testStore(t)
 	s.options.MaxBytes = 1 << 20

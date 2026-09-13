@@ -8,7 +8,7 @@
 |---|---|
 | 実装済み | 記録設定・ON/OFF，Git外のdurable queue，user final先行保全，assistant checkpoint，単一dispatcher，安定ID／seq，再送・restart，receipt／ID／hashと現在policyによる読戻し，状態UI |
 | 旧経路の保護 | v2所有ledger・markerに基づくdirect reader拒否，既存RAG copy／JSON cache／Qdrant pointの失効，file／process toolからprivate本文・credentialへのアクセス遮断．初回ONにはGatewayの準備gateが必須 |
-| 自動検証 | 100 turns／200 events，実SIGKILL復旧，OFF中の本文非採取，中断，容量・disk failure，7種のreceipt／read-back不一致，実Karte CLIで32 turns／64 eventsと取消を確認．Python全体636 passed／3 skipped，Frontend 301 passed，Go全体race，Karte records／canonical／contextのraceと保存6境界のfault，validator，45 JSON byte照合が成功．配布buildとnative起動の結果は別途記録する |
+| 自動検証 | 100 turns／200 events，実SIGKILL復旧，OFF中の本文非採取，中断，容量・disk failure，7種のreceipt／read-back不一致，実Karte CLIで32 turns／64 eventsと取消を確認．Python全体636 passed／3 skipped，Frontend 301 passed，Go全体race，Karte records／canonical／contextのraceと保存6境界のfault，validator，45 JSON byte照合が成功．native Karteの受信処理でも4往復／8 eventsを8,512 msで保存・read-backし，producer再起動後のseq／ID重複なしとOFFを確認した．初回grant公開待ち，text生成途中の確定境界checkpoint，assistant保存失敗の伝播，子プロセスと重なったwriter lock解放を回帰検査へ追加した．最終配布buildのsource／hashはローカル受入manifestに固定する |
 | 対応するKarte | `90c69c58945e4eb00ec5f13c73b444ff298443d2`をpin．schema／protocol 2.0のまま．新しいKarte契約変更なし |
 | 利用者受入 | 初期設定はOFF．対応build・Karte・Gatewayを準備してから，利用者によるtext／音声，中断，OFF，再起動の一周を確認する |
 | 次の範囲 | C3の要約・日記Job，翌日の想起・訂正は未実装．Step 5以降へ自動進行しない |

@@ -404,6 +404,7 @@ func (s *Store) Checkpoint(key, text string, a Assistant, complete bool) error {
 		return nil
 	}
 	d := t.Draft
+	previous := *d
 	if s.settings.Enabled && d.Epoch == s.settings.Epoch {
 		if d.SkipBytes > 0 {
 			if len(text) < d.SkipBytes {
@@ -421,6 +422,7 @@ func (s *Store) Checkpoint(key, text string, a Assistant, complete bool) error {
 	d.State.SpeechUnits = append([]SpeechUnit{}, a.SpeechUnits...)
 	d.Complete = complete
 	if err := s.saveTurn(t); err != nil {
+		*d = previous
 		return s.pause("recording_storage_failed")
 	}
 	return nil
@@ -579,7 +581,7 @@ func (s *Store) Close() {
 	s.dispatchMu.Lock()
 	defer s.dispatchMu.Unlock()
 	if s.lock != nil {
-		s.lock.Close()
+		unlockQueue(s.lock)
 	}
 	if s.root != nil {
 		s.root.Close()

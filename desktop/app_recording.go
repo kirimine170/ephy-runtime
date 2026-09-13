@@ -116,24 +116,72 @@ func recordedAssistant(snapshot InteractionSnapshot, state string) (recording.As
 	}
 	return a, complete
 }
-func (e *InteractionEngine) checkpointRecordingLocked(t *interactionTurn) {
+func (e *InteractionEngine) checkpointRecordingLocked(t *interactionTurn) error {
 	if e.recorder == nil || t.recordingKey == "" {
-		return
+		return nil
 	}
 	text := ""
 	if t.snapshot.ResponsePlan != nil {
 		text = t.snapshot.ResponsePlan.Text
 	}
 	a, complete := recordedAssistant(t.snapshot, t.snapshot.State)
-	_ = e.recorder.Checkpoint(t.recordingKey, text, a, complete)
+	return e.recorder.Checkpoint(t.recordingKey, text, a, complete)
 }
-func (e *InteractionEngine) finishRecordingLocked(t *interactionTurn, state string) {
+func (e *InteractionEngine) finishRecordingLocked(t *interactionTurn, state string) error {
 	if e.recorder == nil || t.recordingKey == "" {
-		return
+		return nil
 	}
-	e.checkpointRecordingLocked(t)
+	if err := e.checkpointRecordingLocked(t); err != nil {
+		return err
+	}
 	a, complete := recordedAssistant(t.snapshot, state)
-	_ = e.recorder.Finish(t.recordingKey, a, complete)
+	return e.recorder.Finish(t.recordingKey, a, complete)
+}
+
+type recordingStreamContextKey struct{}
+type recordingStream struct {
+	store     *recording.Store
+	key       string
+	committed string
+	failure   error
+}
+
+func (r *recordingStream) progress(text string, terminal, complete bool) error {
+	state := recording.Assistant{Generation: "failed", Playback: "not_started", SpeechUnits: []recording.SpeechUnit{}}
+	if complete {
+		state.Generation = "completed"
+	}
+	return r.persist(text, state, terminal, complete)
+}
+func (r *recordingStream) persist(text string, state recording.Assistant, terminal, complete bool) error {
+	if r == nil || r.key == "" {
+		return nil
+	}
+	if r.failure != nil {
+		return r.failure
+	}
+	prefix := text
+	if !complete {
+		prefix = r.committed
+		boundaries, _ := generationBoundaries(text, false)
+		if len(boundaries) > 0 && boundaries[len(boundaries)-1] > len(prefix) {
+			prefix = text[:boundaries[len(boundaries)-1]]
+		}
+	}
+	if prefix != r.committed || terminal {
+		if err := r.store.Checkpoint(r.key, prefix, state, complete); err != nil {
+			r.failure = &generationStreamError{code: "recording_storage_failed", reason: "unknown"}
+			return r.failure
+		}
+		r.committed = prefix
+	}
+	if terminal {
+		if err := r.store.Finish(r.key, state, complete); err != nil {
+			r.failure = &generationStreamError{code: "recording_storage_failed", reason: "unknown"}
+			return r.failure
+		}
+	}
+	return nil
 }
 
 func (a *App) recordedTextChat(request ChatRequest) (*ChatResponse, error) {
@@ -154,6 +202,8 @@ func (a *App) recordedTextChat(request ChatRequest) (*ChatResponse, error) {
 			return nil, err
 		}
 	}
+	progress := &recordingStream{store: s, key: key}
+	request.recording = progress
 	response, err := a.Chat(request)
 	if s != nil && key != "" {
 		state := recording.Assistant{Generation: "failed", Playback: "not_started", SpeechUnits: []recording.SpeechUnit{}}
@@ -172,8 +222,9 @@ func (a *App) recordedTextChat(request ChatRequest) (*ChatResponse, error) {
 		if errors.Is(err, context.Canceled) {
 			state.Generation = "canceled"
 		}
-		_ = s.Checkpoint(key, text, state, complete)
-		_ = s.Finish(key, state, complete)
+		if recordingErr := progress.persist(text, state, true, complete); recordingErr != nil {
+			return response, recordingErr
+		}
 	}
 	return response, err
 }
@@ -192,6 +243,8 @@ func (a *App) recordedQuery(request QueryRequest) (*QueryResponse, error) {
 			return nil, err
 		}
 	}
+	progress := &recordingStream{store: s, key: key}
+	request.recording = progress
 	response, err := a.Query(request)
 	if s != nil && key != "" {
 		state := recording.Assistant{Generation: "failed", Playback: "not_started", SpeechUnits: []recording.SpeechUnit{}}
@@ -204,8 +257,9 @@ func (a *App) recordedQuery(request QueryRequest) (*QueryResponse, error) {
 		if complete {
 			state.Generation = "completed"
 		}
-		_ = s.Checkpoint(key, text, state, complete)
-		_ = s.Finish(key, state, complete)
+		if recordingErr := progress.persist(text, state, true, complete); recordingErr != nil {
+			return response, recordingErr
+		}
 	}
 	return response, err
 }
