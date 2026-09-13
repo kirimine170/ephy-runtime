@@ -32,6 +32,9 @@ def run_worker() -> int:
         elif config["provider"] == "irodori-tts":
             from .irodori import IrodoriAdapter
             adapter = IrodoriAdapter(config["config"])
+        elif config["provider"] == "irodori-audiocpp":
+            from .audiocpp import AudioCppAdapter
+            adapter = AudioCppAdapter(config["config"])
         else:
             return 1
         output.write(encode_frame({"type": "ready"}))

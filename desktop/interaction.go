@@ -91,6 +91,7 @@ type playbackChunk struct {
 	waitingAt, startedAt time.Time
 }
 type interactionTurn struct {
+	approvedCandidate      string
 	recordingKey           string
 	fillerIdentityReady    bool
 	fillerSetupServed      bool
@@ -248,6 +249,9 @@ func (e *InteractionEngine) pruneLocked() {
 	}
 }
 func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot, error) {
+	return e.start(request, "")
+}
+func (e *InteractionEngine) start(request VoiceTurnRequest, candidate string) (InteractionSnapshot, error) {
 	if request.InputKind == "" {
 		request.InputKind = "microphone"
 	}
@@ -307,12 +311,15 @@ func (e *InteractionEngine) Start(request VoiceTurnRequest) (InteractionSnapshot
 	op := interactionID("operation_")
 	t := &interactionTurn{snapshot: InteractionSnapshot{TraceID: interactionID("trace_"), SessionID: request.SessionID, TurnID: interactionID("turn_"), OperationID: op, State: "IDLE", GenerationRevision: 1}, request: request, ctx: ctx, cancel: cancel, created: time.Now(), chunks: map[int]*playbackChunk{}, source: request.InputKind, requestConfigurationID: request.Chat.ConfigurationID}
 	t.speech = prepared
+	t.approvedCandidate = candidate
 	e.turns[op] = t
 	e.active = op
 	if request.VoiceSessionID != "" {
 		e.voiceSession.snapshot.State = "listening"
 	}
-	if request.VoiceSessionID == "" {
+	if candidate != "" {
+		// Observation is not a user question．
+	} else if request.VoiceSessionID == "" {
 		e.traceLocked(t, "user_speech_start", "")
 	} else {
 		e.traceLocked(t, "listening_started", "")
@@ -558,6 +565,7 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 			}
 		})
 		chat := func(segmentCtx context.Context, segmentReq ChatRequest, onToken func(string)) (*ChatResponse, error) {
+
 			return e.chat(segmentCtx, segmentReq, func(token string) {
 				e.mu.Lock()
 				live := e.generationLiveLocked(t, revision, segmentCtx)
@@ -573,7 +581,7 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 				}
 			})
 		}
-		return assembleGeneration(llmCtx, req, limits, prefix, chat, func(progress GenerationProgress) {
+		onProgress := func(progress GenerationProgress) {
 			e.mu.Lock()
 			if !e.generationLiveLocked(t, revision, llmCtx) {
 				e.mu.Unlock()
@@ -611,7 +619,18 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 					return
 				}
 			}
-		})
+		}
+		if t.approvedCandidate != "" {
+			if err := llmCtx.Err(); err != nil {
+				return nil, err
+			}
+			// The candidate already has a verified terminal result．No HTTP/SSE
+			// terminal is invented for this in-memory commit．
+			metadata := GenerationMetadata{SchemaVersion: 2, FinishReason: "stop", ProviderFinishReason: "stop", Complete: true, ReasoningTokenSource: "unavailable"}
+			onProgress(GenerationProgress{CommittedText: t.approvedCandidate, SpeechUnits: []string{generationSpeechText(t.approvedCandidate)}, Metadata: metadata})
+			return &ChatResponse{Answer: t.approvedCandidate, FinishReason: "stop", Generation: &metadata}, nil
+		}
+		return assembleGeneration(llmCtx, req, limits, prefix, chat, onProgress)
 	})
 	if err != nil {
 		e.mu.Lock()

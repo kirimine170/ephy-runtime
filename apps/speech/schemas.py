@@ -163,13 +163,13 @@ def public_profile(value: dict[str, Any], *, available: bool) -> dict[str, Any]:
     for key in ("voice_profile_id", "provider", "model_revision", "language", "provenance_id"):
         if not isinstance(result[key], str) or not re.fullmatch(ID_PATTERN, result[key]):
             raise SpeechError("invalid_speech_text")
-    provider_capabilities = {"qwen3-tts": QWEN_CAPABILITIES, "irodori-tts": IRODORI_CAPABILITIES}
+    provider_capabilities = {"qwen3-tts": QWEN_CAPABILITIES, "irodori-tts": IRODORI_CAPABILITIES, "irodori-audiocpp": IRODORI_CAPABILITIES}
     expected_capabilities = provider_capabilities.get(result["provider"])
     clone = result["clone_prompt_digest"]
     group = result["reference_group_digest"]
     if (expected_capabilities is None or not all(isinstance(item, str) for item in (clone, group))
             or (result["provider"] == "qwen3-tts" and (not re.fullmatch(DIGEST_PATTERN, clone) or group))
-            or (result["provider"] == "irodori-tts" and (clone or not re.fullmatch(DIGEST_PATTERN, group)))):
+            or (result["provider"] in {"irodori-tts", "irodori-audiocpp"} and (clone or not re.fullmatch(DIGEST_PATTERN, group)))):
         raise SpeechError("invalid_speech_text")
     if not isinstance(result["display_name"], str) or not 1 <= len(result["display_name"]) <= 80:
         raise SpeechError("invalid_speech_text")

@@ -1,0 +1,2 @@
+pydantic-ai-slim[openai] @ git+https://github.com/pydantic/pydantic-ai.git@5cbacfc8f86d653baa0ca2e31970cbf4f0fcec95#subdirectory=pydantic_ai_slim
+pydantic-graph @ git+https://github.com/pydantic/pydantic-ai.git@5cbacfc8f86d653baa0ca2e31970cbf4f0fcec95#subdirectory=pydantic_graph

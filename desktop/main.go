@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -42,6 +43,13 @@ func newApplicationOptions(app *App) *options.App {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--reuse-experiment" {
+		if err := runReuseExperiment(); err != nil {
+			println(err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 	app := NewApp()
 	err := wails.Run(newApplicationOptions(app))
 
