@@ -51,7 +51,7 @@ def load_config(path):
     if value.get('schema_version') != 1:
         raise ValueError('Unsupported integration configuration．')
     for key in PATH_KEYS:
-        value[key] = (path.parent / value[key]).resolve()
+        value[key] = (path.parent / Path(value[key]).expanduser()).resolve()
     for key in ('home', 'logs'):
         value[key].mkdir(parents=True, exist_ok=True)
     value['config_path'] = path

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "home": "../../../local-runtimes/ephy.nosync",
+  "home": "~/Library/Application Support/Ephy Integration",
   "logs": "../../../logs/runtime",
   "karte_root": "../../karte",
   "data_root": "../data/runtime/karte-data",

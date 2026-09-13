@@ -2,6 +2,8 @@
 
 `scripts/integration_stack.py` が，Karte，Runtime，ASR，TTSと関連サービスのビルド・起動・終了を扱う．過去の検証ログや完了済みworktreeを起動依存にしない．
 
+署名済みアプリの保存先 `home` は，同期対象外の `~/Library/Application Support/Ephy Integration` とする．Desktopや同期サービスの配下では，ビルド後に付加されるFinder情報がmacOSの署名検証を妨げることがある．モデルとログはそれぞれの設定パスに置く．パスの `~` は実行ユーザーのホームへ展開する．
+
 このMac用のパスは `configs/integration.sample.json` をもとに `configs/integration.local.json` へ保存する．秘密の値をこのJSONに書かず，既存のTTS credentialファイルのパスを指定する．Karteの会話データと記録ON/OFFは既存の保存先を引き継ぐ．
 
 ```sh

@@ -150,3 +150,15 @@ def test_spawned_service_is_cleaned_up_after_readiness_timeout(tmp_path, monkeyp
     child.terminate.assert_called_once()
     child.wait.assert_called_once_with(timeout=5)
     child.kill.assert_not_called()
+
+
+def test_config_resolves_relative_absolute_and_user_paths(tmp_path):
+    path = tmp_path / 'config/integration.json'
+    value = {key: '../assets' for key in stack.PATH_KEYS}
+    value.update(schema_version=1, home=str(tmp_path / 'runtime'), logs='../logs', node_bin='~')
+    stack.write_json(path, value)
+    config = stack.load_config(path)
+    assert config['home'] == tmp_path / 'runtime'
+    assert config['logs'] == tmp_path / 'logs'
+    assert config['karte_root'] == tmp_path / 'assets'
+    assert config['node_bin'] == Path.home()
