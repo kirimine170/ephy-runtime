@@ -1,6 +1,33 @@
-# 常駐worktreeの部品検証
+# 常駐会話と部品の検証
 
-2026-09-14，`ephy-runtime-resident`で実行した結果．既存比較commit `c509dfc`の実測と，新規実行を混ぜない．通常会話・feedbackの検証は[常駐手順](../../RESIDENT_FEEDBACK.md)に記載する．
+2026-09-14，`ephy-runtime-resident`で実行した結果．既存比較commit `c509dfc`の実測と，新規実行を混ぜない．操作は[常駐手順](../../RESIDENT_FEEDBACK.md)を参照する．
+
+## 常駐・feedbackの新規検証
+
+| 検証 | 結果と範囲 |
+|---|---|
+| Python関連回帰 | 325件合格，1件skip．feedback，Profile，既存A/B，Gateway，Karte，speech，worker，起動分離，記録保護を含む．通常venvのskipはoptional SDKで，部品用venvの150件ではSDKも検査した．重複suiteを合算しない |
+| Go | `go -C desktop test -race ./...`合格．既存全packageとresident対象・取消・候補・recordingを含む |
+| frontend | `npm --prefix desktop/frontend test`で最終330件合格．有限waitのfake clock 12件を含む．Vite build成功 |
+| repository | runtimeと共通設計repoのvalidator，差分検査とも合格 |
+| 実Gatewayでの指摘 | 合成対象に「いつも説明が長い」を保存・適用，約3.0 ms．正の評価も単独feedbackとして保存し，A/B pair・training exportへ変換しない |
+| 実モデルの次の応答 | 専用Gatewayから選択済みFastとLoRAを使い，固定した氷の質問へ3文で応答，10.09秒，`finish_reason=stop`．有効policyとresident revisionの到達を確認．n=1で，自然さや短さの改善率ではない |
+| 実音声生成 | 選択済み`voice-irodori-anime-exp`で合成文「こんにちは．短い動作確認です．」を生成，audio→completed，17.09秒．初期loadを含む．物理再生なし |
+| 復元・取消 | 専用Gateway／speechを終了・再起動し，新sessionで継続briefを復元．対象変更undoでdefaultへ戻る．sessionの自発抑制は別の新sessionではallowed．試験の継続変更はundo済み |
+| 実Whisper＋合成WAV | large-v3-turbo-f16／Metalで準備1.755秒，8入力を4.590秒で完了．確定3，無音3，取消2，最終3件だけ下流へ渡る．この試験の下流LLM/TTSはstubで，実会話往復ではない．マイク／speakerなし |
+| 署名済みアプリ | macOS arm64のWails／Go production build，Karte helper，Whisper helper，codesign検証，build provenance生成が成功 |
+| native起動 | `f48140b`のbuildで専用IDのアプリPIDを確認．Macロックで画面を検査できず，アプリ内ASR workerは未確認．この後の差分は候補の有限wait，専用artifactの起動環境検査，文書で，最終buildも実行した |
+| native終了 | ロック中に通常終了とSIGTERMが完了せず，所有PIDだけSIGKILLで回収した．監視が専用Karte／Gateway／speechを回収し，全件停止を確認．正常な画面終了は未確認 |
+
+Python回帰の記録保護試験1件は，外側のsandbox内で追加の`sandbox-exec`を起動できず失敗し，同じ1件を権限のある実行で再確認して合格した．実Whisperの最初の合成WAVは48 kHzで，試験の1秒chunkが上限を超え`invalid_audio`となった．captureと同じ16 kHzへ変換した試験は上表のとおり合格した．初回の失敗logも保存し，成功値で上書きしていない．
+
+通常版`042c3a7`のHEAD／作業差分／local設定hashを比較し，元のGateway・speech・モデルserverと既存reuse版のPIDを照合した．専用側から共有serverを切替・停止していない．確認の正本はGit外の`local-data/resident-feedback/logs/final-preservation.json`である．共通設計branchは`codex/design-resident-feedback`，主branchは`codex/feat-resident-feedback`．push／merge／deployは実行していない．
+
+実測の保存先は専用stateの`logs/live-chat-smoke.json`，`live-speech-smoke.json`，`restore-undo-smoke.json`，`whisper-installed-smoke/`，`native-cleanup-*-smoke.json`，`final-preservation.json`．最終buildのsource revision／tree／署名後binary hashは，一時build領域の`runtime-build-provenance.json`を参照する．モデル・音声・私有DB・tokenはGitへ追加していない．
+
+実マイクの連続会話，最小化中のcapture，物理speaker停止，sleep/wakeと実device切断，長時間負荷，聴感・距離感の評価は未実施である．ロック中のprocessのuptimeを常駐受入に数えない．指摘は定型表現に限定し，記憶共有抑制は文書ID単位でresident全体に適用する．Karte本文の事実訂正は確認待ちとして記録し，自動更新を完了したとは扱わない．
+
+## 部品の採否
 
 | 部品 | 現常駐版の判定 | 根拠と残件 |
 |---|---|---|

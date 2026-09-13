@@ -6,6 +6,8 @@
 
 専用worktreeで実行する．初期準備後は`start`だけでよい．build成果物が一時領域から削除された場合は`build`を再実行する．
 
+専用`.app`の直接起動は，分離に必要な環境がない場合に終了する．必ず下のlauncherから起動する．
+
 ```bash
 cd /Users/kirimine170/Desktop/Ephy_Project/ephy-workspace/ephy-runtime-resident
 .venv/bin/python scripts/resident_app.py start
@@ -22,6 +24,8 @@ cd /Users/kirimine170/Desktop/Ephy_Project/ephy-workspace/ephy-runtime-resident
 9. アプリを閉じるか「アプリを終了」で終了する．専用launcherの監視processが，その起動で所有したGateway・音声service・fixture受信processを回収する．通常版のserverは停止しない．
 
 音声指摘は既存ASRの確定入力を使う．引用文やtool結果を所有者の指示として扱わない．観測・参加modeでは，直接の質問や指摘を「Ephy，…」で始める．話者が不明な会話は所有者として扱わず，継続設定を変更しない．
+
+指摘の分類は有限の定型表現に対応する．任意の言い換えを理解する方式ではないため，まず上記の例と画面のfeedback操作で試す．所有者や共有許可の選択は音声による本人認証を意味しない．
 
 ## 初期準備・再build・停止
 
@@ -54,6 +58,8 @@ cd /Users/kirimine170/Desktop/Ephy_Project/ephy-workspace/ephy-runtime-resident
 
 `participation-grants.json`は検索範囲と共有可能な文書ID／hashを限定する．モデル生成引数から拡張できない．このfixtureでの成功は話者分離や実会話の共有許諾を自動判定できたという意味ではない．実記憶へ移行する際は，参加者と文書の共有範囲を明示的に設定する．
 
+人の発話中や短いcooldownには候補1件だけを最大3秒待たせ，250 msごとに現在の条件を再評価する．長いcooldownや期限切れでは破棄し，追加のモデル呼出しはしない．候補の15秒期限は音声合成後にも有効である必要があり，cold合成が長い初回候補は再生されない場合がある．「それは人前で言わないで」は，対象の記憶IDをこのresidentの会話全体から除外する保守的な制限で，参加者ごと・公開場面だけの細かな制限ではない．
+
 ## 指摘の記録・削除・評価との境界
 
 指摘の受付，保存，設定反映，失敗は別に表示する．対象が曖昧な評価は確認待ちとなり，原因や理想回答を捏造しない．フィードバック本文をsystem promptへ継ぎ足さず，有限の設定差分を次の生成に渡す．停止操作は保存の成功を待たない．
@@ -65,5 +71,7 @@ cd /Users/kirimine170/Desktop/Ephy_Project/ephy-workspace/ephy-runtime-resident
 ## 検証結果と未確認事項
 
 実行結果は`docs/experiments/reuse-core/resident-results.md`に記録する．再現用の設定・計測は専用stateの`logs/`，部品比較のraw結果は`logs/resident-feedback/reuse-probes/`に置く．合成fixture，実モデル／実音声生成，実マイク／speakerによる体験確認を区別する．
+
+署名済みmacOS buildは成功した．起動試験では専用アプリのPIDを確認したが，Macのロックにより画面操作とアプリ内ASRの準備完了を確認できなかった．終了要求にも応答しなかったため，今回起動したPIDだけを強制回収し，監視processによる専用serviceの回収を確認した．現在は検証版を停止している．ロックを解除してから上の`start`を実行し，macOSのアクセス許可が表示された場合は内容を確認して操作する．画面・背景capture・正常終了が受入済みという状態ではない．
 
 実マイクでの会話・背景capture・物理的なspeaker停止，sleep/wake・実device切断後の復帰，長時間連続負荷，声の好みと距離感の主観評価は，実行できた範囲を超えて確認済みとはしない．実際に試す時は，通常版のマイクを休止し，上の会話・指摘・最小化・復元手順を順に確認する．
