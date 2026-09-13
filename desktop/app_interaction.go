@@ -65,7 +65,7 @@ func (a *App) postJSONContext(ctx context.Context, path string, payload any, out
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := a.httpClient.Do(request)
+	response, err := a.clientForPath(path).Do(request)
 	if err != nil {
 		return err
 	}
@@ -123,6 +123,9 @@ func (a *App) GetVoiceProfiles() VoiceProfileCatalog {
 func (a *App) StartInteraction(request VoiceTurnRequest) (InteractionSnapshot, error) {
 	request.Chat.SessionID = request.SessionID
 	request.Chat.SessionMode = "voice"
+	if request.InputKind == "text" {
+		request.Chat.SessionMode = "default"
+	}
 	request.Chat.Stream = true
 	if request.Chat.Mode == "" {
 		request.Chat.Mode = "auto"
@@ -138,6 +141,25 @@ func (a *App) StartInteraction(request VoiceTurnRequest) (InteractionSnapshot, e
 	digest := sha256.Sum256(config)
 	request.Chat.ConfigurationID = hex.EncodeToString(digest[:8])
 	return a.interactionEngine().Start(request)
+}
+
+// Text shares generation，speech，recording and cancellation with voice，while
+// retaining the ordinary chat persona and never acquiring microphone or ASR．
+func (a *App) StartTextInteraction(request VoiceTurnRequest) (InteractionSnapshot, error) {
+	request.InputKind = "text"
+	request.VoiceSessionID, request.VoiceSessionEpoch = "", 0
+	if _, err := conversationMessages(request.Chat); err != nil {
+		return InteractionSnapshot{}, err
+	}
+	snapshot, err := a.StartInteraction(request)
+	if err != nil {
+		return snapshot, err
+	}
+	if err := a.interactionEngine().Commit(snapshot.OperationID, nil, request.Chat.Prompt); err != nil {
+		_, _ = a.interactionEngine().Cancel(snapshot.OperationID)
+		return InteractionSnapshot{}, err
+	}
+	return snapshot, nil
 }
 
 // Readiness creates no interaction turn and requests no microphone access．

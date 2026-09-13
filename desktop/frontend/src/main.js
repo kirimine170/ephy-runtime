@@ -7642,6 +7642,20 @@ async function runChatFromForm() {
   if (chatSendInFlight) {
     return {ok: false, detail: 'Chat request already in progress.'};
   }
+  if (voiceProfiles?.isChatSpeechEnabled()) {
+    const session = chatConversationId;
+    const speech = () => voiceProfiles.readSettings();
+    const chat = {mode, prompt, messages: conversationHistory(chatThreadEntries),
+      ...buildChatGroundingPayload(), temperature: 0.2, max_tokens: getChatMaxTokens(mode), stream: true};
+    const started = await voiceController.startText(async () => {
+      const selectedSpeech = speech();
+      const web = await prepareWebSearch(prompt);
+      return web ? {session_id: session, speech: selectedSpeech,
+        generation_limits: {max_segments: 1}, chat: {...chat, ...web}} : null;
+    });
+    if (started && session === chatConversationId && promptInput.value === prompt) promptInput.value = '';
+    return {ok: started, detail: started ? 'Chat response started.' : 'Chat was not started.'};
+  }
   let webSearch;
   try {
     webSearch = await prepareWebSearch(prompt);
@@ -11197,7 +11211,8 @@ voiceController = mountVoiceInteraction({
   onTranscript(snapshot, text) {
     voiceEvaluation?.refresh();
     if (!chatThreadEntries.some(entry => entry.requestId === snapshot.operation_id)) {
-      beginStreamingChat({requestId: snapshot.operation_id, prompt: text, modeLabel: '音声'});
+      beginStreamingChat({requestId: snapshot.operation_id, prompt: text,
+        modeLabel: snapshot.input_kind === 'text' ? getChatModeLabel(document.getElementById('chat-mode').value) : '音声'});
     } else {
       activeChatStreamRequestId = snapshot.operation_id;
       announceChatStream(document, 'streaming');
@@ -11208,6 +11223,19 @@ voiceController = mountVoiceInteraction({
   },
   onToken(snapshot, text) { updateChatThreadEntry(snapshot.operation_id, entry => previewVoiceEntry(entry, snapshot, text)); },
   onOutput(snapshot) { updateChatThreadEntry(snapshot.operation_id, entry => confirmVoiceEntry(entry, snapshot)); },
+  onChatEvent(snapshot, event) {
+    if (!event) return;
+    if (event.kind === 'delta' && event.channel === 'thinking') {
+      applyChatStreamDelta({requestId: snapshot.operation_id, channel: 'thinking', delta: event.delta});
+    } else if (event.kind === 'sources') {
+      renderChatSourcesPane({sources: event.sources || [], title: 'Used Sources'});
+    } else if (event.kind === 'karte_context_status') {
+      setChatDropStatus(formatKarteContextStatus(event.karte_context_status || {}));
+    } else if (event.kind === 'web_search_status') {
+      const status = event.web_search_status || {};
+      setChatWebStatus(status.status === 'completed' ? `Web · ${status.source_count || 0} sources` : 'Web unavailable', status.status === 'completed' ? 'active' : 'warning');
+    }
+  },
   onComplete: finalizeVoiceChat,
   onIncomplete: finalizeVoiceChat,
   onCancel: finalizeVoiceChat,

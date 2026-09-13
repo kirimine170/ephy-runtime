@@ -105,6 +105,8 @@ func recordedAssistant(snapshot InteractionSnapshot, state string) (recording.As
 		allComplete = allComplete && u.State == "completed"
 	}
 	switch {
+	case snapshot.SpeechErrorCode != "":
+		a.Playback = "failed"
 	case allComplete:
 		a.Playback = "completed"
 	case interrupted:

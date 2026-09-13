@@ -530,6 +530,10 @@ export function StartRecommendedStack() {
   return window['go']['main']['App']['StartRecommendedStack']();
 }
 
+export function StartTextInteraction(arg1) {
+  return window['go']['main']['App']['StartTextInteraction'](arg1);
+}
+
 export function StartVoiceSession(arg1) {
   return window['go']['main']['App']['StartVoiceSession'](arg1);
 }

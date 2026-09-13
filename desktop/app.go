@@ -5404,7 +5404,7 @@ func (a *App) getJSON(path string, out any) error {
 }
 
 func (a *App) postJSON(path string, payload any, out any) error {
-	return a.postJSONWithClient(a.httpClient, path, payload, out)
+	return a.postJSONWithClient(a.clientForPath(path), path, payload, out)
 }
 
 func (a *App) postJSONWithClient(client *http.Client, path string, payload any, out any) error {
@@ -5448,7 +5448,7 @@ func (a *App) streamGatewayResponseContext(ctx context.Context, path string, pay
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
 
-	response, err := a.httpClient.Do(request)
+	response, err := a.clientForPath(path).Do(request)
 	if err != nil {
 		return err
 	}

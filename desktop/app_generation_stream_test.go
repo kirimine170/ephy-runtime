@@ -254,3 +254,31 @@ func TestGenerationHTTPFailureDoesNotExposePrivateBody(t *testing.T) {
 		t.Fatal("private HTTP body escaped into generation result")
 	}
 }
+
+func TestTypedSpeechStreamKeepsThinkingAndSourceMetadataOutOfSpokenAnswer(t *testing.T) {
+	body := "event: sources\ndata: {\"sources\":[{\"title\":\"Synthetic source\"}]}\n\n" +
+		"event: web_search_status\ndata: {\"status\":\"completed\",\"source_count\":1}\n\n" +
+		"event: karte_context_status\ndata: {\"status\":\"available\"}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"synthetic thinking\"}}]}\n\n" +
+		generationSSE("合成回答です．", "stop") + "data: [DONE]\n\n"
+	app, close := streamFixture(t, body)
+	defer close()
+	var events []ChatStreamEvent
+	ctx := context.WithValue(context.Background(), interactionChatEventKey{}, func(event ChatStreamEvent) { events = append(events, event) })
+	var spoken strings.Builder
+	response, err := app.chatWithContext(ctx, ChatRequest{Mode: "rag", Prompt: "合成入力", Stream: true}, func(text string) { spoken.WriteString(text) })
+	if err != nil || !response.Generation.Complete {
+		t.Fatalf("stream failed: %v", err)
+	}
+	if spoken.String() != "合成回答です．" || len(events) != 4 {
+		t.Fatalf("metadata was lost or spoken: %q %+v", spoken.String(), events)
+	}
+	for i, kind := range []string{"sources", "web_search_status", "karte_context_status", "delta"} {
+		if events[i].Kind != kind {
+			t.Fatal("wrong metadata event")
+		}
+	}
+	if events[3].Channel != "thinking" {
+		t.Fatal("thinking channel was lost")
+	}
+}

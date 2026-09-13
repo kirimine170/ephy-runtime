@@ -100,6 +100,8 @@ func applyGenerationUsage(generation *GenerationMetadata, raw map[string]any) er
 	return nil
 }
 
+type interactionChatEventKey struct{}
+
 func (a *App) consumeGenerationStream(ctx context.Context, payload GatewayChatRequest, requestID string, onToken func(string)) (*ChatResponse, error) {
 	recording, _ := ctx.Value(recordingStreamContextKey{}).(*recordingStream)
 	emit := func(event ChatStreamEvent) {
@@ -109,6 +111,10 @@ func (a *App) consumeGenerationStream(ctx context.Context, payload GatewayChatRe
 		if onToken != nil {
 			if event.Kind == "delta" && event.Channel == "answer" {
 				onToken(event.Delta)
+			} else if event.Kind == "sources" || event.Kind == "web_search_status" || event.Kind == "karte_context_status" || (event.Kind == "delta" && event.Channel == "thinking") {
+				if observer, ok := ctx.Value(interactionChatEventKey{}).(func(ChatStreamEvent)); ok {
+					observer(event)
+				}
 			}
 			return
 		}

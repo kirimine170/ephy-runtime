@@ -49,7 +49,7 @@ function harness(options = {}) {
     const find = node => node.id === selector.slice(1) ? node : node.children.map(find).find(Boolean);
     return find(root) || null;
   };
-  for (const id of ['voice-profile-select', 'voice-profile-refresh', 'voice-style-controls', 'voice-profile-status', 'chat-prompt', 'send-chat']) {
+  for (const id of ['chat-speech-enabled', 'voice-profile-select', 'voice-profile-refresh', 'voice-style-controls', 'voice-profile-status', 'chat-prompt', 'send-chat']) {
     const node = root.createElement(id.endsWith('select') ? 'select' : 'div');
     node.id = id;
     root.appendChild(node);
@@ -418,4 +418,21 @@ test('unavailable voice Start reports voice error before microphone or ASR acces
   assert.equal(calls, 0);
   await voice.dispose();
   h.controller.dispose();
+});
+
+test('chat readout defaults on and the explicit off choice survives remount without saving voice identity', async () => {
+  const values = new Map();
+  const storage = {getItem: key => values.get(key), setItem: (key, value) => values.set(key, value)};
+  const h = harness({bridge: {}, storage});
+  await h.controller.ready;
+  assert.equal(h.controller.isChatSpeechEnabled(), true);
+  h.node('chat-speech-enabled').checked = false;
+  h.node('chat-speech-enabled').change('');
+  h.controller.setBusy(true);
+  assert.equal(h.node('chat-speech-enabled').disabled, true);
+  h.controller.dispose();
+  const next = harness({bridge: {}, storage});
+  assert.equal(next.controller.isChatSpeechEnabled(), false);
+  assert.deepEqual([...values], [['ephy:chat-speech-enabled', 'false']]);
+  next.controller.dispose();
 });

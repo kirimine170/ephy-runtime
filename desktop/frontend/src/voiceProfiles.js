@@ -62,7 +62,8 @@ function normalizeProfile(source) {
 export function voiceProfilesMarkup() {
   return `<details id="voice-profile-settings" class="voice-profile-settings">
     <summary>声と話し方</summary>
-    <p class="helper-text">次に始める音声会話に適用します．</p>
+    <p class="helper-text">次の回答の読み上げに適用します．</p>
+    <label class="voice-chat-speech"><input id="chat-speech-enabled" type="checkbox" checked>チャットの回答を読み上げる</label>
     <div class="voice-profile-picker"><label class="field"><span>声</span><select id="voice-profile-select" aria-describedby="voice-profile-status"></select></label>
       <button id="voice-profile-refresh" class="ghost-btn" type="button">声の一覧を更新</button></div>
     <div id="voice-style-controls" class="voice-style-controls"></div>
@@ -72,7 +73,15 @@ export function voiceProfilesMarkup() {
 
 /** Profile settings are captured once for Start．Continue and Replay retain the
  * original Runtime request rather than reading the currently selected controls． */
-export function mountVoiceProfiles({root, bridge, isBusy = () => false} = {}) {
+export function mountVoiceProfiles({root, bridge, isBusy = () => false, storage = globalThis.localStorage} = {}) {
+  const chatSpeech = root?.querySelector('#chat-speech-enabled');
+  const speechPreferenceKey = 'ephy:chat-speech-enabled';
+  if (chatSpeech) {
+    try { chatSpeech.checked = storage?.getItem(speechPreferenceKey) !== 'false'; }
+    catch { chatSpeech.checked = true; }
+  }
+  const onChatSpeech = () => { try { storage?.setItem(speechPreferenceKey, String(chatSpeech.checked)); } catch { /* Keep the current window's choice． */ } };
+  chatSpeech?.addEventListener('change', onChatSpeech);
   const select = root?.querySelector('#voice-profile-select');
   const refreshButton = root?.querySelector('#voice-profile-refresh');
   const controlsNode = root?.querySelector('#voice-style-controls');
@@ -101,6 +110,7 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false} = {}) {
   }
   function setDisabled() {
     const locked = busy || isBusy() || disposed;
+    if (chatSpeech) chatSpeech.disabled = locked;
     if (select) select.disabled = locked;
     if (refreshButton) refreshButton.disabled = locked || loading;
     for (const input of controlNodes.values()) input.disabled = locked;
@@ -242,6 +252,7 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false} = {}) {
   const ready = refresh();
   return {
     ready, refresh, setBusy,
+    isChatSpeechEnabled: () => chatSpeech?.checked !== false,
     readSettings() {
       if ((!catalogApplied && !selectionTouched && typeof bridge?.GetVoiceProfiles === 'function') || !currentProfile()) throw new Error('voice_profile_unavailable');
       return {voice_profile_id: selected, style: {...style}};
@@ -254,6 +265,7 @@ export function mountVoiceProfiles({root, bridge, isBusy = () => false} = {}) {
       clearControlListeners();
       select?.removeEventListener('change', onSelect);
       refreshButton?.removeEventListener('click', onRefresh);
+      chatSpeech?.removeEventListener('change', onChatSpeech);
       setDisabled();
     },
   };

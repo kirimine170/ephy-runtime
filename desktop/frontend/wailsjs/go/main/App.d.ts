@@ -267,6 +267,8 @@ export function StartQdrant():Promise<main.RuntimeStatus>;
 
 export function StartRecommendedStack():Promise<main.StackActionResponse>;
 
+export function StartTextInteraction(arg1:main.VoiceTurnRequest):Promise<main.InteractionSnapshot>;
+
 export function StartVoiceSession(arg1:string):Promise<main.VoiceSessionSnapshot>;
 
 export function StartWatch(arg1:main.WatchRequest):Promise<main.RuntimeStatus>;

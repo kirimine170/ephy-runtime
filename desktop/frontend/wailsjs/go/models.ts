@@ -1139,6 +1139,8 @@ export namespace main {
 	    }
 	}
 	export class InteractionSnapshot {
+	    input_kind?: string;
+	    speech_error_code?: string;
 	    trace_id: string;
 	    session_id: string;
 	    turn_id: string;
@@ -1161,6 +1163,8 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.input_kind = source["input_kind"];
+	        this.speech_error_code = source["speech_error_code"];
 	        this.trace_id = source["trace_id"];
 	        this.session_id = source["session_id"];
 	        this.turn_id = source["turn_id"];

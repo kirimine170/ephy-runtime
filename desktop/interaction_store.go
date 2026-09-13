@@ -64,6 +64,10 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 		}
 	}
 	required := []string{"user_speech_start"}
+	_, textInput := first["text_input_started"]
+	if textInput {
+		required = []string{"text_input_started"}
+	}
 	if _, listening := first["listening_started"]; listening {
 		if _, speech := first["user_speech_start"]; !speech {
 			if _, complete := first["turn_completed"]; !complete {
@@ -72,8 +76,16 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 		}
 	}
 	if _, completed := first["turn_completed"]; completed {
-		required = append(required, "user_speech_end", "endpoint_commit", "asr_started", "asr_final", "llm_requested", "llm_first_token", "llm_completed")
-		if _, skipped := first["tts_skipped"]; !skipped {
+		if textInput {
+			required = append(required, "text_submitted")
+		} else {
+			required = append(required, "user_speech_end", "endpoint_commit", "asr_started", "asr_final")
+		}
+		required = append(required, "llm_requested", "llm_first_token", "llm_completed")
+		_, speechFailed := first["tts_failed"]
+		if textInput && speechFailed {
+			required = append(required, "tts_requested", "tts_failed")
+		} else if _, skipped := first["tts_skipped"]; !skipped {
 			required = append(required, "tts_requested", "tts_first_chunk", "tts_completed", "audio_play_started", "audio_play_stopped")
 		}
 	} else if _, noSpeech := first["asr_no_speech"]; noSpeech {
@@ -100,6 +112,16 @@ func ValidateTrace(events []InteractionTraceEvent) TraceValidation {
 	if start, ok := first["audio_play_started"]; ok {
 		if end, ok := last["audio_play_stopped"]; ok {
 			validation.LatenciesMS["playback"] = end - start
+		}
+	}
+	if textInput {
+		if start, ok := first["text_submitted"]; ok {
+			if end, ok := first["audio_play_started"]; ok {
+				validation.LatenciesMS["first_audio"] = end - start
+			}
+			if end, ok := first["turn_completed"]; ok {
+				validation.LatenciesMS["turn"] = end - start
+			}
 		}
 	}
 	if start, ok := first["cancel_requested"]; ok {
