@@ -167,6 +167,8 @@ export function RecordInteractionFillerTiming(arg1:string,arg2:number,arg3:main.
 
 export function RecordInteractionFillerTrace(arg1:string,arg2:number,arg3:main.FillerTrace):Promise<void>;
 
+export function RecordInteractionInterruptionTelemetry(arg1:string,arg2:number,arg3:string,arg4:main.InterruptionTelemetry):Promise<void>;
+
 export function RecordInteractionInputHandoff(arg1:string,arg2:number,arg3:main.InteractionInputHandoffTiming):Promise<void>;
 
 export function ReloadGatewayConfig():Promise<main.ReloadConfigResponse>;

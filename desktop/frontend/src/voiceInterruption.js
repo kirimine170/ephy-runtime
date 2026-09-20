@@ -1,8 +1,9 @@
 // Input onset and interruption are deliberately independent．Energy opens a
-// bounded recognition candidate；only recognizable speech can cancel a reply．
+// bounded recognition candidate；only recognized interruption speech can change
+// playback．Speaker evidence is optional and remains metadata-only．
 export const DEFAULT_INTERRUPTION = Object.freeze({rms: .025, onsetMS: 80, gapMS: 160,
   candidateMS: 1200, quietMS: 200, minimumSpeechMS: 180, waitingSpeechMS: 260,
-  stableMS: 160, waitingStableMS: 240, explicitStableMS: 80, duckVolume: .3});
+  stableMS: 160, waitingStableMS: 240, explicitStableMS: 80, duckVolume: .72});
 
 export function interruptionSettings(overrides = {}, modelActivity = false) {
   const result = {...DEFAULT_INTERRUPTION, ...(modelActivity ? {rms: .004, onsetMS: 40, candidateMS: 1800} : {})};
@@ -42,12 +43,30 @@ export function interruptionIntent(text) {
   return [...value].length >= 3 ? 'speech' : 'short';
 }
 
+// This boundary deliberately carries only bounded decisions from a future
+// target-speaker gate．Embeddings and audio never enter snapshots or traces．
+export function speakerEvidence(activity) {
+  if (!activity || typeof activity.has_speech !== 'boolean') return null;
+  const speakerState = activity.speaker_state ?? 'unknown';
+  const targetProbability = activity.target_probability ?? null;
+  const confidence = activity.confidence ?? null;
+  if (!['target', 'non_target', 'unknown'].includes(speakerState)
+    || (targetProbability !== null && (!Number.isFinite(targetProbability) || targetProbability < 0 || targetProbability > 1))
+    || (confidence !== null && (!Number.isFinite(confidence) || confidence < 0 || confidence > 1))) return null;
+  return {hasSpeech: activity.has_speech, speakerState, targetProbability, confidence};
+}
+
+function knownNonTarget(evidence) {
+  return evidence?.speakerState === 'non_target'
+    || (evidence?.speakerState === 'unknown' && evidence.confidence >= .6 && evidence.targetProbability !== null && evidence.targetProbability <= .2);
+}
+
 // The existing PCM buffer stays session-owned and bounded at two seconds．
 // Candidate failure clears only speculative input，never output or generation．
 let nextCandidateID = 0;
 export function createVoiceInterruption({bridge, identity, sampleRate, buffer, createEncoder,
-  encodeBase64, now, timers, isCurrent, phase, onDuck, onConfirm, settings = DEFAULT_INTERRUPTION,
-  modelActivity = false,
+  encodeBase64, now, timers, isCurrent, phase, onDuck, onConfirm, onTelemetry = () => {}, settings = DEFAULT_INTERRUPTION,
+  modelActivity = false, duckEnabled = true,
   createID = () => `candidate_${Date.now().toString(36)}_${++nextCandidateID}`}) {
   let candidate = null, stopped = false, transferred = false;
   let activeMS = 0, quietMS = 0, blocked = false, noiseFloor = .003;
@@ -56,15 +75,29 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
     if (!c.id) return;
     try { Promise.resolve(bridge.CancelInteractionInterruptionCandidate(c.op, c.id, c.reason || 'detached')).catch(() => {}); } catch { /* Optional candidate cleanup is also bounded in Go． */ }
   };
+  function duck(c, enabled, outcome = '') {
+    if (enabled === !!c.ducked) return;
+    c.ducked = enabled;
+    if (enabled) {
+      c.duckedAt = now();
+      onDuck(true);
+      onTelemetry({kind: 'duck_started', candidateID: c.id, durationMS: 0, outcome: ''});
+      return;
+    }
+    const durationMS = Math.max(0, Math.round(now() - c.duckedAt));
+    onDuck(false);
+    onTelemetry({kind: 'duck_ended', candidateID: c.id, durationMS, outcome});
+    if (outcome === 'rejected') onTelemetry({kind: 'false_duck', candidateID: c.id, durationMS, outcome});
+  }
   function close(reason, preserve = false) {
     const c = candidate; candidate = null;
     if (c) {
       c.reason = reason;
       if (c.timer != null) timers.clearTimeout(c.timer);
       c.queue = []; c.queuedBytes = 0; c.encoder.reset();
+      duck(c, false, reason === 'confirmed' ? 'confirmed' : 'rejected');
       cancelBackend(c);
     }
-    onDuck(false);
     activeMS = quietMS = 0; blocked = true;
     if (preserve) transferred = true;
     else if (!transferred) buffer.clear();
@@ -82,7 +115,7 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
       if (activity.operation_id !== c.op || activity.session_id !== c.session || activity.turn_id !== c.turn
           || activity.segment_id !== c.segment || activity.phase !== 'activity' || activity.error_code
           || !a || !Number.isSafeInteger(a.speech_ms) || a.speech_ms < 0 || a.speech_ms > (modelActivity ? 3000 : 2000)
-          || typeof a.has_speech !== 'boolean'
+          || !speakerEvidence(a)
           || !Number.isSafeInteger(activity.revision) || activity.revision < 1) { close('unavailable'); return; }
       // Model VAD and the RMS onset are separate observations．Text is still
       // required to confirm an interruption，including for a short command．
@@ -90,7 +123,8 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
         c.activityRevision = activity.revision;
         c.modelSpeechMS = a.speech_ms;
         c.modelHasSpeech = a.has_speech;
-        if (modelActivity && a.has_speech && !c.ducked && c.intent !== 'acknowledgement') { c.ducked = true; onDuck(true); }
+        c.speaker = speakerEvidence(a);
+        if (knownNonTarget(c.speaker)) { close('non_target'); return; }
       }
     }
     const update = snapshot.update;
@@ -105,11 +139,15 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
     if (update.transcript !== c.text) { c.text = update.transcript; c.changedAt = now(); }
     const intent = interruptionIntent(c.text);
     c.intent = intent;
-    if (modelActivity && intent === 'acknowledgement' && c.ducked) { c.ducked = false; onDuck(false); }
+    if (intent === 'acknowledgement') duck(c, false, 'rejected');
     const waiting = phase() !== 'PLAYING';
     const speechMS = intent === 'explicit' && modelActivity ? 64 : intent === 'explicit' ? settings.minimumSpeechMS : waiting ? settings.waitingSpeechMS : settings.minimumSpeechMS;
     const stableMS = intent === 'explicit' ? settings.explicitStableMS : waiting ? settings.waitingStableMS : settings.stableMS;
     const observedSpeechMS = modelActivity ? (c.modelHasSpeech ? c.modelSpeechMS : 0) : c.speechMS;
+    // Only a recognized explicit command is probable enough to lower playback．
+    // VAD activity and ordinary background speech retain normal volume．
+    const probableSpeechMS = modelActivity ? 64 : settings.onsetMS;
+    if (duckEnabled && intent === 'explicit' && observedSpeechMS >= probableSpeechMS && !knownNonTarget(c.speaker)) duck(c, true);
     if (['explicit', 'speech'].includes(intent) && observedSpeechMS >= speechMS
       && (update.phase === 'final' || now() - c.changedAt >= stableMS)) {
       const candidateMS = Math.max(0, Math.round(now() - c.startedAt));
@@ -149,12 +187,12 @@ export function createVoiceInterruption({bridge, identity, sampleRate, buffer, c
     const c = {op: owner.operation_id, session: owner.session_id, turn: owner.turn_id,
       id: createID(), ready: false, segment: '', encoder: createEncoder(sampleRate), queue: [], queuedBytes: 0,
       sequence: 0, revision: 0, text: '', intent: 'empty', changedAt: now(), startedAt: now(),
-      speechMS: activeMS, elapsedMS: 0, silenceMS: 0, threshold: Math.max(settings.rms, noiseFloor * 3)};
+      speechMS: activeMS, elapsedMS: 0, silenceMS: 0, threshold: Math.max(settings.rms, noiseFloor * 3),
+      ducked: false, duckedAt: 0, speaker: {hasSpeech: false, speakerState: 'unknown', targetProbability: null, confidence: null}};
     candidate = c;
     buffer.hold();
     for (const frame of buffer.snapshot()) queue(c, frame);
     if (!current(c)) return;
-    if (!modelActivity) { c.ducked = true; onDuck(true); }
     c.timer = timers.setTimeout(() => { if (current(c)) close(c.intent === 'acknowledgement' ? 'acknowledgement' : 'expired'); }, settings.candidateMS);
     void (async () => {
       try {

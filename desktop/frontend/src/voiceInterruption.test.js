@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createVoiceInterruption, interruptionIntent, interruptionSettings} from './voiceInterruption.js';
+import {createVoiceInterruption, interruptionIntent, interruptionSettings, speakerEvidence} from './voiceInterruption.js';
 import {createVoiceInputBuffer} from './voiceInputBuffer.js';
 import {createPCM16StreamEncoder} from './voiceInteraction.js';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return {promise, resolve}; };
 function fixture(options = {}) {
   let at = 0, phase = options.phase || 'SYNTHESIZING', update = null, activity = null;
-  const timers = new Map(), calls = {begin: [], append: [], cancel: [], duck: [], confirmed: 0};
+  const timers = new Map(), calls = {begin: [], append: [], cancel: [], duck: [], telemetry: [], confirmed: 0};
   const request = {operation_id: 'op', session_id: 'session', turn_id: 'turn', segment_id: 'candidate-segment', sample_rate: 16000};
   const snapshot = () => ({candidate_id: 'candidate', request, ...(update ? {update} : {}), ...(activity ? {activity} : {})});
   const buffer = createVoiceInputBuffer(16000, options.modelActivity ? 3000 : 2000);
@@ -22,13 +22,14 @@ function fixture(options = {}) {
     encodeBase64: bytes => Buffer.from(bytes).toString('base64'), now: () => at,
     timers: {setTimeout(fn, ms) { const id = Symbol(); timers.set(id, {fn, at: at + ms}); return id; }, clearTimeout(id) { timers.delete(id); }},
     isCurrent: options.isCurrent || (() => true), phase: () => phase,
-    onDuck: duck => calls.duck.push(duck), onConfirm: () => calls.confirmed++, modelActivity: options.modelActivity,
+    onDuck: duck => calls.duck.push(duck), onConfirm: () => calls.confirmed++, onTelemetry: event => calls.telemetry.push(event), modelActivity: options.modelActivity,
     settings: interruptionSettings(options.settings, options.modelActivity), createID: () => 'candidate'});
   return {gate, calls, timers, buffer, snapshot,
     hypothesis(text, revision = 1, phase = 'partial', extra = {}) { update = {...request, revision, phase, transcript: text, stable_prefix: phase === 'final' ? text : '', ...extra}; },
-    activity(speechMS, revision = 1) { activity = {...request, revision, phase: 'activity', activity: {audio_ms: speechMS, last_speech_ms:speechMS, speech_ms:speechMS, has_speech:speechMS>=64}}; },
+    activity(speechMS, revision = 1, extra = {}) { activity = {...request, revision, phase: 'activity', activity: {audio_ms: speechMS, last_speech_ms:speechMS, speech_ms:speechMS, has_speech:speechMS>=64, ...extra}}; },
     setPhase(value) { phase = value; },
     async audio(ms, amplitude = .1) { at += ms; gate.audio(new Float32Array(ms * 16).fill(amplitude)); await tick(); },
+    async pcm(data) { at += data.length / 16; gate.audio(data); await tick(); },
     async advance(ms) { at += ms; for (const [id, timer] of [...timers]) if (timer.at <= at) { timers.delete(id); timer.fn(); } await tick(); },
   };
 }
@@ -40,9 +41,18 @@ test('recognition distinguishes acknowledgement/call-only from correction and ne
   for (const text of ['うん，それは違う', 'そうじゃなくて', '明日の予定を教えて', 'エフィ，話を変えよう']) assert.equal(interruptionIntent(text), 'speech', text);
 });
 
+test('speaker evidence is a bounded metadata-only gate', () => {
+  assert.deepEqual(speakerEvidence({has_speech: true}), {hasSpeech: true, speakerState: 'unknown', targetProbability: null, confidence: null});
+  assert.deepEqual(speakerEvidence({has_speech: true, speaker_state: 'target', target_probability: .9, confidence: .8}),
+    {hasSpeech: true, speakerState: 'target', targetProbability: .9, confidence: .8});
+  for (const activity of [{}, {has_speech: true, speaker_state: 'person-1'}, {has_speech: true, target_probability: 2}, {has_speech: true, confidence: NaN}]) {
+    assert.equal(speakerEvidence(activity), null);
+  }
+});
+
 test('ordinary input onset settings cannot silently weaken interruption settings', () => {
   const settings = interruptionSettings();
-  assert.equal(settings.onsetMS, 80); assert.equal(settings.waitingSpeechMS, 260);
+  assert.equal(settings.onsetMS, 80); assert.equal(settings.waitingSpeechMS, 260); assert.equal(settings.duckVolume, .72);
   for (const override of [{onsetMS: 0}, {candidateMS: 2000}, {duckVolume: 2}, {rms: NaN}, {waitingSpeechMS: 50}]) assert.throws(() => interruptionSettings(override));
 });
 
@@ -53,11 +63,21 @@ test('clicks，brief impacts and separated noise bursts never open a recognizer 
   f.gate.stop();
 });
 
+test('synthetic silence，steady noise and a continuous BGM-like tone never duck or confirm', async () => {
+  const tone = new Float32Array(6400);
+  for (let i = 0; i < tone.length; i++) tone[i] = Math.sin(2 * Math.PI * 440 * i / 16000) * .06;
+  for (const [name, pcm] of [['silence', new Float32Array(16000)], ['steady-noise', new Float32Array(16000).fill(.01)], ['bgm-tone', tone]]) {
+    const f = fixture(); await f.pcm(pcm); await f.advance(1200);
+    assert.equal(f.calls.confirmed, 0, name); assert.deepEqual(f.calls.duck, [], name);
+    assert.equal(f.buffer.holding, false, name); f.gate.stop();
+  }
+});
+
 test('longer noise may open a bounded candidate but recognition failure preserves the reply', async () => {
   const f = fixture({bridge: {async AppendInteractionInterruptionCandidate() { throw new Error('asr_failed'); }}});
   await f.audio(100, .1);
   assert.equal(f.calls.confirmed, 0); assert.equal(f.gate.pending, false);
-  assert.deepEqual(f.calls.duck, [true, false]); assert.equal(f.buffer.holding, false);
+  assert.deepEqual(f.calls.duck, []); assert.equal(f.buffer.holding, false);
   assert.equal(f.calls.cancel[0][2], 'unavailable'); f.gate.stop();
 });
 
@@ -74,7 +94,7 @@ for (const text of ['うん', 'はい', 'エフィ', 'なるほど']) test(`shor
   await f.audio(100); await f.audio(160); await f.audio(200, 0); await f.advance(1200);
   assert.equal(f.calls.confirmed, 0); assert.equal(f.gate.pending, false);
   assert.equal(f.calls.cancel.at(-1)[2], 'acknowledgement');
-  assert.equal(f.calls.duck.at(-1), false); f.gate.stop();
+  assert.deepEqual(f.calls.duck, []); f.gate.stop();
 });
 
 for (const phase of ['THINKING', 'SYNTHESIZING', 'PLAYING']) test(`${phase} waits for recognized correction and preserves every onset sample`, async () => {
@@ -113,7 +133,7 @@ test('a canceled or expired startup cannot duck or cancel a later reply', async 
   const opened = deferred(); const f = fixture({bridge: {BeginInteractionInterruptionCandidate: () => opened.promise}});
   await f.audio(100); f.gate.stop();
   f.hypothesis('待って', 1, 'final'); opened.resolve(f.snapshot()); await tick();
-  assert.equal(f.calls.confirmed, 0); assert.equal(f.calls.duck.at(-1), false);
+  assert.equal(f.calls.confirmed, 0); assert.deepEqual(f.calls.duck, []);
   assert.equal(f.calls.cancel[0][2], 'detached'); assert.equal(f.timers.size, 0);
 });
 
@@ -153,10 +173,39 @@ test('model VAD rejects a noise candidate without ducking or stopping playback',
   assert.equal(f.calls.cancel.at(-1)[2],'noise');f.gate.stop();
 });
 
+test('known non-target speech rejects the candidate even when ASR hears an explicit command', async () => {
+  const f=fixture({modelActivity:true,phase:'PLAYING'});
+  f.activity(192,1,{speaker_state:'non_target',target_probability:.02,confidence:.98});
+  f.hypothesis('待って',2,'final');
+  await f.audio(80,.02);
+  assert.equal(f.calls.confirmed,0);assert.deepEqual(f.calls.duck,[]);
+  assert.equal(f.calls.cancel.at(-1)[2],'non_target');assert.equal(f.buffer.holding,false);f.gate.stop();
+});
+
+test('recognized explicit interruption alone causes a light bounded duck before confirmation', async () => {
+  const f=fixture({modelActivity:true,phase:'PLAYING'});
+  f.activity(64);f.hypothesis('待って',2,'partial');await f.audio(80,.02);await f.audio(80,0);
+  assert.equal(f.calls.confirmed,1);assert.deepEqual(f.calls.duck,[true,false]);
+  assert.deepEqual(f.calls.telemetry.map(event=>[event.kind,event.outcome]),
+    [['duck_started',''],['duck_ended','confirmed']]);
+  f.gate.stop();
+});
+
+test('a revised probable command restores volume and emits false-duck telemetry', async () => {
+  const f=fixture({modelActivity:true,phase:'PLAYING'});
+  f.activity(64);f.hypothesis('待って',2,'partial');await f.audio(80,.02);
+  assert.deepEqual(f.calls.duck,[true]);
+  f.hypothesis('はい',3,'partial');await f.audio(40,0);
+  assert.equal(f.calls.confirmed,0);assert.deepEqual(f.calls.duck,[true,false]);
+  assert.deepEqual(f.calls.telemetry.map(event=>[event.kind,event.outcome]),
+    [['duck_started',''],['duck_ended','rejected'],['false_duck','rejected']]);
+  f.gate.stop();
+});
+
 test('model acknowledgement may become a correction after 1200 ms within a bounded handoff', async () => {
   const f=fixture({modelActivity:true});f.activity(320);f.hypothesis('はい',2);
   await f.audio(80);await f.audio(800,0);await f.advance(400);
-  assert.equal(f.gate.pending,true);assert.equal(f.calls.confirmed,0);assert.equal(f.calls.duck.at(-1),false);
+  assert.equal(f.gate.pending,true);assert.equal(f.calls.confirmed,0);assert.deepEqual(f.calls.duck,[]);
   f.hypothesis('はい，でも違います',3);await f.audio(40,0);await f.audio(240,0);
   assert.equal(f.calls.confirmed,1);assert.equal(f.buffer.holding,true);f.gate.stop();
   assert.equal(interruptionSettings({},true).candidateMS,1800);

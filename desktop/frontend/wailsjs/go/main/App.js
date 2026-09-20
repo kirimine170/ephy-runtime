@@ -330,6 +330,10 @@ export function RecordInteractionFillerTrace(arg1, arg2, arg3) {
   return window['go']['main']['App']['RecordInteractionFillerTrace'](arg1, arg2, arg3);
 }
 
+export function RecordInteractionInterruptionTelemetry(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['RecordInteractionInterruptionTelemetry'](arg1, arg2, arg3, arg4);
+}
+
 export function RecordInteractionInputHandoff(arg1, arg2, arg3) {
   return window['go']['main']['App']['RecordInteractionInputHandoff'](arg1, arg2, arg3);
 }

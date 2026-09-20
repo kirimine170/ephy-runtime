@@ -323,13 +323,100 @@ func TestInterruptionCandidateKeepsTextAcrossModelActivityUpdates(t *testing.T) 
 	native := p.sessions[0]
 	native.emit(native.update(1, "partial", "待って"))
 	a := native.update(2, "activity", "")
-	a.Activity = &ASRAudioActivity{AudioMS: 192, LastSpeechMS: 192, SpeechMS: 192, Probability: .9, HasSpeech: true, Speaking: true}
+	target, confidence := .92, .88
+	a.Activity = &ASRAudioActivity{AudioMS: 192, LastSpeechMS: 192, SpeechMS: 192, Probability: .9, HasSpeech: true, Speaking: true,
+		TargetProbability: &target, SpeakerState: "target", Confidence: &confidence}
 	native.emit(a)
 	got, err := e.AppendInterruptionCandidate(old.OperationID, c.CandidateID, 1, make([]byte, 6400))
-	if err != nil || got.Update == nil || got.Update.Transcript != "待って" || got.Activity == nil || got.Activity.Activity.SpeechMS != 192 {
+	if err != nil || got.Update == nil || got.Update.Transcript != "待って" || got.Activity == nil || got.Activity.Activity.SpeechMS != 192 ||
+		got.Activity.Activity.SpeakerState != "target" || got.Activity.Activity.TargetProbability == nil || *got.Activity.Activity.TargetProbability != target {
 		t.Fatal("activity discarded candidate text", got, err)
 	}
+	target = 0
+	if *got.Activity.Activity.TargetProbability != .92 {
+		t.Fatal("speaker evidence was not detached from provider-owned metadata")
+	}
 	assertCandidateReplyLive(t, e, old.OperationID)
+}
+
+func TestStandaloneFillerUsesTheSameBoundedCandidateRecognizer(t *testing.T) {
+	p := &c02EngineProvider{}
+	e := NewInteractionEngine(p, testVoiceTTS{}, testVoiceChat, nil, t.TempDir())
+	t.Cleanup(e.Close)
+	s, err := e.Start(VoiceTurnRequest{SessionID: "conversation", InputKind: "microphone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	e.turns[s.OperationID].snapshot.State = "SYNTHESIZING"
+	e.mu.Unlock()
+	c, err := e.BeginInterruptionCandidate(s.OperationID, interactionID("candidate_"), 1, 16000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.CancelInterruptionCandidate(s.OperationID, c.CandidateID, "acknowledgement"); err != nil {
+		t.Fatal(err)
+	}
+	awaitCandidateCanceled(t, p.sessions[0])
+	assertCandidateReplyLive(t, e, s.OperationID)
+}
+
+func TestInterruptionDuckTelemetryIsBodyFreeBoundedAndOrdered(t *testing.T) {
+	e, old := candidateFixture(t, &c02EngineProvider{})
+	c, err := e.BeginInterruptionCandidate(old.OperationID, interactionID("candidate_"), 1, 16000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []InterruptionTelemetry{
+		{Kind: "duck_started"},
+		{Kind: "duck_ended", DurationMS: 84, Outcome: "rejected"},
+		{Kind: "false_duck", DurationMS: 84, Outcome: "rejected"},
+	} {
+		if err = e.RecordInterruptionTelemetry(old.OperationID, 1, c.CandidateID, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = e.RecordInterruptionTelemetry(old.OperationID, 1, c.CandidateID, InterruptionTelemetry{Kind: "duck_started"}); err == nil {
+		t.Fatal("duplicate duck telemetry accepted")
+	}
+	trace, err := e.Trace(old.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]InterruptionTelemetry{}
+	for _, event := range trace {
+		if event.InterruptionTelemetry != nil {
+			seen[event.Name] = *event.InterruptionTelemetry
+		}
+	}
+	if seen["interruption_duck_started"].DurationMS != 0 || seen["interruption_duck_ended"].DurationMS != 84 || seen["interruption_false_duck"].Outcome != "rejected" {
+		t.Fatal("duck measurements missing", seen)
+	}
+	data, _ := json.Marshal(trace)
+	for _, private := range []string{"transcript", "embedding", "audio_base64"} {
+		if strings.Contains(string(data), private) {
+			t.Fatal("private field crossed telemetry boundary", private)
+		}
+	}
+}
+
+func TestSpeakerEvidenceSchemaRejectsUnboundedValues(t *testing.T) {
+	probability, confidence := .4, .9
+	valid := &ASRAudioActivity{AudioMS: 32, LastSpeechMS: 32, SpeechMS: 32, Probability: .8, HasSpeech: true,
+		TargetProbability: &probability, SpeakerState: "unknown", Confidence: &confidence}
+	if !validASRActivity(valid) {
+		t.Fatal("bounded speaker evidence rejected")
+	}
+	badProbability, badConfidence := 2.0, -1.0
+	for _, activity := range []*ASRAudioActivity{
+		{AudioMS: 32, Probability: .8, SpeakerState: "person-id"},
+		{AudioMS: 32, Probability: .8, TargetProbability: &badProbability},
+		{AudioMS: 32, Probability: .8, Confidence: &badConfidence},
+	} {
+		if validASRActivity(activity) {
+			t.Fatal("invalid speaker evidence accepted", activity)
+		}
+	}
 }
 
 func TestModelVADInterruptionPCMCapMatchesThreeSecondHandoff(t *testing.T) {

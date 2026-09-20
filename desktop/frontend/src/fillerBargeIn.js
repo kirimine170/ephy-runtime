@@ -1,8 +1,9 @@
-// C0.4 headset-only activity interrupt．No ASR，transcript or recording is made．
+// The filler monitor owns capture only．It forwards PCM to the shared
+// interruption candidate gate and never treats RMS as confirmed speech．
 // A failed／ended input disables filler；it never silently claims readiness．
-export async function startFillerBargeIn({context, mediaDevices, isCurrent, onSpeech, onUnavailable, subscribePCM}) {
+export async function startFillerBargeIn({context, mediaDevices, isCurrent, onAudio, onUnavailable, subscribePCM}) {
   let unsubscribe = null;
-  let stream = null, input = null, processor = null, mute = null, stopped = false, activeMS = 0;
+  let stream = null, input = null, processor = null, mute = null, stopped = false;
   const stop = () => {
     stopped = true;
     unsubscribe?.(); unsubscribe = null;
@@ -13,9 +14,8 @@ export async function startFillerBargeIn({context, mediaDevices, isCurrent, onSp
   };
   const process = (data, sampleRate) => {
     if (stopped || !isCurrent()) { stop(); return; }
-    let energy = 0; for (const value of data) energy += value * value;
-    activeMS = Math.sqrt(energy / data.length) >= .02 ? activeMS + data.length / sampleRate * 1000 : 0;
-    if (activeMS >= 32) { stop(); onSpeech(); }
+    if (!data?.length || !Number.isFinite(sampleRate) || sampleRate <= 0) return;
+    onAudio(data, sampleRate);
   };
   if (subscribePCM) { unsubscribe = subscribePCM(process); return {stop}; }
   try {
