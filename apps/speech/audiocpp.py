@@ -51,9 +51,14 @@ def verified_file(path_value, expected: str, size: int | None = None) -> Path:
         or (size is not None and path.stat().st_size != size)
     ):
         raise SpeechError("tts_model_revision_mismatch")
+    # The existing isolated Irodori inference venv can use Python 3.10．
+    # Stream large weights without requiring hashlib.file_digest (3.11+)．
+    digest = hashlib.sha256()
     with path.open("rb") as source:
-        if hashlib.file_digest(source, "sha256").hexdigest() != expected:
-            raise SpeechError("tts_model_revision_mismatch")
+        for block in iter(lambda: source.read(1 << 20), b""):
+            digest.update(block)
+    if digest.hexdigest() != expected:
+        raise SpeechError("tts_model_revision_mismatch")
     return path
 
 
