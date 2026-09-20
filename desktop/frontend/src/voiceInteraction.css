@@ -1,4 +1,11 @@
-.voice-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid #deddd6; }
+.voice-interaction { margin: 0; border: 1px solid #deddd6; border-radius: 10px; background: rgba(255, 255, 255, 0.72); }
+.voice-interaction-summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 14px; cursor: pointer; font-size: 13px; }
+.voice-interaction-summary::marker { color: #6b7280; }
+.voice-interaction-title { flex: 0 0 auto; font-weight: 700; }
+.voice-interaction-status { min-width: 0; overflow: hidden; color: #5d6670; text-overflow: ellipsis; white-space: nowrap; }
+.voice-interaction[open] .voice-interaction-summary { border-bottom: 1px solid #deddd6; }
+.voice-interaction-summary:focus-visible { outline: 2px solid #405f8d; outline-offset: 3px; }
+.voice-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px; }
 .voice-controls button { min-height: 36px; }
 .voice-profile-settings { margin: 8px 0; padding: 8px 10px; border: 1px solid #deddd6; border-radius: 8px; }
 .voice-profile-settings summary { cursor: pointer; }
@@ -30,8 +37,15 @@
 .voice-comparison h4 { margin: 0 0 8px; }
 @media (max-width: 700px) { .voice-comparison { grid-template-columns: 1fr; } }
 
-.resident-controls { border: 1px solid var(--line, #d1c6b4); border-radius: 12px; padding: 12px; margin: 8px 0; background: var(--panel, #fffdf7); }
+.resident-controls { border: 1px solid var(--line, #d1c6b4); border-radius: 12px; margin: 8px 0; background: var(--panel, #fffdf7); }
 .resident-controls[hidden] { display: none; }
+.resident-controls-summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 14px; cursor: pointer; font-size: 13px; }
+.resident-controls-summary::marker { color: #6b7280; }
+.resident-controls-title { flex: 0 0 auto; font-weight: 700; }
+.resident-controls-summary #resident-mode-status { min-width: 0; overflow: hidden; color: #5d6670; text-overflow: ellipsis; white-space: nowrap; }
+.resident-controls[open] > .resident-controls-summary { border-bottom: 1px solid var(--line, #d1c6b4); }
+.resident-controls-summary:focus-visible { outline: 2px solid #405f8d; outline-offset: 3px; }
+.resident-controls-body { padding: 12px; }
 .resident-controls .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .resident-controls select, .resident-controls input { max-width: 100%; }
 .resident-controls input:not([type=checkbox]) { min-width: 170px; }

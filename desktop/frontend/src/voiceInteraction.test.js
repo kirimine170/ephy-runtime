@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createPCM16StreamEncoder, encodePCM16Wav, mountVoiceInteraction, voiceStatusText} from './voiceInteraction.js';
+import {createPCM16StreamEncoder, encodePCM16Wav, mountVoiceInteraction, voiceInteractionMarkup, voiceStatusText} from './voiceInteraction.js';
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
@@ -17,6 +17,15 @@ const asrSession = (id, sampleRate = 16000) => ({operation_id: `op-${id}`, sessi
 const asrUpdate = (id, revision, transcript, extra = {}) => ({
   ...asrSession(id), revision, phase: 'partial', transcript, stable_prefix: '', provider: 'test-asr',
   model_revision: 'test-1', monotonic_ms: revision * 10, ...extra,
+});
+
+test('voice controls start collapsed while keeping the live state in the summary', () => {
+  const markup = voiceInteractionMarkup();
+  assert.match(markup, /^<details id="voice-interaction" class="voice-interaction">/);
+  assert.doesNotMatch(markup, /^<details[^>]*\sopen(?:\s|>)/);
+  assert.match(markup, /<summary[^>]*>[\s\S]*id="voice-status"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(markup, /id="voice-controls"[^>]*role="group"[^>]*aria-label="音声会話の操作"/);
+  assert.equal((markup.match(/id="voice-status"/g) || []).length, 1);
 });
 
 const fillerSetup = () => ({enabled: true, assets: [{kind: 'hesitation', audio_base64: wav(), duration_ms: 1000}],

@@ -5,9 +5,10 @@ const VALUES={default:'既定',brief:'短め',detailed:'詳しく',never:'呼ば
 const valueLabel=value=>value==null?'既定':Array.isArray(value)?`${value.length}件`:VALUES[value]||String(value);
 const CHANGE = {expired:'有効期限または会話が終了しました',no_change:'既に同じ設定です',unsaved:'この会話だけに反映しました（保存なし）',applied:'次の会話から反映しました', failed:'設定を反映できませんでした', reverted:'指定した変更を戻しました', pending:'反映を確認中です', superseded:'新しい設定に置き換わりました'};
 export function residentMarkup() {
- return `<section id="resident-controls" class="resident-controls" aria-label="常駐会話" hidden>
-  <div class="actions"><strong id="resident-mode-status" role="status" aria-live="polite">休止中</strong>
-  <label>会話モード <select id="resident-mode"><option value="reactive">待受</option><option value="observe">観測</option><option value="companion">会話へ参加</option></select></label>
+ return `<details id="resident-controls" class="resident-controls" hidden>
+  <summary class="resident-controls-summary"><span class="resident-controls-title">常駐会話</span><strong id="resident-mode-status" role="status" aria-live="polite">休止中</strong></summary>
+  <div class="resident-controls-body">
+  <div class="actions"><label>会話モード <select id="resident-mode"><option value="reactive">待受</option><option value="observe">観測</option><option value="companion">会話へ参加</option></select></label>
   <button id="resident-start" class="ghost-btn" type="button">待受を開始／再開</button>
   <button id="resident-pause" class="ghost-btn" type="button">マイクを休止</button>
   <button id="resident-stop" class="ghost-btn" type="button">今の発話を停止</button>
@@ -26,7 +27,8 @@ export function residentMarkup() {
   <p id="resident-feedback-status" role="status" aria-live="polite"></p>
   <p id="resident-candidate-status" role="status" aria-live="polite"></p>
   <details><summary>指摘と設定変更の履歴</summary><button id="resident-refresh" class="ghost-btn" type="button">履歴を更新</button><div id="resident-history"></div></details>
- </section>`;
+  </div>
+ </details>`;
 }
 export function feedbackTarget(snapshot, sessionID) {
  if (!snapshot?.operation_id || snapshot.session_id !== sessionID) return undefined;

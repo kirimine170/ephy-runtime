@@ -1,7 +1,7 @@
 import './style.css';
 import {recordingMarkup, mountRecording} from './recording';
 import './voiceInteraction.css';
-import {mountVoiceInteraction} from './voiceInteraction';
+import {mountVoiceInteraction, voiceInteractionMarkup} from './voiceInteraction';
 import {residentMarkup, mountResident} from './resident';
 import {conversationHistory, isConversationHistoryEntry} from './conversationHistory';
 import {confirmVoiceEntry, previewVoiceEntry, resumeVoiceEntry, settleVoiceEntry} from './voiceConversation';
@@ -986,18 +986,7 @@ app.innerHTML = `
             <div id="chat-stream-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
             ${voiceProfilesMarkup()}
             ${residentMarkup()}
-            <div id="voice-controls" class="voice-controls" role="group" aria-label="音声会話">
-              <button id="voice-session" class="ghost-btn" type="button">会話を開始</button>
-              <button id="voice-pause" class="ghost-btn" type="button" disabled>一時停止</button>
-              <button id="voice-end" class="ghost-btn" type="button" disabled>会話を終了</button>
-              <button id="voice-record" class="ghost-btn" type="button">録音開始</button>
-              <button id="voice-cancel" class="ghost-btn" type="button" disabled>Ephyの発話停止</button>
-              <span id="voice-status" role="status" aria-live="polite">待機中</span>
-              <span id="voice-asr-status" role="status" aria-live="polite">音声認識を確認中</span>
-              <button id="voice-fallback" class="ghost-btn" type="button" hidden>文字入力で続ける</button>
-              <button id="voice-feedback" class="ghost-btn" type="button" disabled>違和感を記録</button>
-              <div id="voice-live-transcript" class="voice-live-transcript" role="status" aria-live="polite" aria-atomic="true" hidden><span id="voice-transcript-stable" class="voice-transcript-stable"></span><span id="voice-transcript-revisable" class="voice-transcript-revisable"></span></div>
-            </div>
+            ${voiceInteractionMarkup()}
             <details id="voice-developer" class="voice-developer" data-developer-only hidden>
               <summary>音声の検証</summary>
               <div class="actions"><button id="voice-trace-refresh" class="ghost-btn" type="button">traceとlatencyを表示</button></div>
