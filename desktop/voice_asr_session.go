@@ -23,17 +23,40 @@ func asrCapabilities(provider VoiceASR) ASRCapabilities {
 
 // The provider's audio sample clock，not inference arrival time．No audio or text．
 type ASRAudioActivity struct {
-	AudioMS      int     `json:"audio_ms"`
-	LastSpeechMS int     `json:"last_speech_ms"`
-	SpeechMS     int     `json:"speech_ms"`
-	Probability  float64 `json:"probability"`
-	Speaking     bool    `json:"speaking"`
-	HasSpeech    bool    `json:"has_speech"`
+	AudioMS           int      `json:"audio_ms"`
+	LastSpeechMS      int      `json:"last_speech_ms"`
+	SpeechMS          int      `json:"speech_ms"`
+	Probability       float64  `json:"probability"`
+	Speaking          bool     `json:"speaking"`
+	HasSpeech         bool     `json:"has_speech"`
+	TargetProbability *float64 `json:"target_probability,omitempty"`
+	SpeakerState      string   `json:"speaker_state,omitempty"`
+	Confidence        *float64 `json:"confidence,omitempty"`
 }
 
 func validASRActivity(a *ASRAudioActivity) bool {
-	return a != nil && a.AudioMS >= 0 && a.AudioMS <= 60000 && a.LastSpeechMS >= 0 && a.LastSpeechMS <= a.AudioMS &&
+	validProbability := func(value *float64) bool {
+		return value == nil || (!math.IsNaN(*value) && !math.IsInf(*value, 0) && *value >= 0 && *value <= 1)
+	}
+	speakerState := a != nil && (a.SpeakerState == "" || a.SpeakerState == "unknown" || a.SpeakerState == "target" || a.SpeakerState == "non_target")
+	return a != nil && speakerState && validProbability(a.TargetProbability) && validProbability(a.Confidence) && a.AudioMS >= 0 && a.AudioMS <= 60000 && a.LastSpeechMS >= 0 && a.LastSpeechMS <= a.AudioMS &&
 		a.SpeechMS >= 0 && a.SpeechMS <= a.AudioMS+32 && !math.IsNaN(a.Probability) && !math.IsInf(a.Probability, 0) && a.Probability >= 0 && a.Probability <= 1
+}
+
+func cloneASRActivity(a *ASRAudioActivity) *ASRAudioActivity {
+	if a == nil {
+		return nil
+	}
+	result := *a
+	if a.TargetProbability != nil {
+		value := *a.TargetProbability
+		result.TargetProbability = &value
+	}
+	if a.Confidence != nil {
+		value := *a.Confidence
+		result.Confidence = &value
+	}
+	return &result
 }
 
 // Streaming ASR is an adapter session，independent of Conversation and UI．

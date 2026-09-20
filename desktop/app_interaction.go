@@ -248,6 +248,9 @@ func (a *App) AppendInteractionInterruptionCandidate(operationID, candidateID st
 func (a *App) CancelInteractionInterruptionCandidate(operationID, candidateID, reason string) error {
 	return a.interactionEngine().CancelInterruptionCandidate(operationID, candidateID, reason)
 }
+func (a *App) RecordInteractionInterruptionTelemetry(operationID string, revision int, candidateID string, event InterruptionTelemetry) error {
+	return a.interactionEngine().RecordInterruptionTelemetry(operationID, revision, candidateID, event)
+}
 func (a *App) CancelInteraction(operationID string) (InteractionSnapshot, error) {
 	return a.interactionEngine().Cancel(operationID)
 }

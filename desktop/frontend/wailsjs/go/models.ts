@@ -7,6 +7,9 @@ export namespace main {
 	    probability: number;
 	    speaking: boolean;
 	    has_speech: boolean;
+	    target_probability?: number;
+	    speaker_state?: string;
+	    confidence?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new ASRAudioActivity(source);
@@ -20,6 +23,9 @@ export namespace main {
 	        this.probability = source["probability"];
 	        this.speaking = source["speaking"];
 	        this.has_speech = source["has_speech"];
+	        this.target_probability = source["target_probability"];
+	        this.speaker_state = source["speaker_state"];
+	        this.confidence = source["confidence"];
 	    }
 	}
 	export class ASRCapabilities {
@@ -1239,6 +1245,7 @@ export namespace main {
 	export class InteractionTraceEvent {
 	    input_handoff?: InteractionInputHandoffTiming;
 	    interruption?: InteractionInterruptionTiming;
+	    interruption_telemetry?: InterruptionTelemetry;
 	    schema_version: number;
 	    event_id: string;
 	    trace_id: string;
@@ -1266,6 +1273,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.input_handoff = this.convertValues(source["input_handoff"], InteractionInputHandoffTiming);
 	        this.interruption = this.convertValues(source["interruption"], InteractionInterruptionTiming);
+	        this.interruption_telemetry = this.convertValues(source["interruption_telemetry"], InterruptionTelemetry);
 	        this.schema_version = source["schema_version"];
 	        this.event_id = source["event_id"];
 	        this.trace_id = source["trace_id"];
@@ -1303,6 +1311,22 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class InterruptionTelemetry {
+	    kind: string;
+	    duration_ms: number;
+	    outcome?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new InterruptionTelemetry(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.duration_ms = source["duration_ms"];
+	        this.outcome = source["outcome"];
+	    }
 	}
 	export class InterruptionCandidateSnapshot {
 	    candidate_id: string;

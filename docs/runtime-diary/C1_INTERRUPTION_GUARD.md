@@ -1,6 +1,6 @@
-# C1 割込み候補の確認とノイズ対策
+# C1 外部環境向け割込み確認とspeaker gate境界
 
-2026-09-13．通常の発話開始と，応答を打ち切る判断を分離した．既存の単一capture，500 ms pre-roll，2秒の入力引継ぎ，canonical finalの採用経路は維持する．
+2026-09-20．通常の発話開始，割込み候補，ASRによる発話確認，割込みintent，duck／cancelを分離した．既存の単一capture，500 ms pre-roll，有界の入力引継ぎ，canonical finalの採用経路，operation／session／turn identityは維持する．
 
 ## きっかけと確認できた事実
 
@@ -9,19 +9,26 @@ Irodori Animeを使った実機試行で，文章生成完了後，TTS開始か�
 ## 今回の動作
 
 1．通常の入力待ちでは従来のendpointを使う．応答中には独立した割込み判定を使い，短い活動だけで旧operationを取り消さない．
-2．RMS 0.025以上の活動が80 ms続くと候補を開き，音声を有限のbufferに保持する．静かな区間・棄却後の環境音からnoise floorを学習し，判定値はその3倍以上とする．候補を確認している間は本文の音量を30%へ下げ，LLM／TTSを継続する．
-3．既存の端末内ASRを候補確認に使う．音だけでは確定しない．「待って」「違う」「いや」などの明確な中断語，または相づち・呼びかけだけではない発話を認識し，活動時間と認識の変動停止を確認してから従来の割込み処理へ進む．候補のASRはchatへの確定入力にはしない．
-4．短い物音，認識できない音，候補ASRの失敗，期限切れは候補だけを捨て，本文の音量を戻す．「うん」「はい」「なるほど」「Ephy」などだけなら旧回答を維持する．これらに訂正や依頼が続いた場合は再判定する．
+2．RMSは候補を開くためだけに使う．Whisper VADの`has_speech`もspeech activityとして扱い，それだけで音量を変えない．静かな区間・棄却後の環境音からnoise floorを学習し，候補PCMは従来どおり有界のメモリ内bufferにだけ保持する．
+3．既存の端末内ASRで候補を確認する．「待って」「止めて」「違う」などの明確語を認識した場合だけ，confirmed待ちの短い期間に通常音量の72%へ軽くduckする．通常の発話は音量を維持し，認識の安定と活動量が揃ったconfirmedでのみplaybackをcancelする．
+4．短い物音，一定ノイズ，BGM相当の連続音，認識できない音，候補ASRの失敗，期限切れ，相づちは候補だけを捨てる．明確語の認識後に棄却した場合は即時に通常音量へ戻す．
 5．確定した割込みは，候補中の冒頭を含むPCMを次turnの通常ASRへ引き継ぐ．通常ASRの検証済みfinalだけを会話へ採用する．元の回答が先に自然終了した場合も，候補中の入力を次の通常ASRへ引き継ぐ．
+6．`fillerBargeIn` はPCM captureだけを担当する．従来の32 ms RMS即時cancelは廃止し，通常と同じ`voiceInterruption`のcandidate／ASR／intent確認を通す．fillerは短いためprobableのduckは行わず，confirmedで停止する．
 
-`voiceInterruption.js` の初期設定は，音声活動180 ms以上，認識の変動停止160 ms以上を本文再生中の基準とする．生成待ちでは活動260 ms／変動停止240 msを必要とする．明確な中断語は活動180 ms／変動停止80 msとし，provider finalがあれば変動停止待ちを省く．これらは初期値であり，実機で最適化済みの値ではない．発話内容の判定は有限の語句規則であり，汎用の意味理解モデルではない．
+`voiceInterruption.js` の初期設定は，音声活動180 ms以上，認識の変動停止160 ms以上を本文再生中の基準とする．生成待ちでは活動260 ms／変動停止240 msを必要とする．Whisper VADが利用できる場合，明確な中断語は64 msのmodel speech／80 msの認識安定で高速に確定でき，provider finalがあれば安定待ちを省く．
+
+## Target Speaker Gateの接続点
+
+`ASRAudioActivity` とfrontendの`speakerEvidence()`に，`has_speech`と独立した`target_probability`，`speaker_state: target | non_target | unknown`，`confidence`を追加した．現在のWhisper adapterはこれらを生成しないため`unknown`として従来のASR intent確認へ進む．将来のTarget Speaker GateはASR updateのactivity生成時に数値と固定enumだけを渡せばよい．`non_target`または高confidence／低target probabilityの候補はASR本文が明確語でも棄却する．
+
+speaker embedding，speaker ID，raw audioはこのschemaに含めない．activityはtransientなASR callback／candidate snapshotの範囲に限定し，Conversation，LLM request，trace，evaluationへ保存しない．
 
 ## 寿命・取消・記録
 
 - 候補の確認は最大1.2秒．候補中もPCM合計は2秒に制限する．未確定候補の上限超過で元の返答やvoice sessionを止めない．確定後の引継ぎ上限超過は従来どおりpauseして再発話を案内する．
 - 候補IDはASR起動前に確定し，起動が遅れていても取消できる．Go側にも3秒の上限を置く．元のturn，generation revision，voice session／epoch，ASR segmentの一致を確認する．
 - 候補認識と通常認識は同じASR gateを使い，古いprovider sessionの取消が完了してから次を開く．候補の認識失敗・遅延callbackは元のLLM／TTSや次turnを失敗させない．
-- `interruption_candidate_started` と棄却・確定理由の固定名を，本文を含まないtraceへ有限件数だけ残す．候補の文字列，PCM，音声ファイルは永続化しない．実会話の自動記録はOFFのままである．
+- `interruption_candidate_started`と`interruption_candidate_confirmed`，固定の棄却理由を数える．`interruption_duck_started`，`interruption_duck_ended`，`interruption_false_duck`には固定kind，outcome，duration msだけを残す．候補の文字列，PCM，speaker evidence，音声ファイルはtraceへ保存しない．
 - `interruption.candidate_ms`／latencyの `interruption_candidate` は，候補開始から確定までの待ち時間である．`local_stop` とinput handoffの時間は確定後から測る．これらを混ぜて，呼びかけから0 msで停止したとは報告しない．
 
 ## 検証と実機確認
@@ -33,8 +40,8 @@ Irodori Animeを使った実機試行で，文章生成完了後，TTS開始か�
 | 場面 | 期待する結果 |
 | --- | --- |
 | 生成待ち・再生中に軽い机の音，キーボード音 | 回答をキャンセルしない |
-| 再生中に「うん」「はい」，短く名前だけを呼ぶ | 回答を維持し，一時的に下げた音量が戻る |
+| 再生中に「うん」「はい」，短く名前だけを呼ぶ | 回答と通常音量を維持する |
 | 再生中に「待って，冬の話だけ聞きたい」 | 発話を確認してから中断し，「待って」を含む入力で次の回答へ進む |
 | 上記を繰り返し，pause→resume | microphoneや認識sessionが重複せず，新しい会話を続けられる |
 
-ヘッドホンでの確認を前提とする．TVなどの実際の話し声やspeakerへのechoを，今回のノイズ試験だけで除外できるとはしない．既存のASR本体が返す一般的な `asr_failed` の根本原因や，Irodoriモデルのcold start時間を修正したものではない．
+現在はTarget Speakerモデルがないため，背景の他人の声がASRで明確な中断語または十分な発話と認識された場合は完全には除外できない．speakerへのechoもAECと既存のASRに依存する．従って，今回の改善はVAD／RMSだけのfalse duck／false cancelを減らすものであり，カクテルパーティー効果の完成ではない．

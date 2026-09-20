@@ -299,6 +299,13 @@ export function mountVoiceInteraction({
     try { Promise.resolve(bridge.RecordInteractionFillerTiming?.(run.snapshot.operation_id,
       run.snapshot.generation_revision || 1, sample)).catch(() => {}); } catch { /* Optional telemetry． */ }
   }
+  function recordInterruptionTelemetry(run, event) {
+    if (typeof bridge.RecordInteractionInterruptionTelemetry !== 'function') return;
+    run.interruptionTelemetry = (run.interruptionTelemetry || Promise.resolve()).then(() =>
+      bridge.RecordInteractionInterruptionTelemetry(run.snapshot.operation_id,
+        run.snapshot.generation_revision || 1, event.candidateID,
+        {kind: event.kind, duration_ms: event.durationMS, outcome: event.outcome || ''})).catch(() => {});
+  }
   async function prepareFiller(run) {
     if (run.snapshot.input_kind === 'text' || run.fillerAttempted || (run.snapshot.generation_revision || 1) !== 1 || typeof bridge.GetInteractionFiller !== 'function') return;
     run.fillerAttempted = true;
@@ -337,8 +344,7 @@ export function mountVoiceInteraction({
         } catch { /* A failed optional acknowledgement cannot block the answer． */ }
       }
       if (!available()) { run.backchannel?.stop(); run.backchannel = null; return; }
-      const monitor = run.voice ? {stop() {}} : await startBargeIn({context: run.context, mediaDevices, subscribePCM: run.voice ? callback => { run.voice.monitors.add(callback); return () => run.voice.monitors.delete(callback); } : undefined, isCurrent: () => attached(run) && !run.bodyStarted,
-        onSpeech: () => {
+      const confirmBargeIn = () => {
           if (!attached(run)) return;
           const detected = now(), ack = run.backchannel; run.backchannel = null;
           stopFiller(run, 'barge_in');
@@ -348,9 +354,26 @@ export function mountVoiceInteraction({
           if (ack) run.context = null;
           if (run.voice) { run.relisten = true; void cancelRun(); } else void cancel();
           if (ack) { nextBackchannel++; handoff = ack; ack.play(detected); render(); }
-        },
+        };
+      let fillerGuard = null;
+      if (!run.voice) {
+        const modelActivity = asrReadiness?.capabilities?.activity === true;
+        const guardSettings = modelActivity ? interruptionSettings(interruptionConfig, true) : interruptionConfigResolved;
+        fillerGuard = createVoiceInterruption({bridge, identity: () => run.snapshot, sampleRate: run.context.sampleRate,
+          buffer: createVoiceInputBuffer(run.context.sampleRate, modelActivity ? 3000 : 2000),
+          createEncoder: createPCM16StreamEncoder, encodeBase64, now, timers, settings: guardSettings, modelActivity,
+          duckEnabled: false, isCurrent: available, phase: () => run.snapshot.state,
+          onDuck: () => {}, onConfirm: confirmBargeIn,
+          onTelemetry: event => recordInterruptionTelemetry(run, event)});
+      }
+      const rawMonitor = run.voice ? {stop() {}} : await startBargeIn({context: run.context, mediaDevices,
+        isCurrent: () => attached(run) && !run.bodyStarted,
+        onAudio: data => fillerGuard?.audio(data),
+        // Kept as an injectable confirmed-speech seam for controller tests．
+        onSpeech: confirmBargeIn,
         onUnavailable: () => { run.fillerInvalidated = true; stopFiller(run); }});
-      if (!monitor) return;
+      if (!rawMonitor) { fillerGuard?.stop(); return; }
+      const monitor = {stop() { fillerGuard?.stop(); rawMonitor.stop(); }};
       if (!available()) { monitor.stop(); return; }
       run.bargeIn = monitor;
       render();
@@ -576,7 +599,7 @@ export function mountVoiceInteraction({
       liveTranscript: '', stablePrefix: '', endPromise: null, endRequested: false,
       timer: null, context: null, contextReady: null,
       outputGain: null, observedPlayback: new Map(), interrupted: false,
-      interruptionGuard: null,
+      interruptionGuard: null, interruptionTelemetry: Promise.resolve(),
       queue: [], queueBytes: 0, playing: null, decoding: false, ending: false, playbackEpoch: 0,
       lastSequence: 0, playbackBytesReceived: 0, earlyEvents: [], earlyBytes: 0, earlyOverflow: false,
       identityReady: new Promise((resolve) => { ready = resolve; }),
@@ -599,6 +622,7 @@ export function mountVoiceInteraction({
       settings: guardSettings, modelActivity, isCurrent: () => attached(run),
       phase: () => run.playing ? 'PLAYING' : run.snapshot.state,
       onDuck: duck => { if (run.outputGain) run.outputGain.gain.value = duck ? guardSettings.duckVolume : 1; render(); },
+      onTelemetry: event => recordInterruptionTelemetry(run, event),
       onConfirm: ({candidateMS}) => {
         const v = run.voice;
         if (!attached(run)) return;

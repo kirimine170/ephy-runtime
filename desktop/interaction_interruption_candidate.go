@@ -20,6 +20,14 @@ type InterruptionCandidateSnapshot struct {
 	ErrorCode   string            `json:"error_code,omitempty"`
 }
 
+// Fixed interruption measurements only．No transcript，audio or speaker
+// identity crosses the telemetry boundary．
+type InterruptionTelemetry struct {
+	Kind       string `json:"kind"`
+	DurationMS int    `json:"duration_ms"`
+	Outcome    string `json:"outcome,omitempty"`
+}
+
 type interactionInterruptionCandidate struct {
 	inputMu         sync.Mutex
 	id              string
@@ -33,6 +41,7 @@ type interactionInterruptionCandidate struct {
 	activity        *ASRUpdate
 	lastUpdate      *ASRUpdate
 	errorCode       string
+	telemetry       map[string]bool
 	closed          bool
 }
 
@@ -53,6 +62,21 @@ func (e *InteractionEngine) candidateTraceLocked(t *interactionTurn, reason stri
 	}
 }
 
+func (e *InteractionEngine) candidateTelemetryTraceLocked(t *interactionTurn, event InterruptionTelemetry) {
+	if t.interruptionTraceCount >= 16 || len(t.events) >= maxInteractionEvents-40 {
+		return
+	}
+	t.interruptionTraceCount++
+	trace := e.recordTraceLocked(t, "interruption_"+event.Kind, "", false)
+	copyForTrace := event
+	trace.InterruptionTelemetry = &copyForTrace
+	copyForStore := event
+	t.events[len(t.events)-1].InterruptionTelemetry = &copyForStore
+	published := e.eventLocked(t, "trace")
+	published.Trace = trace
+	e.queueLocked(published)
+}
+
 func candidateSnapshot(c *interactionInterruptionCandidate) InterruptionCandidateSnapshot {
 	s := InterruptionCandidateSnapshot{CandidateID: c.id, Request: c.request, ErrorCode: c.errorCode}
 	if c.latest != nil {
@@ -61,8 +85,7 @@ func candidateSnapshot(c *interactionInterruptionCandidate) InterruptionCandidat
 	}
 	if c.activity != nil {
 		u := *c.activity
-		a := *u.Activity
-		u.Activity = &a
+		u.Activity = cloneASRActivity(u.Activity)
 		s.Activity = &u
 	}
 	return s
@@ -79,13 +102,13 @@ func (e *InteractionEngine) BeginInterruptionCandidate(op, candidateID string, r
 	e.mu.Lock()
 	t := e.turns[op]
 	if t == nil || !e.liveLocked(t) || !candidateResponding(t.snapshot.State) ||
-		t.request.VoiceSessionID == "" || !e.validVoiceSessionLocked(t.request) || t.snapshot.GenerationRevision != revision ||
+		t.request.InputKind != "microphone" || !e.validVoiceSessionLocked(t.request) || t.snapshot.GenerationRevision != revision ||
 		(t.interruptionCandidate != nil && (t.interruptionCandidate.id == candidateID || (!t.interruptionCandidate.closed && t.interruptionCandidate.ctx.Err() == nil))) {
 		e.mu.Unlock()
 		return InterruptionCandidateSnapshot{}, errors.New("invalid_interaction_transition")
 	}
 	ctx, cancel := context.WithTimeout(t.ctx, 3*time.Second)
-	c := &interactionInterruptionCandidate{id: candidateID, revision: revision, ctx: ctx, cancel: cancel,
+	c := &interactionInterruptionCandidate{id: candidateID, revision: revision, ctx: ctx, cancel: cancel, telemetry: map[string]bool{},
 		request: ASRSessionRequest{OperationID: op, SessionID: t.snapshot.SessionID, TurnID: t.snapshot.TurnID,
 			SegmentID: interactionID("segment_"), SampleRate: sampleRate}}
 	t.interruptionCandidate = c
@@ -176,7 +199,7 @@ func (e *InteractionEngine) closeInterruptionCandidate(t *interactionTurn, c *in
 
 func (e *InteractionEngine) CancelInterruptionCandidate(op, id, reason string) error {
 	switch reason {
-	case "confirmed", "noise", "acknowledgement", "expired", "unavailable", "detached", "completed":
+	case "confirmed", "noise", "non_target", "acknowledgement", "expired", "unavailable", "detached", "completed":
 	default:
 		return errors.New("invalid_interruption_candidate")
 	}
@@ -189,6 +212,40 @@ func (e *InteractionEngine) CancelInterruptionCandidate(op, id, reason string) e
 	c := t.interruptionCandidate
 	e.mu.Unlock()
 	e.closeInterruptionCandidate(t, c, reason)
+	return nil
+}
+
+func (e *InteractionEngine) RecordInterruptionTelemetry(op string, revision int, candidateID string, event InterruptionTelemetry) error {
+	valid := false
+	switch event.Kind {
+	case "duck_started":
+		valid = event.DurationMS == 0 && event.Outcome == ""
+	case "duck_ended":
+		valid = event.DurationMS >= 0 && event.DurationMS <= 3000 && (event.Outcome == "confirmed" || event.Outcome == "rejected")
+	case "false_duck":
+		valid = event.DurationMS >= 0 && event.DurationMS <= 3000 && event.Outcome == "rejected"
+	}
+	if !valid || !interactionIdentifier.MatchString(candidateID) {
+		return errors.New("invalid_interruption_telemetry")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t := e.turns[op]
+	if t == nil || t.snapshot.GenerationRevision != revision || t.interruptionCandidate == nil || t.interruptionCandidate.id != candidateID {
+		return errors.New("stale_interruption_telemetry")
+	}
+	c := t.interruptionCandidate
+	if c.telemetry[event.Kind] || (event.Kind != "duck_started" && !c.telemetry["duck_started"]) ||
+		(event.Kind == "false_duck" && !c.telemetry["duck_ended"]) {
+		return errors.New("invalid_interruption_telemetry")
+	}
+	c.telemetry[event.Kind] = true
+	e.candidateTelemetryTraceLocked(t, event)
+	if interactionTerminal(t.snapshot.State) {
+		if err := e.store.save(t.snapshot.OperationID, t.events); err != nil {
+			return errors.New("trace_storage_unavailable")
+		}
+	}
 	return nil
 }
 
@@ -276,8 +333,7 @@ func (e *InteractionEngine) receiveInterruptionCandidate(t *interactionTurn, c *
 		return
 	}
 	if u.Activity != nil {
-		a := *u.Activity
-		u.Activity = &a
+		u.Activity = cloneASRActivity(u.Activity)
 	}
 	c.lastUpdate = &u
 	if u.Phase == "activity" {

@@ -90,6 +90,31 @@ test('cancel and microphone barge-in stop filler immediately and discard the wai
   }
 });
 
+test('default filler monitor cancels only after the shared candidate ASR confirms speech', async () => {
+  let time = 0;
+  const h = harness({now: () => time, bridge: {GetInteractionFiller: async () => fillerSetup()}});
+  await h.controller.adopt(snapshot(1, 'THINKING'));
+  h.contexts[0].decode = async () => ({duration: 1});
+  for (const [name, at] of [['endpoint_commit', 0], ['llm_requested', 20], ['llm_identity_ready', 30]]) {
+    time = at; h.event(1, 'trace', {trace: {name, monotonic_ms: at}});
+  }
+  await tick(); await tick();
+  for (const [name, at] of [['llm_first_token', 900], ['tts_requested', 1100]]) {
+    time = at; h.event(1, 'trace', {trace: {name, monotonic_ms: at}});
+  }
+  time = 3850; for (const item of [...h.timeouts.values()]) item.callback();
+  const context = h.contexts[0];
+  context.capture(new Float32Array(256).fill(.1));
+  context.capture(new Float32Array(256).fill(.1));
+  assert.equal(h.calls.candidateBegin.length, 0); assert.deepEqual(h.calls.cancel, []);
+  for (let i = 0; i < 10; i++) context.capture(new Float32Array(256).fill(.1));
+  await tick(); await tick(); await tick();
+  assert.equal(h.calls.candidateBegin.length, 1);
+  assert.equal(h.calls.candidateCancel.at(-1)[2], 'confirmed');
+  assert.deepEqual(h.calls.cancel, ['op-1']);
+  await h.controller.dispose();
+});
+
 test('late filler setup cannot open microphone or play after body arrival or cancellation', async () => {
   for (const action of ['body', 'cancel']) {
     const setup = deferred(); let microphones = 0;
@@ -213,9 +238,10 @@ function button() {
 function stream() {
   const tracks = [{stopped: false}, {stopped: false}].map((track) => ({
     ...track, onended: null,
+    readyState: 'live',
     stop() { this.stopped = true; this.onended?.(); },
   }));
-  return {tracks, getTracks: () => tracks};
+  return {tracks, getTracks: () => tracks, getAudioTracks: () => tracks};
 }
 
 class FakeContext {
@@ -257,6 +283,7 @@ function harness(options = {}) {
   if (options.showASR) nodes['voice-asr-status'] = button();
   const calls = {start: [], readiness: [], begin: [], append: [], end: [], commit: [], cancel: [], interrupts: [], playback: [], fail: [], transcript: [], token: [], output: [], complete: [], incomplete: [], failure: [], canceled: [], busy: [], fallback: []};
   calls.candidateBegin = []; calls.candidateAppend = []; calls.candidateCancel = [];
+  calls.interruptionTelemetry = [];
   calls.textStart = []; calls.chat = [];
   const candidateRequest = op => ({operation_id: op, session_id: 'session', turn_id: `turn-${op.slice(3)}`, segment_id: `candidate-segment-${op}`, sample_rate: 16000});
   const contexts = [];
@@ -283,6 +310,7 @@ function harness(options = {}) {
       return {candidate_id: id, request: candidateRequest(op), update: {...candidateRequest(op), revision: 1, phase: 'final', transcript: '待って', stable_prefix: '待って'}};
     },
     async CancelInteractionInterruptionCandidate(...args) { calls.candidateCancel.push(args); },
+    async RecordInteractionInterruptionTelemetry(...args) { calls.interruptionTelemetry.push(args); },
     async CommitInteraction(...args) { calls.commit.push(args); },
     async CancelInteraction(op) {
       calls.cancel.push(op);
@@ -1669,6 +1697,18 @@ test('C1 Step2 repeated interruptions keep one capture and distinct ASRs，witho
   await h.controller.endSession();
 });
 
+test('confirmed explicit interruption records body-free duck telemetry', async () => {
+  const h = harness(); await h.controller.startSession();
+  h.contexts[0].capture(speechFrame()); await h.controller.stop();
+  h.state(1, 'PLAYING'); await interruptSpeech(h); await tick(); await tick();
+  assert.deepEqual(h.calls.interruptionTelemetry.map(call => call[3]), [
+    {kind: 'duck_started', duration_ms: 0, outcome: ''},
+    {kind: 'duck_ended', duration_ms: 0, outcome: 'confirmed'},
+  ]);
+  assert.ok(h.calls.interruptionTelemetry.every(call => call[0] === 'op-1' && call[1] === 1 && typeof call[2] === 'string'));
+  await h.controller.endSession();
+});
+
 test('C1 Step2 a full handoff buffer pauses instead of discarding the onset', async () => {
   const canceled = deferred();
   const h = harness({bridge: {InterruptInteraction: () => canceled.promise}});
@@ -1818,7 +1858,8 @@ for (const reason of ['asr_failure', 'acknowledgement', 'missing_recognition']) 
   output.createBufferSource = () => { const source = originalSource(); source.connect = target => { gain = target; }; return source; };
   h.contexts[0].capture(speechFrame()); await h.controller.stop(); h.state(1, 'SYNTHESIZING'); h.audio(1, 1); await tick();
   h.contexts[0].capture(interruptionFrame()); await tick();
-  if (reason !== 'asr_failure') { assert.equal(gain.gain.value, .3); for (const timer of [...h.timeouts.values()]) if (timer.milliseconds === 1200) timer.callback(); }
+  assert.equal(gain.gain.value, 1);
+  if (reason !== 'asr_failure') for (const timer of [...h.timeouts.values()]) if (timer.milliseconds === 1200) timer.callback();
   await tick();
   assert.equal(gain.gain.value, 1); assert.equal(output.sources[0].stopped, false);
   assert.equal(h.calls.interrupts.length, 0); assert.equal(h.calls.cancel.length, 0);

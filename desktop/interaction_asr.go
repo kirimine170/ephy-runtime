@@ -456,8 +456,8 @@ func (e *InteractionEngine) receiveASR(t *interactionTurn, a *interactionASRSess
 		a.metadata.Diagnostic = &d
 	}
 	if update.Phase == "activity" {
-		activity := *update.Activity
-		update.Activity = &activity
+		update.Activity = cloneASRActivity(update.Activity)
+		activity := update.Activity
 		a.metadata.VADAudioMS = activity.AudioMS
 		a.metadata.VADSpeechMS = activity.SpeechMS
 		a.metadata.VADLastSpeechMS = activity.LastSpeechMS
