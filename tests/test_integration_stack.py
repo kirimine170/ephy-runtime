@@ -194,3 +194,38 @@ def test_karte_exit_fails_readiness_without_waiting_for_deadline(tmp_path, monke
     monkeypatch.setattr(stack, 'process_identity', lambda pid: None)
     with pytest.raises(RuntimeError, match='exited'):
         stack.wait_for_karte({'data_root': tmp_path}, {'pid': 42, 'identity': 'original'})
+
+
+def test_resident_launch_is_opt_in_and_preserves_separate_storage(tmp_path):
+    assert stack.resident_environment({}) == {}
+    config = {'resident': {'state_root': str(tmp_path / 'state'),
+                           'preference_data': str(tmp_path / 'feedback')}}
+    env = stack.resident_environment(config)
+    assert env['EPHY_RESIDENT_PREFERENCE_DATA_ROOT'] == str(tmp_path / 'feedback')
+    assert 'EPHY_PREFERENCE_DATA_ROOT' not in env
+    assert 'EPHY_RESIDENT_PARTICIPATION_GRANTS' not in env
+    assert env['EPHY_GATEWAY_URL'] == 'http://127.0.0.1:8000'
+    config['resident']['preference_data'] = 'relative'
+    with pytest.raises(ValueError, match='absolute'):
+        stack.resident_environment(config)
+
+
+def test_managed_models_reject_foreign_process_before_start(monkeypatch):
+    monkeypatch.setattr(stack, 'listener', lambda port: 42)
+    monkeypatch.setattr(stack, 'model_parent', lambda pid: 10)
+    with pytest.raises(RuntimeError, match='another process'):
+        stack.verify_model_owner(8081, None)
+    with pytest.raises(RuntimeError, match='another process'):
+        stack.verify_model_owner(8081, 11)
+    assert stack.verify_model_owner(8081, 10) == 42
+
+
+def test_managed_model_requires_health_and_runtime_ownership(monkeypatch):
+    monkeypatch.setattr(stack, 'listener', lambda port: 42)
+    monkeypatch.setattr(stack, 'model_parent', lambda pid: 10)
+    monkeypatch.setattr(stack, 'process_identity', lambda pid: 'runtime' if pid == 10 else 'model')
+    health = Mock(return_value={'status': 'ok'})
+    monkeypatch.setattr(stack, 'fetch', health)
+    record = stack.wait_for_managed_model(8081, {'pid': 10, 'identity': 'runtime'})
+    assert record['pid'] == 42 and record['owner'] == 'runtime'
+    health.assert_called_once_with('http://127.0.0.1:8081/health')

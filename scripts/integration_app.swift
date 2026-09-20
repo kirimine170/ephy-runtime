@@ -15,7 +15,8 @@ case "open":
         "EPHY_KARTE_CONFIG_ROOT", "EPHY_KARTE_CONTROL"
         , "EPHY_RESIDENT", "EPHY_RESIDENT_ENABLED", "EPHY_RESIDENT_NAMESPACE",
         "EPHY_RESIDENT_STATE_ROOT", "EPHY_RESIDENT_INSTANCE_ID", "EPHY_GATEWAY_URL",
-        "EPHY_RESIDENT_VOICE_PROFILE_ID"
+        "EPHY_RESIDENT_VOICE_PROFILE_ID", "EPHY_RESIDENT_MANAGED_STACK",
+        "EPHY_RUNTIME_MANAGED_MODELS"
     ]
     configuration.environment = ProcessInfo.processInfo.environment.filter { keys.contains($0.key) }
     NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: args[2]), configuration: configuration) { app, error in

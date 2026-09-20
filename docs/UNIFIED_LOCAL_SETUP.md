@@ -1,0 +1,11 @@
+# 通常機能と常駐機能を同じ環境で起動する
+
+2026-09-20．既存の統合launcherに任意のresident設定を加える．通常起動の既定値と独立検証版を維持し，統合起動では実際のKarte，Qdrant，Web検索，音声，モデル管理，A/B評価と常駐feedbackを利用する．個人データやモデルをGitへ入れない．
+
+`integration_stack.py`のlocal設定に，絶対pathの`resident.state_root`と`resident.preference_data`を指定する．既存の`preference_data`はA/B評価用で，resident用DBを個別指定して引き継げる．省略時の挙動は従来どおり．既存DBは起動前にSQLite backupで退避する．実際のKarteへ検証用文書や共有許可を持ち込まない．
+
+`runtime_manages_models: true`ではモデルの起動をDesktopへ委ねる．launcherはポートの所有者とhealthを確認し，別アプリのモデルが動いていれば停止してエラーを返す．Desktopのモデル切替と終了処理が同じprocess handleを使う．サービス操作を許可するのは明示的な統合設定と8000番Gatewayの組合せで，専用のisolatedビルドは引き続き拒否する．
+
+アプリは既存releaseと別のhomeへビルドする．起動は`integration_stack.py start --config <local設定>`，状態確認は`status`，終了は`stop`を使う．同じポートを使う通常版と同時には起動しない．マイクは自動で開始しない．常駐画面で本人選択・保存同意・modeを設定して音声sessionを開始する．
+
+参加者に応じた記憶参照には，明示的な文書hashと参加者scopeの許可を`resident.participation_grants`へ指定する必要がある．未設定時に実際の記憶を無制限に共有しない．experimental音声の利用可否は音声catalogで確認する．Pipecatや自動学習の構想を，この統合設定の完成機能として扱わない．

@@ -315,3 +315,12 @@ def test_deleted_predecessor_is_not_resurrected_by_later_undo(service):
     service.retract(first["feedback"]["event_id"], RetractRequest(session_id="fixture", dedupe_id="forget-first", expected_revision=2, delete=True))
     result = service.undo(second["change"]["change_id"], UndoRequest(session_id="fixture", dedupe_id="undo-second", expected_revision=2))
     assert result["state"]["policy"]["response_length"] == "default"
+
+
+def test_gateway_can_reuse_resident_database_without_moving_ab_store(tmp_path, monkeypatch):
+    monkeypatch.setenv('EPHY_RESIDENT_ENABLED', '1')
+    monkeypatch.setenv('EPHY_PREFERENCE_DATA_ROOT', str(tmp_path / 'ab'))
+    monkeypatch.setenv('EPHY_RESIDENT_PREFERENCE_DATA_ROOT', str(tmp_path / 'resident'))
+    with TestClient(gateway.app):
+        assert gateway.app.state.preference_service.store.data_root == tmp_path / 'ab'
+        assert gateway.app.state.resident_service.store.preference_store.data_root == tmp_path / 'resident'

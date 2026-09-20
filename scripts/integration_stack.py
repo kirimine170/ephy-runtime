@@ -327,6 +327,56 @@ def wait_for_karte(config, record, timeout=180):
     raise RuntimeError('Karte receiver readiness timed out．')
 
 
+def resident_environment(config):
+    """Opt-in unified launch，with explicit private storage and normal Gateway．"""
+    resident = config.get('resident')
+    if not resident:
+        return {}
+    result = {'EPHY_RESIDENT': '1', 'EPHY_RESIDENT_ENABLED': '1',
+              'EPHY_RESIDENT_MANAGED_STACK': '1', 'EPHY_GATEWAY_URL': 'http://127.0.0.1:8000',
+              'EPHY_RESIDENT_NAMESPACE': resident.get('namespace', 'resident-feedback'),
+              'EPHY_RESIDENT_VOICE_PROFILE_ID': config.get('voice_profile_id', '')}
+    for key, variable in (('state_root', 'EPHY_RESIDENT_STATE_ROOT'),
+                          ('preference_data', 'EPHY_RESIDENT_PREFERENCE_DATA_ROOT'),
+                          ('participation_grants', 'EPHY_RESIDENT_PARTICIPATION_GRANTS')):
+        if key not in resident:
+            if key == 'participation_grants':
+                continue
+            raise ValueError('Resident private storage must be configured．')
+        path = Path(resident[key]).expanduser()
+        if not path.is_absolute():
+            raise ValueError('Resident paths must be absolute．')
+        result[variable] = str(path.resolve())
+    return result
+
+
+def model_parent(pid):
+    return int(command('ps', '-p', str(pid), '-o', 'ppid=') or '0')
+
+
+def verify_model_owner(port, runtime_pid):
+    pid = listener(port)
+    if pid and (not runtime_pid or model_parent(pid) != runtime_pid):
+        raise RuntimeError(f'Model port {port} belongs to another process．Stop its owning app first．')
+    return pid
+
+
+def wait_for_managed_model(port, runtime):
+    until = time.monotonic() + 240
+    while time.monotonic() < until:
+        if process_identity(runtime['pid']) != runtime['identity']:
+            raise RuntimeError('Runtime exited while starting models．')
+        pid = verify_model_owner(port, runtime['pid'])
+        if pid:
+            try:
+                fetch(f'http://127.0.0.1:{port}/health')
+                return {'pid': pid, 'identity': process_identity(pid), 'started': False, 'owner': 'runtime'}
+            except (OSError, urllib.error.URLError):
+                pass
+        time.sleep(.25)
+    raise RuntimeError(f'Desktop model at port {port} did not become ready．')
+
+
 def start(config):
     release, proof = release_files(config)
     records = {}
@@ -344,13 +394,19 @@ def start(config):
     env = {**os.environ, 'PYTHONPATH': str(ROOT), 'KARTE_DATA_DIR': str(config['data_root'])}
     env['EPHY_LOG_DIR'] = str(config['logs'])
     env['KARTE_LOG_DIR'] = str(config['logs'] / 'karte')
+    env.update(resident_environment(config))
+    managed_models = {}
     if config.get('preference_data'):
         env['EPHY_PREFERENCE_DATA_ROOT'] = str((config['config_path'].parent / config['preference_data']).resolve())
     for role, port in (('fast', 8081), ('work', 8082), ('code', 8083), ('embedding', 8090)):
         model = settings.models.get(role)
         if model and model.provider == 'llama_cpp':
             require_local(model.base_url, port)
-            remember(role, ensure_service(config, role, port, '/health', [ROOT / ('scripts/start_llama_' + role + '.sh')], env=env))
+            if config.get('runtime_manages_models'):
+                verify_model_owner(port, records.get('runtime', {}).get('pid'))
+                managed_models[role] = port
+            else:
+                remember(role, ensure_service(config, role, port, '/health', [ROOT / ('scripts/start_llama_' + role + '.sh')], env=env))
     if settings.vector_db.provider == 'qdrant':
         require_local(settings.vector_db.url, 6333)
         remember('qdrant', ensure_service(config, 'qdrant', 6333, '/healthz',
@@ -388,7 +444,12 @@ def start(config):
             raise ValueError('Configured ASR assets differ from the prepared model．')
     runtime_env = {**speech_env, 'EPHY_RUNTIME_ROOT': str(ROOT),
                    'EPHY_ASR_PROVIDER': 'whisper-cpp', 'EPHY_ASR_CONFIG': str(release / 'asr.json')}
+    if managed_models:
+        runtime_env['EPHY_RUNTIME_MANAGED_MODELS'] = ','.join(managed_models)
     remember('runtime', open_app(config, release / 'Ephy Runtime.app', runtime_env))
+    for role, port in managed_models.items():
+        print(f'Runtime：{role}モデルの起動を確認しています．', flush=True)
+        remember(role, wait_for_managed_model(port, records['runtime']))
     print('Runtime：Whisperの起動を確認しています．', flush=True)
     until = time.monotonic() + 180
     while time.monotonic() < until:

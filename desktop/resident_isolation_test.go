@@ -43,3 +43,22 @@ func TestResidentCannotMutateSharedModelServices(t *testing.T) {
 		t.Fatal("normal lifecycle changed", err)
 	}
 }
+
+func TestUnifiedLifecycleRequiresExplicitNormalGatewayAndNonisolatedBuild(t *testing.T) {
+	t.Setenv("EPHY_RESIDENT", "1")
+	t.Setenv("EPHY_RESIDENT_MANAGED_STACK", "1")
+	t.Setenv("EPHY_GATEWAY_URL", "http://127.0.0.1:18900")
+	if residentServiceGuard() == nil {
+		t.Fatal("isolated gateway acquired model control")
+	}
+	t.Setenv("EPHY_GATEWAY_URL", "http://127.0.0.1:8000")
+	if err := residentServiceGuard(); err != nil {
+		t.Fatal(err)
+	}
+	previous := residentBuildMode
+	residentBuildMode = "isolated"
+	defer func() { residentBuildMode = previous }()
+	if residentServiceGuard() == nil {
+		t.Fatal("isolated artifact acquired model control")
+	}
+}

@@ -773,6 +773,9 @@ func (a *App) startup(ctx context.Context) {
 		// This does not open a microphone or start a voice session．
 		a.interactionEngine()
 	}
+	if roles := os.Getenv("EPHY_RUNTIME_MANAGED_MODELS"); roles != "" {
+		go a.startManagedModels(roles)
+	}
 	if os.Getenv("EPHY_START_CONVERSATION") == "1" {
 		go func() {
 			if _, err := a.startConversation(); err != nil {
