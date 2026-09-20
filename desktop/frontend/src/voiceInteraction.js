@@ -90,6 +90,26 @@ export function voiceStatusText(snapshot) {
   return STATUS[snapshot?.state] || STATUS.IDLE;
 }
 
+export function voiceInteractionMarkup() {
+  return `<details id="voice-interaction" class="voice-interaction">
+    <summary class="voice-interaction-summary">
+      <span class="voice-interaction-title">音声会話</span>
+      <span id="voice-status" class="voice-interaction-status" role="status" aria-live="polite">待機中</span>
+    </summary>
+    <div id="voice-controls" class="voice-controls" role="group" aria-label="音声会話の操作">
+      <button id="voice-session" class="ghost-btn" type="button">会話を開始</button>
+      <button id="voice-pause" class="ghost-btn" type="button" disabled>一時停止</button>
+      <button id="voice-end" class="ghost-btn" type="button" disabled>会話を終了</button>
+      <button id="voice-record" class="ghost-btn" type="button">録音開始</button>
+      <button id="voice-cancel" class="ghost-btn" type="button" disabled>Ephyの発話停止</button>
+      <span id="voice-asr-status" role="status" aria-live="polite">音声認識を確認中</span>
+      <button id="voice-fallback" class="ghost-btn" type="button" hidden>文字入力で続ける</button>
+      <button id="voice-feedback" class="ghost-btn" type="button" disabled>違和感を記録</button>
+      <div id="voice-live-transcript" class="voice-live-transcript" role="status" aria-live="polite" aria-atomic="true" hidden><span id="voice-transcript-stable" class="voice-transcript-stable"></span><span id="voice-transcript-revisable" class="voice-transcript-revisable"></span></div>
+    </div>
+  </details>`;
+}
+
 // Legacy WAV utility for existing recordings and playback fixtures．Live ASR
 // uses the stateful raw PCM encoder below and never accumulates a whole WAV．
 export function encodePCM16Wav(chunks, sampleRate) {

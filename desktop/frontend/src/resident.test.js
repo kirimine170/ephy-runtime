@@ -27,6 +27,8 @@ test('no-op unsaved and applied changes have distinct user-visible outcomes',()=
 test('resident controls have explicit initial consent mode target pause stop resume and exit',()=>{
  const markup=residentMarkup();for(const id of ['resident-start','resident-pause','resident-stop','resident-exit','resident-mode','resident-target','resident-owner','resident-consent','resident-history'])assert.ok(markup.includes(`id="${id}"`));
  assert.ok(!markup.includes(' checked'));assert.ok(markup.includes('閉じると終了'));assert.ok(markup.includes('最小化しても待受'));
+ assert.match(markup,/^<details id="resident-controls" class="resident-controls" hidden>/);assert.doesNotMatch(markup,/^<details[^>]*\sopen(?:\s|>)/);
+ assert.match(markup,/<summary[^>]*>[\s\S]*常駐会話[\s\S]*id="resident-mode-status"[^>]*aria-live="polite"/);
 });
 
 test('storage consent rejection never claims that a permanent preference was applied to the session',()=>{assert.match(residentResultText({saved:false,change:{status:'unsaved',reason:'storage_consent_required'}}),/保存していません/);assert.doesNotMatch(residentResultText({saved:false,change:{status:'unsaved',reason:'storage_consent_required'}}),/反映しました/);});
