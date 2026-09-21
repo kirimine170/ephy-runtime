@@ -1,11 +1,13 @@
 from contextlib import asynccontextmanager
 import hashlib
 import os
+from pathlib import Path
 
 from fastapi import FastAPI
 
 from packages.config_core.loader import load_app_config, reload_app_config
 from packages.eval_core.runner import EvalRunner
+from packages.eval_core.preference_store import PreferenceStore
 from packages.eval_core.preference_service import PreferenceService
 from packages.eval_core.resident_service import ResidentService
 from packages.llm_runtime.adapter import LlamaCppChatAdapter
@@ -55,7 +57,9 @@ def initialize_app_state(app: FastAPI, config) -> None:
         instance_id = str(context.identity.identity.instance_id) if context else os.environ.get("EPHY_RESIDENT_INSTANCE_ID", "resident-local")
         owner_reference = context.identity.ownership.owner_reference if context and context.identity.ownership else "selected-owner"
         replacement["resident_service"] = ResidentService(
-            store=replacement["preference_service"].store,
+            store=(PreferenceStore(Path(os.environ["EPHY_RESIDENT_PREFERENCE_DATA_ROOT"]))
+                   if os.environ.get("EPHY_RESIDENT_PREFERENCE_DATA_ROOT")
+                   else replacement["preference_service"].store),
             instance_id=instance_id,
             owner_key=hashlib.sha256(owner_reference.encode()).hexdigest(),
         )

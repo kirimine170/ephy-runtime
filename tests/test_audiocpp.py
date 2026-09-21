@@ -173,3 +173,13 @@ def test_new_adapter_import_does_not_load_old_inference_dependencies():
         capture_output=True,
     )
     assert p.returncode == 0, p.stderr
+
+
+def test_artifact_verification_works_in_python310_inference_environment(tmp_path, monkeypatch):
+    monkeypatch.delattr(hashlib, "file_digest", raising=False)
+    artifact = tmp_path / "weights"
+    artifact.write_bytes(b"synthetic" * 200000)
+    expected = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    assert verified_file(artifact, expected) == artifact
+    with pytest.raises(SpeechError):
+        verified_file(artifact, "0" * 64)
