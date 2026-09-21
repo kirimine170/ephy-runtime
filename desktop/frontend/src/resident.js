@@ -52,6 +52,9 @@ export function residentResultText(result) {
  if (result?.recognized === false) return '設定変更として扱える指摘を確認できませんでした．';
  return '指摘の状態を更新しました．';
 }
+export function releaseResidentCandidate(bridge,sessionID,operationID) {
+ return Promise.resolve().then(()=>bridge.CancelResidentCandidate(sessionID,operationID)).catch(()=>undefined);
+}
 // Local stop is synchronous up to the controller's first await．Snapshot capture
 // precedes it，and persistence owns a separate promise from the canceled run．
 export function submitResidentFeedback({bridge,controller,sessionID,revision,owner,text='',kind,mode='reactive',dedupeID=globalThis.crypto.randomUUID(),target,sourceSnapshot}) {
@@ -126,7 +129,7 @@ export function mountResident({root,bridge,controller,getSessionID,subscribe=()=
   candidateWait.cancel();
   controller.stopPreparedCandidate?.();
   observationRevision++;
-  if(pendingCandidate){void bridge.CancelResidentCandidate(pendingCandidate.session_id,pendingCandidate.operation_id).catch(()=>{});pendingCandidate=null;}
+  if(pendingCandidate){void releaseResidentCandidate(bridge,pendingCandidate.session_id,pendingCandidate.operation_id);pendingCandidate=null;}
  }
  async function observe(event) {
   invalidateCandidate();
@@ -138,9 +141,9 @@ export function mountResident({root,bridge,controller,getSessionID,subscribe=()=
   find('candidate-status').textContent='共有が許可された記憶を確認しています．';
   try {
    const result=await bridge.CreateResidentCandidate({session_id:sid,operation_id:operationID,revision,observation:event.observation.slice(0,2048),participants,speaker_id:speaker,observation_allowed:true});
-   if(disposed||revision!==observationRevision||sid!==getSessionID())return;
+   if(disposed||revision!==observationRevision||sid!==getSessionID()){if(result.status==='candidate')void releaseResidentCandidate(bridge,sid,operationID);return;}
    if(result.status!=='candidate'){pendingCandidate=null;find('candidate-status').textContent='今は参加できる候補がありません．';return;}
-   if(find('mode').value==='observe'){pendingCandidate=null;find('candidate-status').textContent=`観測候補（再生なし）：${result.candidate.text}`;return;}
+   if(find('mode').value==='observe'){pendingCandidate=null;void releaseResidentCandidate(bridge,sid,operationID);find('candidate-status').textContent=`観測候補（再生なし）：${result.candidate.text}`;return;}
    const participantKey=participants.join(','),speakerID=speaker;
    const isCurrent=()=>!disposed && revision===observationRevision && sid===getSessionID()
      && find('mode').value==='companion' && find('participants').checked && state.revision===result.policy_revision
@@ -149,7 +152,7 @@ export function mountResident({root,bridge,controller,getSessionID,subscribe=()=
    const decision=await candidateWait.offer({expiresAt:candidateNow()+Math.min(15,Math.max(0,Number(result.expires_in_seconds)||0))*1000,
      isCurrent,isHumanSpeaking:()=>controller.isHumanSpeaking(),cooldownUntil:lastSpokeAt?lastSpokeAt+60000:0});
    if(!isCurrent())return;
-   if(decision!=='speak'){pendingCandidate=null;void bridge.CancelResidentCandidate(sid,operationID).catch(()=>{});find('candidate-status').textContent='今は発言を控え，候補を破棄しました．';return;}
+   if(decision!=='speak'){pendingCandidate=null;void releaseResidentCandidate(bridge,sid,operationID);find('candidate-status').textContent='今は発言を控え，候補を破棄しました．';return;}
    const preparing=await controller.startPreparedCandidate(operationID);
    if(!isCurrent())return;
    pendingCandidate=null;
