@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {feedbackTarget,residentResultText,residentMarkup,submitResidentFeedback} from './resident.js';
+import {feedbackTarget,releaseResidentCandidate,residentResultText,residentMarkup,submitResidentFeedback} from './resident.js';
 const snapshot=()=>({session_id:'s',turn_id:'t',operation_id:'old-run',generation_revision:2,model_id:'model',voice_id:'voice',prompt_id:'prompt',speech_units:[{unit_id:'heard',text:'聞こえた部分．',state:'completed',synthesis_complete:true,playback_started:true},{unit_id:'partial',text:'まだ聞こえていない内容．',state:'interrupted',playback_started:true}]});
 test('feedback captures old generation and delivery before synchronous stop mutates the live run',async()=>{
  const old=snapshot();let stopped=false,payload;
@@ -32,3 +32,10 @@ test('resident controls have explicit initial consent mode target pause stop res
 });
 
 test('storage consent rejection never claims that a permanent preference was applied to the session',()=>{assert.match(residentResultText({saved:false,change:{status:'unsaved',reason:'storage_consent_required'}}),/保存していません/);assert.doesNotMatch(residentResultText({saved:false,change:{status:'unsaved',reason:'storage_consent_required'}}),/反映しました/);});
+
+test('discarded observation candidates release their one-use ticket without surfacing cleanup failure',async()=>{
+ const calls=[];
+ await releaseResidentCandidate({CancelResidentCandidate:(sessionID,operationID)=>{calls.push([sessionID,operationID]);return Promise.reject(Error('already expired'));}},'session','candidate');
+ await releaseResidentCandidate({CancelResidentCandidate:()=>{throw Error('bridge unavailable');}},'session','candidate');
+ assert.deepEqual(calls,[['session','candidate']]);
+});
