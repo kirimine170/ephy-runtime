@@ -361,24 +361,34 @@ type SearchResponse struct {
 }
 
 type SearchItem struct {
-	ChunkID            string   `json:"chunk_id"`
-	DocID              string   `json:"doc_id,omitempty"`
-	SourcePath         string   `json:"source_path"`
-	RelativePath       string   `json:"relative_path,omitempty"`
-	HeadingPath        []string `json:"heading_path"`
-	Project            string   `json:"project"`
-	Kind               string   `json:"kind,omitempty"`
-	Tags               []string `json:"tags"`
-	Sensitivity        string   `json:"sensitivity,omitempty"`
-	ChunkText          string   `json:"chunk_text"`
-	Score              float64  `json:"score"`
-	SourceType         string   `json:"source_type,omitempty"`
-	SourceID           string   `json:"source_id,omitempty"`
-	Title              string   `json:"title,omitempty"`
-	URL                string   `json:"url,omitempty"`
-	Snippet            string   `json:"snippet,omitempty"`
-	TrustLevel         string   `json:"trust_level,omitempty"`
-	InjectionSuspected bool     `json:"injection_suspected,omitempty"`
+	ChunkID            string                 `json:"chunk_id"`
+	DocID              string                 `json:"doc_id,omitempty"`
+	SourcePath         string                 `json:"source_path"`
+	RelativePath       string                 `json:"relative_path,omitempty"`
+	HeadingPath        []string               `json:"heading_path"`
+	Project            string                 `json:"project"`
+	Kind               string                 `json:"kind,omitempty"`
+	Tags               []string               `json:"tags"`
+	Sensitivity        string                 `json:"sensitivity,omitempty"`
+	ChunkText          string                 `json:"chunk_text"`
+	Score              float64                `json:"score"`
+	SourceType         string                 `json:"source_type,omitempty"`
+	SourceID           string                 `json:"source_id,omitempty"`
+	Title              string                 `json:"title,omitempty"`
+	URL                string                 `json:"url,omitempty"`
+	Snippet            string                 `json:"snippet,omitempty"`
+	TrustLevel         string                 `json:"trust_level,omitempty"`
+	InjectionSuspected bool                   `json:"injection_suspected,omitempty"`
+	KarteRecordV2      *KarteRecordV2Citation `json:"karte_record_v2,omitempty"`
+}
+
+// KarteRecordV2Citation keeps the complete v2 source identity separate from
+// the legacy v1 source fields. Its hash and event revision bind the citation.
+type KarteRecordV2Citation struct {
+	Target         recording.Target   `json:"target"`
+	Event          recording.EventRef `json:"event"`
+	ConversationID string             `json:"conversation_id"`
+	TurnID         string             `json:"turn_id"`
 }
 
 type QueryResponse struct {
@@ -864,6 +874,9 @@ func (a *App) chatWithContext(ctx context.Context, request ChatRequest, onToken 
 	messages, err := conversationMessages(request)
 	if err != nil {
 		return nil, err
+	}
+	if request.SourceScope == "recorded_conversation" {
+		return a.recordedRecallChat(ctx, request, onToken)
 	}
 
 	mode := request.Mode

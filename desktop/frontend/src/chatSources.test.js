@@ -34,3 +34,21 @@ test('source list exposes stable selection semantics', () => {
   assert.match(html, /data-source-index="1" aria-pressed="true"/);
   assert.match(html, /KARTE/);
 });
+
+test('v2 recorded source shows bound revision, hash, and event citation', () => {
+  const source = {
+    source_type: 'karte_record_v2', title: 'Recorded conversation',
+    chunk_text: '<private> starts at 10:00',
+    karte_record_v2: {
+      target: {doc_id: 'synthetic-doc', revision: 2, sha256: 'a'.repeat(64)},
+      event: {event_id: 'synthetic-event', event_revision: 1},
+    },
+  };
+  const preview = renderChatSourcePreviewHtml(source);
+  const list = renderChatSourceListHtml([source]);
+  assert.match(preview, /synthetic-doc@2#synthetic-event@1/);
+  assert.match(preview, new RegExp('a'.repeat(64)));
+  assert.match(preview, /&lt;private&gt;/);
+  assert.match(list, /KARTE V2/);
+  assert.match(list, /synthetic-doc@2#synthetic-event@1/);
+});
