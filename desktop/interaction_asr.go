@@ -348,6 +348,15 @@ func (e *InteractionEngine) finishASR(t *interactionTurn, a *interactionASRSessi
 		e.mu.Unlock()
 		return
 	}
+	// An activity-capable adapter must publish positive speech evidence before
+	// returning a final. Whisper flushes activity before its terminal/done ACK.
+	// Reject an inconsistent provider result before recording, history or LLM
+	// input; do not disguise a protocol/decoder failure as ordinary no-speech.
+	if final.Phase == "final" && a.activityMode && !a.speechObserved {
+		e.failLocked(t, "asr_stream_invalid")
+		e.mu.Unlock()
+		return
+	}
 	ms := time.Since(a.ended).Milliseconds()
 	a.metadata.FinalizationMS = &ms
 	a.completed = true

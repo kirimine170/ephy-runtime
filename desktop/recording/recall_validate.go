@@ -6,8 +6,8 @@ import (
 )
 
 // validateRecallEvents mirrors the conversation identity and correction checks
-// already enforced by Karte v2 proposals. The read envelope/hash alone does
-// not bind its separately serialized Events field to those identities.
+// already enforced by Karte v2 proposals. validateRecallBinding separately
+// binds these structurally valid events to the hash-verified Markdown.
 func validateRecallEvents(events []Event, spec RecordSpec, settings Settings) error {
 	if len(events) == 0 || len(events) > 256 || spec.Type != "conversation" || !validUUID(spec.ConversationID) {
 		return errors.New("invalid_recall_events")

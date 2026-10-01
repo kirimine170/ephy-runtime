@@ -24,11 +24,11 @@ func (a *App) recordedRecallChat(ctx context.Context, request ChatRequest, onTok
 	if store == nil {
 		return nil, errors.New("recording_storage_unavailable")
 	}
-	return fixedRecordedRecall(ctx, store, request.Prompt, onToken)
+	return fixedRecordedRecall(ctx, store, request, onToken)
 }
 
-func fixedRecordedRecall(ctx context.Context, store recordedRecaller, question string, onToken func(string)) (*ChatResponse, error) {
-	term := recallselect.SearchTerm(question)
+func fixedRecordedRecall(ctx context.Context, store recordedRecaller, request ChatRequest, onToken func(string)) (*ChatResponse, error) {
+	term := recallselect.SearchTerm(request.Prompt)
 	if term == "" {
 		return nil, errors.New("invalid_recall_query")
 	}
@@ -63,11 +63,31 @@ func fixedRecordedRecall(ctx context.Context, store recordedRecaller, question s
 	if len(lines) > 0 {
 		answer = strings.Join(lines, "\n")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if onToken != nil {
+		// Match the gateway adapter's interaction side channel. The engine
+		// publishes sources separately from its committed answer/speech, so
+		// citations must arrive first, after the same output authorization.
+		if observer, ok := ctx.Value(interactionChatEventKey{}).(func(ChatStreamEvent)); ok {
+			observer(ChatStreamEvent{RequestID: request.RequestID, Kind: "sources", Sources: sources})
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		onToken(answer)
 	}
+	// This in-process adapter owns a single, fully materialized answer. Its
+	// synthetic stop and end-of-stream are both known here; there is no
+	// outstanding provider stream. Preserve the assembler's terminal framing
+	// contract without weakening its checks for real gateway transports.
 	return &ChatResponse{
 		Answer: answer, Sources: sources, FinishReason: "stop",
-		Generation: &GenerationMetadata{SchemaVersion: 2, FinishReason: "stop", ProviderFinishReason: "stop", Complete: true, SegmentCount: 1},
+		Generation: &GenerationMetadata{
+			SchemaVersion: 2, FinishReason: "stop", ProviderFinishReason: "stop",
+			TerminalSSE: true, DoneReceived: true, TerminalSSEAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Complete: true, SegmentCount: 1, ReasoningTokenSource: "unavailable",
+		},
 	}, nil
 }

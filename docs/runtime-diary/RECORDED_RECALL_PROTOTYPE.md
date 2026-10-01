@@ -5,8 +5,8 @@ Status: draft implementation, 2026-10-01. This is a narrow C3 recall slice, not 
 ## Implemented scope
 
 - The explicit `recorded_conversation` chat source scope uses the existing privileged Go recording client and Karte Context Protocol v2. It does not route private records through v1, generic RAG, or a model.
-- Recall performs signed v2 search and target-bound read, validates event identities, selects current user assertions, and searches again to reject changed targets. Denied/failed reads do not fall back to cached snippets.
-- A fixed-answer response echoes selected assertions with citations carrying document ID, revision, SHA-256, conversation, turn, and event revision. It repeats recall immediately before output and emits no answer when authorization or selected content changed.
+- Recall performs signed v2 search and target-bound read, validates event identities, binds every separately serialized event and its header to the hash-verified canonical Markdown, selects current user assertions, and searches again to reject changed targets. Denied/failed reads do not fall back to cached snippets.
+- A fixed-answer response echoes selected assertions with citations carrying document ID, revision, SHA-256, conversation, turn, and event revision. It repeats recall immediately before output and emits no answer when authorization or selected content changed. On the interaction path, authorized source events precede answer delivery, and the local adapter supplies explicit synthetic terminal framing to the existing generation assembler.
 - Correction selection excludes superseded text and assistant output. Ambiguous branching correction lineages fail closed before query filtering.
 - Results are bounded to three assertions and 6,000 UTF-8 text bytes. The query planner is a simple lexical stub; natural-language/Japanese recall quality is not established.
 
@@ -22,6 +22,8 @@ Karte remains the canonical, human-editable knowledge platform. No Karte code or
 The earlier archive supplies the desktop adapter, frontend, and recording test. The corrected archive overrides `recall.go`, `recall_validate.go`, and `recallselect`, and supplies the real cross-process test. The earlier selector's branching-correction defect is not retained. Both supplied Karte reference files were byte-identical to the pinned Karte commit, so they are not copied into Runtime or proposed as Karte changes.
 
 Publication preparation adds the explicit `karte_integration` build tag to the Linux cross-process test so ordinary unit tests do not require an external Karte executable. The complete frontend source's correct middle-dot character is retained rather than the tracked patch's corrupted rendering. No binaries, raw test logs, private paths, live credentials, or production conversation data are included.
+
+The subsequent Codex P1 review identified missing interaction terminal framing, a missing interaction source-event emission, and unbound `Events` in otherwise hash-valid read responses. The source fixes and regressions address those three findings without changing Karte or weakening the generation assembler's checks. The new binding regression includes the unmodified synthetic read-response fixture from the pinned Karte commit; generated fixtures alone are not its compatibility evidence. Earlier archive binaries predate these fixes.
 
 ## Reproduce from source
 

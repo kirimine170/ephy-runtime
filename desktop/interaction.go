@@ -608,18 +608,21 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 	}()
 	response, err := runInteractionStage(ctx, e.Timeouts.LLM, func(llmCtx context.Context) (*ChatResponse, error) {
 		defer close(speech)
-		if t.request.InputKind == "text" {
-			llmCtx = context.WithValue(llmCtx, interactionChatEventKey{}, func(chatEvent ChatStreamEvent) {
-				e.mu.Lock()
-				defer e.mu.Unlock()
-				if !e.generationLiveLocked(t, revision, ctx) {
-					return
-				}
-				event := e.eventLocked(t, "chat")
-				event.Chat = &chatEvent
-				e.queueLocked(event)
-			})
-		}
+		llmCtx = context.WithValue(llmCtx, interactionChatEventKey{}, func(chatEvent ChatStreamEvent) {
+			// Voice needs the same citation identity as typed answers. Keep
+			// unrelated thinking/status events on their existing text-only path.
+			if t.request.InputKind != "text" && chatEvent.Kind != "sources" {
+				return
+			}
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if !e.generationLiveLocked(t, revision, ctx) {
+				return
+			}
+			event := e.eventLocked(t, "chat")
+			event.Chat = &chatEvent
+			e.queueLocked(event)
+		})
 		llmCtx = context.WithValue(llmCtx, interactionMemoryKey{}, func(ids []string) {
 			e.mu.Lock()
 			defer e.mu.Unlock()

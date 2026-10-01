@@ -95,7 +95,7 @@ func (s *Store) Recall(ctx context.Context, query string, limit int) ([]RecallSo
 		if readErr != nil {
 			return nil, readErr
 		}
-		if current.State != "active" || current.Record != hit.Record || validateRecallEvents(current.Events, current.Record, settings) != nil {
+		if current.State != "active" || current.Record != hit.Record || validateRecallEvents(current.Events, current.Record, settings) != nil || validateRecallBinding(current, settings) != nil {
 			return nil, errors.New("invalid_recall_response")
 		}
 		views := make([]recallselect.Event, len(current.Events))

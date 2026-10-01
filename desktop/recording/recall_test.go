@@ -82,15 +82,18 @@ func TestSyntheticRecallRestartCorrectionAndRevocation(t *testing.T) {
 	correction.InputKind = ""
 	correction.Corrects = &EventRef{EventID: first.EventID, EventRevision: first.Revision}
 	correction.CorrectionReason = "user_content"
-	markdown := []string{
-		first.Text + "\nPRIVATE_CANARY_DO_NOT_SEND_TO_MODEL",
-		first.Text + "\n" + correction.Text + "\nPRIVATE_CANARY_DO_NOT_SEND_TO_MODEL",
-	}
 	targets := []Target{
-		{DocID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("karte-record-v2\x00"+proposal.ScopeID+"\x00"+proposal.ProducerID+"\x00"+proposal.LogicalKey)).String(), Revision: 1, SHA256: hash([]byte(markdown[0]))},
-		{DocID: "", Revision: 2, SHA256: hash([]byte(markdown[1]))},
+		{DocID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("karte-record-v2\x00"+proposal.ScopeID+"\x00"+proposal.ProducerID+"\x00"+proposal.LogicalKey)).String(), Revision: 1},
+		{DocID: "", Revision: 2},
 	}
 	targets[1].DocID = targets[0].DocID
+	markdown := []string{
+		recallFixtureMarkdown(t, proposal, targets[0], []Event{first}),
+		recallFixtureMarkdown(t, proposal, targets[1], []Event{first, correction}),
+	}
+	for index := range targets {
+		targets[index].SHA256 = hash([]byte(markdown[index]))
+	}
 	var phase atomic.Int32
 	var readRequests atomic.Int32
 	stop := make(chan struct{})
@@ -158,6 +161,24 @@ func TestSyntheticRecallRestartCorrectionAndRevocation(t *testing.T) {
 						if step == 5 {
 							result.Events[1].Revision = 2
 						}
+						// These mutations remain structurally valid while the
+						// canonical Markdown and its Target hash are unchanged.
+						if step == 6 {
+							result.Events[1].EventID = uuid.NewString()
+						}
+						if step == 7 {
+							result.Events[1].Text = "The rehearsal starts at 23:00 on Tuesday."
+						}
+						if step == 8 {
+							result.Events[1].TurnID = uuid.NewString()
+						}
+						if step == 9 {
+							result.Events = result.Events[:1]
+						}
+						if step == 10 {
+							result.Events[0].EventID = uuid.NewString()
+							result.Events[1].Corrects = &EventRef{EventID: result.Events[0].EventID, EventRevision: 1}
+						}
 					}
 				}
 				results := []ReadResult{result}
@@ -201,13 +222,14 @@ func TestSyntheticRecallRestartCorrectionAndRevocation(t *testing.T) {
 	if sources, recallErr := restarted.Recall(ctx, "rehearsal", 5); recallErr == nil || len(sources) != 0 {
 		t.Fatalf("read failure disclosed memory: %v, %+v", recallErr, sources)
 	}
-	for _, bad := range []int32{3, 4, 5} {
+	badPhases := []int32{3, 4, 5, 6, 7, 8, 9, 10}
+	for _, bad := range badPhases {
 		phase.Store(bad)
 		if sources, recallErr := restarted.Recall(ctx, "rehearsal", 5); recallErr == nil || len(sources) != 0 {
 			t.Fatalf("invalid event binding disclosed memory: %v, %+v", recallErr, sources)
 		}
 	}
-	if readRequests.Load() != 7 {
+	if readRequests.Load() != int32(4+len(badPhases)) {
 		t.Fatal("search result was used without read")
 	}
 	phase.Store(1)
