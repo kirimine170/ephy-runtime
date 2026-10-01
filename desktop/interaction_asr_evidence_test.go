@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -114,10 +115,20 @@ func TestActivityASRAcceptsEvidencedFinalOnceWithoutPhraseFiltering(t *testing.T
 			store, home := newAppRecordingStore(t)
 			var calls atomic.Int32
 			transcripts := make(chan string, 8)
-			e := NewInteractionEngine(p, testVoiceTTS{}, func(_ context.Context, req ChatRequest, _ func(string)) (*ChatResponse, error) {
+			chatRelease := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseChat := func() { releaseOnce.Do(func() { close(chatRelease) }) }
+			e := NewInteractionEngine(p, testVoiceTTS{}, func(ctx context.Context, req ChatRequest, _ func(string)) (*ChatResponse, error) {
 				calls.Add(1)
 				if req.Prompt != text {
 					t.Error("evidenced final was changed")
+				}
+				// Keep the turn live until the queued transcript is observed.
+				// Production dispatch intentionally fences events after completion.
+				select {
+				case <-chatRelease:
+				case <-ctx.Done():
+					return nil, ctx.Err()
 				}
 				return completedVoiceResponse("```go\nfixture\n```"), nil
 			}, func(ev InteractionEvent) {
@@ -125,7 +136,10 @@ func TestActivityASRAcceptsEvidencedFinalOnceWithoutPhraseFiltering(t *testing.T
 					transcripts <- ev.Text
 				}
 			}, t.TempDir())
-			defer e.Close()
+			defer func() {
+				releaseChat()
+				e.Close()
+			}()
 			e.recorder = store
 			s, session := c02Start(t, e, &p.c02EngineProvider)
 			session.emit(evidenceActivity(session, 1, true))
@@ -136,11 +150,6 @@ func TestActivityASRAcceptsEvidencedFinalOnceWithoutPhraseFiltering(t *testing.T
 			session.emit(final)
 			session.emit(final)
 			session.result <- c02SessionResult{update: final}
-			got := awaitInteraction(t, e, s.OperationID, "COMPLETED")
-			session.emit(final)
-			if got.Transcript != text || calls.Load() != 1 {
-				t.Fatal("evidenced final was lost or duplicated", got)
-			}
 			select {
 			case got := <-transcripts:
 				if got != text {
@@ -148,6 +157,12 @@ func TestActivityASRAcceptsEvidencedFinalOnceWithoutPhraseFiltering(t *testing.T
 				}
 			case <-time.After(time.Second):
 				t.Fatal("missing transcript event")
+			}
+			releaseChat()
+			got := awaitInteraction(t, e, s.OperationID, "COMPLETED")
+			session.emit(final)
+			if got.Transcript != text || calls.Load() != 1 {
+				t.Fatal("evidenced final was lost or duplicated", got)
 			}
 			select {
 			case <-transcripts:
