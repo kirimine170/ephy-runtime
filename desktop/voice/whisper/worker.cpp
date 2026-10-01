@@ -1,6 +1,7 @@
 #include "whisper.h"
 #include "json.hpp"
 #include "resampler.h"
+#include "speech_evidence.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -68,10 +69,10 @@ struct Session {
     Resampler resampler;
     std::vector<float> pcm;
     std::atomic<bool> canceled{false}, finish{false};
-    int sequence=0,revision=0, speech_frames=0,step_ms=500;
-    size_t vad_offset=0,last_activity=0,last_speech=0,last_decode=0, bytes=0;
-    bool terminal=false, had_speech=false, partial=true;
-    float probability=0;
+    SpeechEvidence speech;
+    int sequence=0,revision=0,step_ms=500;
+    size_t vad_offset=0,last_activity=0,last_decode=0, bytes=0;
+    bool terminal=false, partial=true;
     std::string text;
     Clock::time_point started=Clock::now();
     Clock::time_point decoded_at=Clock::time_point::min();
@@ -107,9 +108,9 @@ class Worker {
             {"transcript",text},{"stable_prefix",std::string(phase)=="final"?text:""},
             {"error_code",error},{"monotonic_ms",std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now()-session.started).count()}});
         if(std::string(phase)=="activity") {
-            event["activity"]={{"audio_ms",session.pcm.size()/16},{"last_speech_ms",session.last_speech/16},
-                {"speech_ms",session.speech_frames*32},{"probability",session.probability},
-                {"speaking",session.probability>=.5f},{"has_speech",session.had_speech}};
+            event["activity"]={{"audio_ms",session.speech.audio_samples()/16},{"last_speech_ms",session.speech.last_speech_sample()/16},
+                {"speech_ms",session.speech.speech_samples()/16},{"probability",session.speech.probability()},
+                {"speaking",session.speech.speaking()},{"has_speech",session.speech.has_speech()}};
         }
         output(event);
     }
@@ -128,13 +129,8 @@ class Worker {
             if(!whisper_vad_detect_speech_no_reset(vad,frame,512)) fatal("asr_failed");
             const int n=whisper_vad_n_probs(vad);
             if(n<1) fatal("asr_failed");
-            s.probability=whisper_vad_probs(vad)[n-1];
-            if(!std::isfinite(s.probability)) fatal("asr_failed");
+            if(!s.speech.observe(whisper_vad_probs(vad)[n-1],count)) fatal("asr_failed");
             s.vad_offset+=count;
-            if(s.probability>=.5f) {
-                ++s.speech_frames; s.last_speech=s.vad_offset;
-                if(s.speech_frames>=2) s.had_speech=true;
-            }
         }
         if(s.pcm.size()-s.last_activity>=1600 || flush) {
             s.last_activity=s.pcm.size(); emit(s,"activity");
@@ -170,9 +166,9 @@ class Worker {
             if(ending || !active) continue;
             auto s=active;
             if(s->canceled) { close(*s,"canceled","","asr_canceled"); active.reset(); continue; }
-            if(!s->finish && (!s->partial || s->pcm.size()<6400 || !s->had_speech || s->last_decode>=s->last_speech+3200 || s->pcm.size()-s->last_decode<size_t(s->step_ms*16)
+            if(!s->finish && (!s->partial || s->pcm.size()<6400 || !s->speech.has_speech() || s->last_decode>=s->speech.last_speech_sample()+3200 || s->pcm.size()-s->last_decode<size_t(s->step_ms*16)
                 || (s->last_decode && Clock::now()-s->decoded_at<std::chrono::milliseconds(s->step_ms)))) continue;
-            if(s->finish && !s->had_speech) { close(*s,"no_speech"); active.reset(); continue; }
+            if(s->finish && !s->speech.has_speech()) { close(*s,"no_speech"); active.reset(); continue; }
             const bool final=s->finish;
             // Final sees the whole bounded utterance．Partials are revisable windows．
             const size_t begin=final?0:(s->pcm.size()>8*16000?s->pcm.size()-8*16000:0);
