@@ -1,5 +1,6 @@
 export function shouldUseGenericRagEndpoint({mode, webSearchEnabled, sourceScope}) {
   return mode === 'rag'
     && !webSearchEnabled
-    && sourceScope !== 'personal_context';
+    && sourceScope !== 'personal_context'
+    && sourceScope !== 'recorded_conversation';
 }

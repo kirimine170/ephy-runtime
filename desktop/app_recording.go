@@ -89,6 +89,18 @@ func (a *App) ReadRecordedConversation(target recording.Target) (recording.ReadR
 	return s.Read(ctx, target)
 }
 
+// RecallRecordedConversation uses Karte's current v2 search/read policy. It
+// exposes only matching, unsuperseded user events with their exact citations.
+func (a *App) RecallRecordedConversation(query string) ([]recording.RecallSource, error) {
+	s := a.recordingStore()
+	if s == nil {
+		return nil, errors.New("recording_storage_unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.Recall(ctx, query, 5)
+}
+
 func recordedAssistant(snapshot InteractionSnapshot, state string) (recording.Assistant, bool) {
 	complete := snapshot.Generation != nil && snapshot.Generation.Complete
 	a := recording.Assistant{Generation: "failed", Display: "none", Playback: "unknown", SpeechUnits: []recording.SpeechUnit{}}

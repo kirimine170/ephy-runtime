@@ -1022,6 +1022,7 @@ app.innerHTML = `
                   <option value="all">All sources</option>
                   <option value="project">Current Project</option>
                   <option value="personal_context">Karte Personal Context</option>
+                  <option value="recorded_conversation">Recorded conversations (v2)</option>
                   <option value="selected_docs">Selected Docs</option>
                 </select>
               </label>
@@ -1855,6 +1856,7 @@ function updateChatScopeSummary() {
     all: 'all',
     project: 'current project',
     personal_context: 'Karte Personal Context',
+    recorded_conversation: 'Recorded conversations (v2)',
     selected_docs: 'selected docs',
   };
   const parts = [`scope=${scopeLabelMap[chatSourceScope] || 'all'}`, `project=${project}`, `top_k=${topK}`];

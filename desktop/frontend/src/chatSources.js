@@ -10,7 +10,14 @@ function escapeHtml(value) {
 export function chatSourceTitle(source = {}, index = 0) {
   if (source.source_type === 'web') return source.title || source.source_id || `Web ${index + 1}`;
   if (source.source_type === 'karte_context') return source.title || source.source_id || `Karte ${index + 1}`;
+  if (source.source_type === 'karte_record_v2') return source.title || `Recorded conversation ${index + 1}`;
   return source.heading_path?.slice(-1)?.[0] || source.source_path || `Source ${index + 1}`;
+}
+
+function recordCitation(source) {
+  const citation = source.karte_record_v2;
+  if (!citation?.target || !citation?.event) return '';
+  return `${citation.target.doc_id}@${citation.target.revision}#${citation.event.event_id}@${citation.event.event_revision}`;
 }
 
 export function renderChatSourcePreviewHtml(source = null) {
@@ -20,6 +27,16 @@ export function renderChatSourcePreviewHtml(source = null) {
         <div class="source-empty-mark">↗</div>
         <strong>参照資料はまだありません</strong>
         <p>Personal ContextやLibraryを使った回答では，根拠と文書previewがここに表示されます．</p>
+      </div>
+    `;
+  }
+  if (source.source_type === 'karte_record_v2') {
+    return `
+      <div class="runtime-result-card">
+        <div class="runtime-result-head"><span class="runtime-result-title">${escapeHtml(chatSourceTitle(source))}</span><span class="runtime-pill neutral">Karte v2 · local untrusted</span></div>
+        <div class="runtime-result-meta">${escapeHtml(recordCitation(source))}</div>
+        <div class="runtime-result-meta">SHA-256: ${escapeHtml(source.karte_record_v2?.target?.sha256 || '-')}</div>
+        <div class="runtime-result-text">${escapeHtml(source.chunk_text || '')}</div>
       </div>
     `;
   }
@@ -48,7 +65,14 @@ export function renderChatSourcePreviewHtml(source = null) {
 }
 
 export function renderChatSourceListHtml(sources = [], activeIndex = 0) {
-  return sources.map((source, index) => `
+  return sources.map((source, index) => source.source_type === 'karte_record_v2' ? `
+    <button class="source-card ${index === activeIndex ? 'active' : ''}" data-source-index="${index}" aria-pressed="${index === activeIndex}">
+      <div class="source-card-top"><strong>${escapeHtml(chatSourceTitle(source, index))}</strong><span>KARTE V2</span></div>
+      <div class="source-card-path">${escapeHtml(recordCitation(source))}</div>
+      <div class="source-card-meta">Karte v2</div>
+      <div class="source-card-heading">${escapeHtml((source.chunk_text || '').slice(0, 120))}</div>
+    </button>
+  ` : `
     <button class="source-card ${index === activeIndex ? 'active' : ''}" data-source-index="${index}" aria-pressed="${index === activeIndex}">
       <div class="source-card-top">
         <strong>${escapeHtml(chatSourceTitle(source, index))}</strong>

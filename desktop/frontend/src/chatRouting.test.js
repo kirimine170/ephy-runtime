@@ -19,6 +19,14 @@ test('keeps Personal Context on the Karte-aware chat endpoint', () => {
   }), false);
 });
 
+test('keeps recorded v2 conversations on the chat endpoint', () => {
+  assert.equal(shouldUseGenericRagEndpoint({
+    mode: 'rag',
+    webSearchEnabled: false,
+    sourceScope: 'recorded_conversation',
+  }), false);
+});
+
 test('keeps web-grounded chat on the combined chat endpoint', () => {
   assert.equal(shouldUseGenericRagEndpoint({
     mode: 'rag',
