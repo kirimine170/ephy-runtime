@@ -537,6 +537,10 @@ export function mountVoiceInteraction({
 
   function finish(run, snapshot) {
     if (run !== current || run.finished) return;
+    const recoverSources = !run.cancelRequested && snapshot.state === 'COMPLETED' && snapshot.generation?.complete === true
+      && snapshot.operation_id === run.snapshot.operation_id && snapshot.session_id === run.snapshot.session_id
+      && snapshot.turn_id === run.snapshot.turn_id && snapshot.trace_id === run.snapshot.trace_id
+      && (snapshot.generation_revision || 1) === (run.snapshot.generation_revision || 1) && Array.isArray(snapshot.sources);
     if (run.streaming && !run.endRequested) {
       snapshot = {...snapshot};
       delete snapshot.transcript;
@@ -546,6 +550,12 @@ export function mountVoiceInteraction({
     if (['no_speech', 'resident_control'].includes(snapshot.input_outcome) && snapshot.state === 'CANCELED') run.relisten = true;
     if (run.voice && snapshot.state === 'FAILED' && !run.snapshot.transcript) run.snapshot.preview = run.liveTranscript;
     notifyTranscript(run, run.snapshot.transcript);
+    // Successful no-audio turns may complete before queued chat events are
+    // dispatched. Recover only this accepted revision's authorized citations.
+    if (recoverSources) {
+      run.snapshot.sources = structuredClone(snapshot.sources);
+      onChatEvent(run.snapshot, {request_id: run.snapshot.operation_id, kind: 'sources', sources: structuredClone(snapshot.sources)});
+    }
     if (run.voice && snapshot.state === 'COMPLETED' && run.interruptionGuard?.transfer()) {
       run.voice.handoffAt = now();
     }

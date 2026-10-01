@@ -2003,6 +2003,60 @@ test('typed preflight cancellation creates no operation and a fast terminal stil
   h.controller.dispose();
 });
 
+test('completed typed no-audio snapshot recovers exact citations before answer and clears no-match cards', async () => {
+  const source = {source_type: 'karte_record_v2', source_id: 'R1', trust_level: 'local_untrusted',
+    chunk_text: 'Remember (Tuesday.', karte_record_v2: {target: {doc_id: 'synthetic-doc', revision: 2, sha256: 'a'.repeat(64)},
+      event: {event_id: 'synthetic-event', event_revision: 1}, conversation_id: 'synthetic-conversation', turn_id: 'synthetic-turn'}};
+  for (const sources of [[source], []]) {
+    const order = [];
+    const h = harness({onChatEvent: (...args) => { h.calls.chat.push(args); order.push('sources'); },
+      onComplete: (...args) => { h.calls.complete.push(args); order.push('complete'); }});
+    await h.controller.startText({session_id: 'session', chat: {prompt: 'synthetic input'}});
+    const final = snapshot(1, 'COMPLETED', {input_kind: 'text', generation_revision: 1, transcript: 'synthetic input',
+      speech_error_code: 'tts_unavailable', generation: {complete: true, finish_reason: 'stop'},
+      response_plan: {text: sources.length ? 'Remember (Tuesday. [R1]' : 'No authorized saved conversation matched.'}, sources: structuredClone(sources)});
+    // No live source/output/audio event is delivered before this terminal state.
+    h.event(1, 'state', {snapshot: final});
+    assert.deepEqual(order, ['sources', 'complete']);
+    assert.deepEqual(h.calls.chat[0][1], {request_id: 'op-1', kind: 'sources', sources});
+    assert.equal(h.calls.complete[0][0].response_plan.text, final.response_plan.text);
+    assert.deepEqual(h.calls.complete[0][0].sources, sources);
+    assert.equal(h.calls.output.length, 0);
+    assert.equal(h.calls.playback.length, 0);
+    if (sources.length) {
+      h.calls.chat[0][1].sources[0].karte_record_v2.target.doc_id = 'mutated';
+      final.sources[0].chunk_text = 'mutated';
+      assert.equal(h.controller.lastSnapshot.sources[0].karte_record_v2.target.doc_id, 'synthetic-doc');
+      assert.equal(h.controller.lastSnapshot.sources[0].chunk_text, 'Remember (Tuesday.');
+    }
+    h.event(1, 'state', {snapshot: final});
+    assert.equal(h.calls.chat.length, 1);
+    await h.controller.dispose();
+  }
+});
+
+test('terminal citation recovery rejects failed canceled wrong-identity and stale-revision snapshots', async () => {
+  for (const mismatch of [{state: 'FAILED'}, {state: 'CANCELED'}, {state: 'INCOMPLETE'},
+    {operation_id: 'other'}, {session_id: 'other'}, {turn_id: 'other'}, {trace_id: 'other'}, {generation_revision: 2}]) {
+    const h = harness();
+    await h.controller.startText({session_id: 'session', chat: {prompt: 'synthetic input'}});
+    h.event(1, 'state', {snapshot: snapshot(1, 'COMPLETED', {generation_revision: 1,
+      generation: {complete: true}, sources: [{source_id: 'must-not-recover'}], ...mismatch})});
+    assert.equal(h.calls.chat.length, 0);
+    await h.controller.dispose();
+  }
+  const pending = deferred();
+  const h = harness({bridge: {CancelInteraction: () => pending.promise}});
+  await h.controller.startText({session_id: 'session', chat: {prompt: 'synthetic input'}});
+  const canceling = h.controller.cancel();
+  const completed = snapshot(1, 'COMPLETED', {generation: {complete: true}, sources: [{source_id: 'must-not-recover'}]});
+  h.event(1, 'state', {snapshot: completed});
+  pending.resolve(completed);
+  await canceling;
+  assert.equal(h.calls.chat.length, 0);
+  await h.controller.dispose();
+});
+
 test('resident controls relisten after intercepted real final without adding a fake chat message', async () => {
   const h=harness();await h.controller.startSession();h.contexts[0].capture(speechFrame());await h.controller.stop();
   h.state(1,'CANCELED',{input_outcome:'resident_control'});await tick();await tick();

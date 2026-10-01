@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"desktop/recording"
 	"desktop/recording/recallselect"
@@ -90,4 +91,50 @@ func fixedRecordedRecall(ctx context.Context, store recordedRecaller, request Ch
 			Complete: true, SegmentCount: 1, ReasoningTokenSource: "unavailable",
 		},
 	}, nil
+}
+
+// generateRecordedRecall handles only the explicitly selected local recall
+// adapter. Saved event text is already complete data, even when it contains
+// unmatched Markdown. Never repair, continue, or interpret it as model output.
+func generateRecordedRecall(ctx context.Context, request ChatRequest, prefix string, chat func(context.Context, ChatRequest, func(string)) (*ChatResponse, error), progress func(GenerationProgress)) (*ChatResponse, error) {
+	if request.SourceScope != "recorded_conversation" || prefix != "" || chat == nil {
+		return nil, errors.New("generation_invalid_request")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var observed strings.Builder
+	overflow := false
+	response, err := chat(ctx, request, func(delta string) {
+		if ctx.Err() != nil || overflow {
+			return
+		}
+		if len(delta) > maxGenerationTextBytes-observed.Len() {
+			overflow = true
+			return
+		}
+		observed.WriteString(delta)
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err != nil {
+		return nil, err
+	}
+	if response == nil || response.Generation == nil || !response.Generation.Complete || response.FinishReason != "stop" || response.Generation.FinishReason != "stop" {
+		return nil, errors.New("generation_incomplete")
+	}
+	if overflow || len(response.Answer) > maxGenerationTextBytes || !utf8.ValidString(response.Answer) {
+		return nil, errors.New("generation_text_limit")
+	}
+	if response.Answer == "" || response.Answer != observed.String() {
+		return nil, errors.New("generation_inconsistent_response")
+	}
+	// Sources were sent by the adapter before its answer callback. Publish the
+	// complete literal answer once through the normal live/revision-fenced
+	// interaction progress path; Markdown parsing must not drop saved content.
+	if progress != nil {
+		progress(GenerationProgress{CommittedText: response.Answer, SpeechUnits: []string{response.Answer}, Metadata: *cloneGenerationMetadata(response.Generation)})
+	}
+	return response, nil
 }

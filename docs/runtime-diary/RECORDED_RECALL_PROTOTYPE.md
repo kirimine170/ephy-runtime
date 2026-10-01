@@ -6,7 +6,7 @@ Status: draft implementation, 2026-10-01. This is a narrow C3 recall slice, not 
 
 - The explicit `recorded_conversation` chat source scope uses the existing privileged Go recording client and Karte Context Protocol v2. It does not route private records through v1, generic RAG, or a model.
 - Recall performs signed v2 search and target-bound read, validates event identities, binds every separately serialized event and its header to the hash-verified canonical Markdown, selects current user assertions, and searches again to reject changed targets. Denied/failed reads do not fall back to cached snippets.
-- A fixed-answer response echoes selected assertions with citations carrying document ID, revision, SHA-256, conversation, turn, and event revision. It repeats recall immediately before output and emits no answer when authorization or selected content changed. On the interaction path, authorized source events precede answer delivery, and the local adapter supplies explicit synthetic terminal framing to the existing generation assembler.
+- A fixed-answer response echoes selected assertions with citations carrying document ID, revision, SHA-256, conversation, turn, and event revision. It repeats recall immediately before output and emits no answer when authorization or selected content changed. The recorded-conversation interaction uses a single materialized-answer path so unmatched Markdown punctuation cannot trigger model continuation or repair; ordinary model assembly is unchanged. Authorized source events precede answer delivery. A successful same-revision snapshot also retains citation data for recovery when typed text completes without playable audio; failed/canceled outcomes do not expose snapshot citations.
 - Correction selection excludes superseded text and assistant output. Ambiguous branching correction lineages fail closed before query filtering.
 - Results are bounded to three assertions and 6,000 UTF-8 text bytes. The query planner is a simple lexical stub; natural-language/Japanese recall quality is not established.
 
@@ -25,18 +25,21 @@ Publication preparation adds the explicit `karte_integration` build tag to the L
 
 The subsequent Codex P1 review identified missing interaction terminal framing, a missing interaction source-event emission, and unbound `Events` in otherwise hash-valid read responses. The source fixes and regressions address those three findings without changing Karte or weakening the generation assembler's checks. The new binding regression includes the unmodified synthetic read-response fixture from the pinned Karte commit; generated fixtures alone are not its compatibility evidence. Earlier archive binaries predate these fixes.
 
+A follow-up P1 review identified ordinary Markdown repair incorrectly discarding arbitrary stored user text. Materialized recall now preserves literal answer/speech text and rejects continuation prefixes, with delimiter and multisource regressions. Completed-snapshot citation recovery covers the related typed immediate-TTS-failure dispatch race without relaxing terminal, cancellation, or generation-revision fences. Empty authorized sources remain distinct from unavailable recovery, so a no-match result can clear previous source cards.
+
 ## Reproduce from source
 
 Use the repository's documented Go 1.25 and frontend prerequisites. On Linux, build the reference Karte control binary from the pinned Karte checkout into a temporary directory outside either checkout. `KARTE_CHECKOUT` denotes that checkout; all credentials and records used by the tests are synthetic and temporary. `TMPDIR` must also resolve outside every Git checkout: the recording store intentionally rejects a private root with any Git ancestor. The usual system temporary directory is suitable; do not disable that guard.
 
 ```sh
 node --test desktop/frontend/src/chatRouting.test.js desktop/frontend/src/chatSources.test.js
+node --test desktop/frontend/src/voiceInteraction.test.js
 node --check desktop/frontend/src/main.js
 python3 scripts/validate_repository.py --check-sensitive-patterns
 cd desktop
 go test ./recording/recallselect -count=1
 go test ./recording -run '^TestSyntheticRecallRestartCorrectionAndRevocation$' -count=1
-go test . -run '^TestFixedRecordedRecallCitationAndOutputAuthorization$' -count=1
+go test . -run 'RecordedRecall' -count=1
 ```
 
 For the opt-in Linux integration test, from the Runtime repository root:

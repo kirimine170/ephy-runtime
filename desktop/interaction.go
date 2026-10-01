@@ -50,6 +50,7 @@ type ResponsePlan struct {
 	Interruptible bool      `json:"interruptible"`
 }
 type InteractionSnapshot struct {
+	Sources            []SearchItem                  `json:"sources"`
 	MemoryIDs          []string                       `json:"memory_ids,omitempty"`
 	ModelID            string                         `json:"model_id,omitempty"`
 	VoiceID            string                         `json:"voice_id,omitempty"`
@@ -100,6 +101,7 @@ type playbackChunk struct {
 	waitingAt, startedAt time.Time
 }
 type interactionTurn struct {
+	recallSources          []SearchItem
 	approvedCandidate      string
 	recordingKey           string
 	fillerIdentityReady    bool
@@ -206,6 +208,7 @@ func (e *InteractionEngine) eventLocked(t *interactionTurn, kind string) Interac
 // under the state mutex, including when the UI calls Playback synchronously.
 func (e *InteractionEngine) queueLocked(event InteractionEvent) { e.events <- event }
 func cloneInteractionSnapshot(s InteractionSnapshot) InteractionSnapshot {
+	s.Sources = cloneInteractionSources(s.Sources)
 	s.MemoryIDs = append([]string(nil), s.MemoryIDs...)
 	s.Generation = cloneGenerationMetadata(s.Generation)
 	if s.InputHandoff != nil {
@@ -225,6 +228,22 @@ func cloneInteractionSnapshot(s InteractionSnapshot) InteractionSnapshot {
 		s.ResponsePlan = &p
 	}
 	return s
+}
+
+func cloneInteractionSources(sources []SearchItem) []SearchItem {
+	if sources == nil {
+		return nil
+	}
+	copy := append([]SearchItem{}, sources...)
+	for index := range copy {
+		copy[index].HeadingPath = append([]string(nil), sources[index].HeadingPath...)
+		copy[index].Tags = append([]string(nil), sources[index].Tags...)
+		if sources[index].KarteRecordV2 != nil {
+			citation := *sources[index].KarteRecordV2
+			copy[index].KarteRecordV2 = &citation
+		}
+	}
+	return copy
 }
 func (e *InteractionEngine) transitionLocked(t *interactionTurn, state string) error {
 	old := t.snapshot.State
@@ -726,6 +745,11 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 			onProgress(GenerationProgress{CommittedText: t.approvedCandidate, SpeechUnits: []string{generationSpeechText(t.approvedCandidate)}, Metadata: metadata})
 			return &ChatResponse{Answer: t.approvedCandidate, FinishReason: "stop", Generation: &metadata}, nil
 		}
+		// App.chatWithContext routes this explicit scope only to the local,
+		// fully materialized recall adapter, never to a model or gateway.
+		if req.SourceScope == "recorded_conversation" {
+			return generateRecordedRecall(llmCtx, req, prefix, chat, onProgress)
+		}
 		return assembleGeneration(llmCtx, req, limits, prefix, chat, onProgress)
 	})
 	if err != nil {
@@ -749,6 +773,11 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 	}
 	t.snapshot.Generation = cloneGenerationMetadata(response.Generation)
 	t.snapshot.ResponsePlan = responsePlan(response.Answer)
+	if req.SourceScope == "recorded_conversation" && response.Generation.Complete {
+		// Keep only already-authorized citation data private until the final
+		// state is known. Terminal snapshots can outlive queued source events.
+		t.recallSources = cloneInteractionSources(response.Sources)
+	}
 	t.generationDone = true
 	if err := e.checkpointRecordingLocked(t); err != nil {
 		e.failLocked(t, "recording_storage_failed")
@@ -882,6 +911,8 @@ func (e *InteractionEngine) Continue(op string) (InteractionSnapshot, error) {
 	}
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 	t.snapshot.GenerationRevision = nextRevision
+	t.snapshot.Sources = nil
+	t.recallSources = nil
 	t.snapshot.State = "THINKING"
 	t.snapshot.ErrorCode = ""
 	t.snapshot.Generation = nil
@@ -1090,6 +1121,11 @@ func (e *InteractionEngine) finishLocked(t *interactionTurn, state, name, code s
 	event := e.eventLocked(t, "trace")
 	event.Trace = trace
 	e.queueLocked(event)
+	t.snapshot.Sources = nil
+	if state == "COMPLETED" {
+		t.snapshot.Sources = cloneInteractionSources(t.recallSources)
+	}
+	t.recallSources = nil
 	_ = e.transitionLocked(t, state)
 	t.cancel()
 	if t.asr != nil {
