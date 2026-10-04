@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: kirimine170/Karte
-          ref: 35a15e19affc8dcf01dd5bd3c330988f6fc93128
+          ref: 3c3760d69b3ac3e2591ffc4302abdb7bdaf02491
           path: .contract/karte
       - uses: actions/setup-python@v5
         with:

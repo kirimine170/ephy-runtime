@@ -54,7 +54,11 @@ class KarteOutbox:
         path = self._receipt_path(candidate_id)
         if not path.exists():
             return None
-        return self._read_receipt_file(path)
+        receipt = self._read_receipt_file(path)
+        # The requested spelling can open a differently cased directory entry.
+        if not any(entry.name == path.name for entry in self.receipts_dir.iterdir()):
+            raise ValueError("receipt candidate_id does not match filename")
+        return receipt
 
     def list_receipts(self) -> list[KarteReceipt]:
         return [self._read_receipt_file(path) for path in sorted(self.receipts_dir.glob("*.json")) if not path.name.startswith(".")]

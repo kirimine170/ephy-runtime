@@ -61,6 +61,36 @@ def test_receipt_identity_is_case_sensitive(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("result", ["accepted", "rejected", "conflict", "invalid"])
+def test_receipt_identity_uses_actual_filename_case(tmp_path: Path, result: str) -> None:
+    service = KarteConversationService(tmp_path)
+    payload = _fixture("accepted-receipt.json")
+    actual_id = payload["candidate_id"]
+    requested_id = actual_id.upper()
+    payload.update(candidate_id=requested_id, result=result)
+    (service.outbox.receipts_dir / f"{actual_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+    proposal_payload = _fixture("append-proposal.json")
+    proposal_payload["candidate_id"] = requested_id
+    proposal = KarteChangeProposal.model_validate(proposal_payload)
+    before = _snapshot(tmp_path)
+
+    for client in (service, KarteConversationService(tmp_path)):
+        if (client.outbox.receipts_dir / f"{requested_id}.json").exists():
+            for action in (
+                lambda: client.outbox.read_receipt(requested_id),
+                lambda: client.status(requested_id),
+                lambda: client.outbox.publish(proposal),
+            ):
+                with pytest.raises(ValueError, match="receipt candidate_id does not match filename"):
+                    action()
+        else:
+            assert client.outbox.read_receipt(requested_id) is None
+            assert client.status(requested_id).state == "missing"
+        with pytest.raises(ValueError, match="receipt candidate_id does not match filename"):
+            client.outbox.list_receipts()
+        assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("result", ["accepted", "rejected", "conflict", "invalid"])
 def test_matching_receipt_survives_restart_and_publish_retry(tmp_path: Path, result: str) -> None:
     proposal = KarteChangeProposal.model_validate(_fixture("append-proposal.json"))
     payload = _fixture("accepted-receipt.json")
