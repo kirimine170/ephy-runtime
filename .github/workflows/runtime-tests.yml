@@ -36,6 +36,40 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: python -m pytest -q
 
+  karte-linux-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Ephy Runtime
+        uses: actions/checkout@v4
+      - name: Check out the receipt identity companion
+        uses: actions/checkout@v4
+        with:
+          repository: kirimine170/Karte
+          ref: 35a15e19affc8dcf01dd5bd3c330988f6fc93128
+          path: .contract/karte
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - run: python -m pip install -e '.[dev]'
+      - name: Verify v1 receipt identity across Go and Python processes
+        env:
+          EPHY_TEST_KARTE_ROOT: ${{ github.workspace }}/.contract/karte
+        run: python -m pytest tests/test_karte_receipt_identity.py tests/test_karte_receipt_identity_integration.py -q
+      - name: Build the real Karte v2 control
+        run: go build -o "$RUNNER_TEMP/karte-ephy-control" ./cmd/karte-ephy-control
+        working-directory: .contract/karte
+      - name: Verify correction selection and real v2 process round trip
+        env:
+          EPHY_KARTE_CONTROL_BIN: ${{ runner.temp }}/karte-ephy-control
+        run: |
+          go test ./recording/recallselect -count=1 -v
+          go test -tags karte_integration ./recording -run '^TestCombinedKarteRuntimeProcessRoundTrip$' -count=1 -v -timeout=50s
+        working-directory: desktop
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

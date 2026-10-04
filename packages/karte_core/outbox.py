@@ -54,10 +54,16 @@ class KarteOutbox:
         path = self._receipt_path(candidate_id)
         if not path.exists():
             return None
-        return KarteReceipt.model_validate(self._read_json_file(path))
+        return self._read_receipt_file(path)
 
     def list_receipts(self) -> list[KarteReceipt]:
-        return [KarteReceipt.model_validate(self._read_json_file(path)) for path in sorted(self.receipts_dir.glob("*.json")) if not path.name.startswith(".")]
+        return [self._read_receipt_file(path) for path in sorted(self.receipts_dir.glob("*.json")) if not path.name.startswith(".")]
+
+    def _read_receipt_file(self, path: Path) -> KarteReceipt:
+        receipt = KarteReceipt.model_validate(self._read_json_file(path))
+        if receipt.candidate_id != path.stem:
+            raise ValueError("receipt candidate_id does not match filename")
+        return receipt
 
     def _receipt_path(self, candidate_id: str) -> Path:
         return self.receipts_dir / f"{candidate_id}.json"
