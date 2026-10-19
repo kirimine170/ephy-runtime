@@ -361,15 +361,13 @@ def build_router() -> APIRouter:
                         karte_context_status = _karte_context_unavailable_status()
             elif query_text:
                 try:
-                    local_sources = _mark_local_sources(
-                        rag_service.search_grounding_sources(
-                            query=query_text,
-                            project=project,
-                            source_path=source_path,
-                            tags=tags,
-                            top_k=top_k,
-                        )
-                    )
+                    grounding_options = {"query": query_text, "project": project, "source_path": source_path,
+                                         "tags": tags, "top_k": top_k}
+                    if turn is not None:
+                        grounding = await asyncio.to_thread(rag_service.search_grounding_sources, **grounding_options)
+                    else:
+                        grounding = rag_service.search_grounding_sources(**grounding_options)
+                    local_sources = _mark_local_sources(grounding)
                     local_grounding_sources = local_sources
                 except RuntimeError:
                     local_sources = []

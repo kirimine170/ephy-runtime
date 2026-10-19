@@ -263,6 +263,7 @@ class WorkerSearchProvider:
             # punctuation in prose fields．The submitted input/hash remain exact．
             expected_result_query = {**expected_query, "text": expected_query["text"].replace("、", "，").replace("。", "．")}
             query = result.payload.queries[0]
+            budget = session.submit["budget"]
             if (response.get("job_id") != session.job_id or response.get("state") != "completed"
                     or response.get("stop_reason") is not None or response.get("usage") != view.get("usage")
                     or result.job_id != session.job_id or result.attempt_id != view.get("attempt_id")
@@ -271,9 +272,27 @@ class WorkerSearchProvider:
                     or any(getattr(query, key) != value for key, value in expected_result_query.items())
                     or query.status != "ok" or query.diagnostic.unresponsive
                     or result.usage.model_dump() != response.get("usage")
+                    or result.usage.search_requests > budget["search_requests"]
+                    or result.usage.search_credits > budget["search_requests"]
+                    or result.usage.fetch_requests != 0 or result.usage.document_bytes != 0
+                    or result.usage.model_requests != 0
+                    or len(result.payload.candidates) > budget["max_sources"]
                     or query.result_count != len(result.payload.candidates)
                     or any(candidate.query_id != "Q1" for candidate in result.payload.candidates)):
                 raise ValueError()
+            if result.manifest:
+                if len(result.manifest) != 1:
+                    raise ValueError()
+                pack = result.manifest[0]
+                if (pack.name, pack.media_type, pack.schema_version) != ("result-pack.json", "application/json", 1):
+                    raise ValueError()
+                # WorkerService uploads the original envelope before appending this reference．
+                original = result.model_dump(mode="json")
+                original["manifest"] = []
+                content = json.dumps(original, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":"), allow_nan=False).encode()
+                if pack.bytes != len(content) or pack.sha256 != hashlib.sha256(content).hexdigest():
+                    raise ValueError()
         except (ValidationError, ValueError, TypeError, IndexError):
             raise WorkerSearchError("worker_result_invalid", session=session) from None
         return self._sanitizer.sanitize([item.model_dump() for item in result.payload.candidates])

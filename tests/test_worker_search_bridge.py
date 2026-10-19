@@ -1372,3 +1372,353 @@ def test_turn_cancellation_during_completion_cleanup_closes_abandoned_response_o
         assert service._plans[plan["plan_id"]].active_turns == 0
         await client.aclose()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("violation", [
+    "search_requests", "search_credits", "fetch_requests", "document_bytes", "model_requests", "manifest", "candidates",
+])
+def test_agreed_result_outside_approved_search_budget_is_rejected_before_sanitizer_or_claims(monkeypatch, violation):
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch)
+        observed = {}
+        def mutate(result):
+            if violation in {"search_requests", "search_credits"}:
+                result["usage"][violation] = 3
+            elif violation in {"fetch_requests", "document_bytes", "model_requests"}:
+                result["usage"][violation] = 1
+            elif violation == "manifest":
+                result["manifest"] = [{"artifact_id": "artifact-fixture", "name": "unexpected.txt", "media_type": "text/plain",
+                                       "bytes": 1, "sha256": "0" * 64, "schema_version": 1}]
+            else:
+                first = result["payload"]["candidates"][0]
+                result["payload"]["candidates"] = [
+                    {**first, "url": f"https://example.com/result-{index}", "rank": index + 1} for index in range(6)]
+                result["payload"]["queries"][0]["result_count"] = 6
+                result["payload"]["queries"][0]["diagnostic"]["result_count"] = 6
+        manager.mutate_result = mutate
+        def handler(request):
+            response = manager(request)
+            if request.method == "GET":
+                observed["result" if request.url.path.endswith("/result") else "view"] = response.json()
+            return response
+        manager_client._transport = httpx.MockTransport(handler)
+        sanitized = []
+        original_sanitize = service._provider._sanitizer.sanitize
+        def track_sanitize(candidates):
+            sanitized.append(candidates)
+            return original_sanitize(candidates)
+        monkeypatch.setattr(service._provider._sanitizer, "sanitize", track_sanitize)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            response = await client.post("/v1/chat/completions", json={
+                "model": "fast", "messages": [{"role": "user", "content": "public question"}],
+                "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}})
+        assert response.status_code == 502
+        detail = response.json()["detail"]
+        assert detail["code"] == "worker_result_invalid" and detail["plan_id"] == plan["plan_id"]
+        assert "payload" not in detail and "usage" not in detail and "unexpected.txt" not in response.text
+        assert observed["view"]["result"] == observed["result"]["result"]
+        assert observed["view"]["usage"] == observed["result"]["usage"] == observed["result"]["result"]["usage"]
+        assert sanitized == [] and adapter.extract_calls == adapter.final_calls == 0
+        record = service._plans[plan["plan_id"]]
+        assert record.completed is None and record.active_turns == 0
+        assert manager.submit_calls == len(manager.jobs) == 1
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("candidate_count", [0, 5])
+def test_agreed_search_result_at_budget_boundary_and_empty_results_remain_valid(monkeypatch, candidate_count):
+    async def scenario():
+        service, manager, _, adapter, client = make_service(monkeypatch)
+        def mutate(result):
+            result["usage"].update(search_requests=2, search_credits=2)
+            first = result["payload"]["candidates"][0]
+            result["payload"]["candidates"] = [
+                {**first, "url": f"https://example.com/result-{index}", "rank": index + 1} for index in range(candidate_count)]
+            result["payload"]["queries"][0]["result_count"] = candidate_count
+            result["payload"]["queries"][0]["diagnostic"]["result_count"] = candidate_count
+        manager.mutate_result = mutate
+        plan = await service.create_plan("public question")
+        sources, context = await service.search_for_chat("public question", plan["plan_id"])
+        assert len(sources) == candidate_count
+        assert bool(context) == bool(candidate_count)
+        assert adapter.extract_calls == (1 if candidate_count else 0)
+        assert await service.search_for_chat("public question", plan["plan_id"]) == (sources, context)
+        record = service._plans[plan["plan_id"]]
+        assert record.worker_session.submit["budget"]["search_requests"] == 2
+        assert record.worker_session.submit["budget"]["max_sources"] == 5
+        assert record.completed == (sources, context)
+        assert manager.submit_calls == len(manager.jobs) == 1
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_explicit_cancel_interrupts_awaiting_blocked_normal_rag_before_three_seconds_and_never_submits(monkeypatch, stream):
+    import threading
+
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch)
+        app = lifecycle_app(service, config, adapter)
+        entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+        calls = []
+        def hold_rag(**kwargs):
+            calls.append(kwargs)
+            entered.set()
+            try:
+                assert release.wait(5), "test RAG cleanup did not release its thread"
+                return []
+            finally:
+                returned.set()
+        app.state.rag_service = SimpleNamespace(search_grounding_sources=hold_rag)
+        plan = await service.create_plan("public question")
+        payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                   "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            chat = asyncio.create_task(client.post("/v1/chat/completions", json=payload))
+            try:
+                assert await asyncio.to_thread(entered.wait, 1)
+                assert not returned.is_set()
+                started = time.monotonic()
+                response = await asyncio.wait_for(client.post("/v1/web-search/cancel", json={"plan_id": plan["plan_id"]}), 1)
+                assert response.status_code == 200 and time.monotonic() - started < 3
+                assert response.json()["job_id"] is None and response.json()["state"] == "cancelled"
+                answer = await asyncio.wait_for(chat, 1)
+                assert answer.status_code == 502 and answer.json()["detail"]["code"] == "worker_search_cancelled"
+                assert not release.is_set() and not returned.is_set()
+                record = service._plans[plan["plan_id"]]
+                assert record.active_turns == 0 and record.cancel_event.is_set() and record.worker_session is None
+                assert manager.requests == []
+                release.set()
+                assert await asyncio.to_thread(returned.wait, 1)
+                assert manager.requests == [] and adapter.extract_calls == adapter.final_calls == 0
+                resumed = await client.post("/v1/chat/completions", json=payload)
+                assert resumed.status_code == 502 and resumed.json()["detail"]["code"] == "worker_search_cancelled"
+                assert len(calls) == 1 and manager.jobs == {}
+            finally:
+                release.set()
+                await asyncio.gather(chat, return_exceptions=True)
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_asgi_disconnect_abandons_blocked_normal_rag_then_same_plan_resumes_once(monkeypatch, stream):
+    import threading
+
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch)
+        app = lifecycle_app(service, config, adapter)
+        entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+        calls = []
+        def hold_rag(**kwargs):
+            calls.append(kwargs)
+            entered.set()
+            try:
+                assert release.wait(5), "test RAG cleanup did not release its thread"
+                return []
+            finally:
+                returned.set()
+        app.state.rag_service = SimpleNamespace(search_grounding_sources=hold_rag)
+        plan = await service.create_plan("public question")
+        payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                   "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+        request = ASGIDisconnectRequest(app, payload)
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            assert not returned.is_set()
+            request.disconnect()
+            await asyncio.wait_for(asyncio.shield(request.task), 1)
+            assert request.disconnect_consumed and request.max_receivers == 1 and request.active_receivers == 0
+            record = service._plans[plan["plan_id"]]
+            assert record.active_turns == 0 and not record.cancel_event.is_set() and record.worker_session is None
+            assert not release.is_set() and not returned.is_set()
+            assert manager.requests == [] and adapter.extract_calls == adapter.final_calls == 0
+            release.set()
+            assert await asyncio.to_thread(returned.wait, 1)
+            assert manager.requests == []
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+                resumed = await client.post("/v1/chat/completions", json=payload)
+            assert resumed.status_code == 200
+            assert "data: [DONE]" in resumed.text if stream else "choices" in resumed.json()
+            assert len(calls) == 2 and calls[0] == calls[1]
+            assert manager.submit_calls == len(manager.jobs) == 1
+            assert record.active_turns == 0 and not record.cancel_event.is_set()
+            assert not any(item.url.path.endswith("/cancel") for item in manager.requests)
+        finally:
+            release.set()
+            await request.cleanup()
+            await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["worker", "ordinary", "searxng"])
+def test_only_planned_worker_normal_rag_is_offloaded(monkeypatch, mode):
+    import threading
+
+    async def scenario():
+        original_service, manager, config, _, manager_client = make_service(monkeypatch)
+        adapter = HeldFinalAdapter()
+        adapter.release.set()
+        if mode == "searxng":
+            async def search(query):
+                return []
+            provider = SimpleNamespace(search=search)
+        else:
+            provider = original_service._provider
+        service = WebSearchService(config, adapter, provider)
+        app = lifecycle_app(service, config, adapter)
+        called_threads = []
+        loop_thread = threading.get_ident()
+        app.state.rag_service = SimpleNamespace(search_grounding_sources=lambda **_: called_threads.append(threading.get_ident()) or [])
+        plan = await service.create_plan("public question")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            response = await client.post("/v1/chat/completions", json={
+                "model": "fast", "messages": [{"role": "user", "content": "public question"}],
+                "metadata": {"web_search": mode != "ordinary", "web_search_plan_id": plan["plan_id"]}})
+        assert response.status_code == 200 and len(called_threads) == 1
+        assert (called_threads[0] != loop_thread) == (mode == "worker")
+        assert manager.submit_calls == (1 if mode == "worker" else 0)
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+def append_canonical_result_pack(result, *, ensure_ascii=False):
+    import hashlib
+
+    original = copy.deepcopy(result)
+    original["manifest"] = []
+    content = json.dumps(original, ensure_ascii=ensure_ascii, sort_keys=True,
+                         separators=(",", ":"), allow_nan=False).encode()
+    result["manifest"] = [{"artifact_id": "canonical-pack-0001", "name": "result-pack.json",
+                           "media_type": "application/json", "schema_version": 1,
+                           "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}]
+    return content
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_canonical_worker_result_pack_with_real_utf8_hash_and_size_reaches_route_answer(monkeypatch, stream):
+    import hashlib
+
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch)
+        contents, observed = [], {}
+        def mutate(result):
+            result["usage"].update(search_requests=2, search_credits=1)
+            result["payload"]["candidates"][0]["title"] = "公開リリース"
+            contents.append(append_canonical_result_pack(result))
+        manager.mutate_result = mutate
+        def handler(request):
+            response = manager(request)
+            if request.url.path.endswith("/result"):
+                observed.update(response.json())
+            return response
+        manager_client._transport = httpx.MockTransport(handler)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            response = await client.post("/v1/chat/completions", json={
+                "model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}})
+        assert response.status_code == 200
+        assert "data: [DONE]" in response.text if stream else "choices" in response.json()
+        assert adapter.extract_calls == adapter.final_calls == 1
+        assert len(contents) == 2 and contents[0] == contents[1]
+        assert "公開リリース".encode() in contents[0] and b"\\u516c" not in contents[0]
+        assert b'"manifest":[]' in contents[0]
+        reference = observed["result"]["manifest"][0]
+        assert reference["bytes"] == len(contents[0])
+        assert reference["sha256"] == hashlib.sha256(contents[0]).hexdigest()
+        assert reference["name"] == "result-pack.json" and reference["media_type"] == "application/json"
+        assert reference["schema_version"] == 1
+        record = service._plans[plan["plan_id"]]
+        assert record.completed[0][0]["title"] == "公開リリース" and len(record.completed[0]) == 1
+        assert record.active_turns == 0 and manager.submit_calls == len(manager.jobs) == 1
+        assert all("/artifacts/" not in request.url.path for request in manager.requests)
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("violation", [
+    "name", "media_type", "schema_version", "size", "hash", "duplicate", "extra_artifact",
+    "changed_payload", "ascii_pack", "invalid_id", "extra_field", "self_manifest_hash",
+])
+def test_invalid_or_extra_canonical_result_pack_fails_before_sanitizer_claims_and_answer(monkeypatch, violation):
+    import hashlib
+
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch)
+        def mutate(result):
+            result["payload"]["candidates"][0]["title"] = "公開リリース"
+            append_canonical_result_pack(result)
+            pack = result["manifest"][0]
+            if violation == "name":
+                pack["name"] = "document.json"
+            elif violation == "media_type":
+                pack["media_type"] = "text/plain"
+            elif violation == "schema_version":
+                pack["schema_version"] = 2
+            elif violation == "size":
+                pack["bytes"] += 1
+            elif violation == "hash":
+                pack["sha256"] = "f" * 64
+            elif violation == "duplicate":
+                result["manifest"].append(copy.deepcopy(pack))
+            elif violation == "extra_artifact":
+                result["manifest"].append({"artifact_id": "document-fixture", "name": "document.txt", "media_type": "text/plain",
+                                           "bytes": 1, "sha256": "0" * 64, "schema_version": 1})
+            elif violation == "changed_payload":
+                result["payload"]["candidates"][0]["snippet"] += " changed after pack creation"
+            elif violation == "ascii_pack":
+                append_canonical_result_pack(result, ensure_ascii=True)
+            elif violation == "invalid_id":
+                pack["artifact_id"] = "invalid/artifact/path"
+            elif violation == "extra_field":
+                pack["unexpected"] = "unapproved"
+            else:
+                content = json.dumps(result, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":"), allow_nan=False).encode()
+                pack.update(bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
+        manager.mutate_result = mutate
+        sanitized = []
+        original_sanitize = service._provider._sanitizer.sanitize
+        def track_sanitize(candidates):
+            sanitized.append(candidates)
+            return original_sanitize(candidates)
+        monkeypatch.setattr(service._provider._sanitizer, "sanitize", track_sanitize)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            response = await client.post("/v1/chat/completions", json={
+                "model": "fast", "messages": [{"role": "user", "content": "public question"}],
+                "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}})
+        assert response.status_code == 502
+        assert response.json()["detail"]["code"] == "worker_result_invalid"
+        assert response.json()["detail"]["plan_id"] == plan["plan_id"]
+        assert sanitized == [] and adapter.extract_calls == adapter.final_calls == 0
+        assert service._plans[plan["plan_id"]].completed is None
+        assert service._plans[plan["plan_id"]].active_turns == 0
+        assert manager.submit_calls == len(manager.jobs) == 1
+        assert all("/artifacts/" not in request.url.path for request in manager.requests)
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+def test_canonical_result_pack_also_accepts_valid_zero_candidate_search(monkeypatch):
+    async def scenario():
+        service, manager, _, adapter, client = make_service(monkeypatch)
+        def mutate(result):
+            result["payload"]["candidates"] = []
+            result["payload"]["queries"][0]["result_count"] = 0
+            result["payload"]["queries"][0]["diagnostic"]["result_count"] = 0
+            append_canonical_result_pack(result)
+        manager.mutate_result = mutate
+        plan = await service.create_plan("public question")
+        assert await service.search_for_chat("public question", plan["plan_id"]) == ([], "")
+        assert adapter.extract_calls == adapter.final_calls == 0
+        assert service._plans[plan["plan_id"]].completed == ([], "")
+        assert manager.submit_calls == len(manager.jobs) == 1
+        await client.aclose()
+    asyncio.run(scenario())
