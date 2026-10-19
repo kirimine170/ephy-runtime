@@ -117,6 +117,16 @@ Worker 計画の通常 RAG 検索も別 thread で待つため，索引や embed
 その結果の待機と保持を解放し，後から処理が戻っても Job 投入や回答生成へ進めない．
 通常の chat と SearXNG の実行経路は維持する．
 
+Worker の収集期限は session 作成時にローカルの monotonic clock から 1 回だけ設定する．
+投入，状態照会，結果取得はすべて残り時間内に閉じ，pending の再照会や再接続，
+Manager の時刻変更では延長しない．期限超過は `worker_search_deadline_exceeded` と
+保持済みの plan／Job identity を返し，同じ plan を再送しても新しい Job や成功結果にしない．
+期限後も明示的な取消 API は使用できる．通信切断によるローカル取消とは区別する．
+期限内に identity，予算，結果 pack と候補を検証・サニタイズした時点で収集は完了する．
+受理した候補は複製して保持・再利用し，その後の事実抽出や最終回答の生成に収集期限を適用しない．
+不正な結果，期限超過，取消で中断した収集結果を受理済みとして保存しない．
+既に完了した結果も明示的に取り消した plan からは回答しない．
+
 ## 結果と信頼境界
 
 完了応答の `web_search_status` には provider，contract，plan ID，Job ID，固定 Worker ID，

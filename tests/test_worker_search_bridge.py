@@ -1722,3 +1722,334 @@ def test_canonical_result_pack_also_accepts_valid_zero_candidate_search(monkeypa
         assert manager.submit_calls == len(manager.jobs) == 1
         await client.aclose()
     asyncio.run(scenario())
+
+
+class CollectionClock:
+    """Only the provider clock changes; asyncio's own cancellation clock stays real．"""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.mark.parametrize("state", ["queued", "running"])
+def test_collection_absolute_deadline_survives_pending_remote_clock_changes_and_cancel(monkeypatch, state):
+    async def scenario():
+        clock = CollectionClock()
+        monkeypatch.setattr("packages.web_search_core.worker_provider.monotonic", clock)
+        service, manager, config, adapter, client = make_service(monkeypatch, worker_deadline_seconds=1)
+        manager.state = state
+        def move_remote_clock(view):
+            view.update(created_at=9000000000.0, deadline_at=9000000000.0 + view["deadline_seconds"])
+            if view["state"] == "running":
+                view["worker_id"] = view["target_worker_id"]
+        manager.mutate_view = move_remote_clock
+        plan = await service.create_plan("public question")
+        for now in [1000.0, 1000.4, 1000.9]:
+            clock.now = now
+            with pytest.raises(WorkerSearchPending):
+                await service.search_for_chat("public question", plan["plan_id"])
+        record = service._plans[plan["plan_id"]]
+        session = record.worker_session
+        assert session.collection_deadline == 1001.0 and session.job_id == "job-00000001"
+        config.web_search.worker_deadline_seconds = 600
+        before = len(manager.requests)
+        clock.now = 1001.1
+        for late_state in [state, "completed"]:
+            manager.state = late_state
+            with pytest.raises(WorkerSearchError, match="worker_search_deadline_exceeded") as caught:
+                await service.search_for_chat("public question", plan["plan_id"])
+            assert caught.value.identity["job_id"] == session.job_id
+            assert caught.value.identity["plan_id"] == plan["plan_id"]
+        assert len(manager.requests) == before and session.collection_timed_out
+        assert session.accepted_sources is None and record.completed is None
+        assert adapter.extract_calls == adapter.final_calls == 0
+        assert manager.submit_calls == len(manager.jobs) == 1
+        assert next(iter(manager.jobs)) == session.submit["submit_key"]
+        cancelled = await service.cancel_plan(plan["plan_id"])
+        assert cancelled["state"] == "cancelled" and cancelled["job_id"] == session.job_id
+        assert manager.requests[-1].url.path.endswith("/cancel")
+        with pytest.raises(WorkerSearchError, match="worker_search_cancelled"):
+            await service.search_for_chat("public question", plan["plan_id"])
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("respond_async", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+def test_gateway_collection_deadline_terminates_legacy_and_async_pending(monkeypatch, respond_async, stream):
+    async def scenario():
+        clock = CollectionClock()
+        monkeypatch.setattr("packages.web_search_core.worker_provider.monotonic", clock)
+        service, manager, config, adapter, manager_client = make_service(monkeypatch, worker_deadline_seconds=1)
+        config.web_search.worker_poll_seconds = 0.01
+        manager.state = "queued"
+        original = manager.__call__
+        def advance_on_poll(request):
+            response = original(request)
+            if request.method == "GET":
+                clock.now += 0.6
+            return response
+        manager_client._transport = httpx.MockTransport(advance_on_poll)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                   "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            headers = {"Prefer": "respond-async"} if respond_async else {}
+            response = await asyncio.wait_for(client.post("/v1/chat/completions", json=payload, headers=headers), 1)
+            if respond_async:
+                assert response.status_code == 202 and response.json()["status"] == "pending"
+                response = await client.post("/v1/chat/completions", json=payload, headers=headers)
+            assert response.status_code == 502
+            detail = response.json()["detail"]
+            assert detail["code"] == "worker_search_deadline_exceeded"
+            assert detail["plan_id"] == plan["plan_id"] and detail["job_id"] == "job-00000001"
+            requests = len(manager.requests)
+            manager.state = "completed"
+            late = await client.post("/v1/chat/completions", json=payload, headers=headers)
+            assert late.status_code == 502 and late.json()["detail"]["code"] == detail["code"]
+            assert len(manager.requests) == requests
+        record = service._plans[plan["plan_id"]]
+        assert record.active_turns == 0 and record.completed is None and record.worker_session.accepted_sources is None
+        assert adapter.extract_calls == adapter.final_calls == 0
+        assert manager.submit_calls == len(manager.jobs) == 1
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("held_path", ["submit", "poll", "result"])
+def test_remaining_collection_budget_closes_each_held_http_body_and_keeps_cancel_usable(monkeypatch, held_path):
+    async def scenario():
+        _, manager, config, _, client = make_service(monkeypatch, worker_deadline_seconds=1)
+        provider = WorkerSearchProvider(config.web_search, client)
+        session = provider.new_session("public product release", "deadline-held-http-plan")
+        session.collection_deadline = time.monotonic() + 0.08
+        entered = asyncio.Event()
+        closed = asyncio.Event()
+        release = asyncio.Event()
+        class HeldBody(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                entered.set()
+                await release.wait()
+                yield b"unreachable late body"
+
+            async def aclose(self):
+                closed.set()
+        original = manager.__call__
+        def handler(request):
+            response = original(request)
+            selected = (request.url.path == "/jobs" if held_path == "submit" else
+                        request.url.path.endswith("/result") if held_path == "result" else
+                        request.method == "GET" and not request.url.path.endswith("/result"))
+            if selected and not release.is_set():
+                return httpx.Response(200, headers={"content-type": "application/json"}, stream=HeldBody())
+            return response
+        client._transport = httpx.MockTransport(handler)
+        task = asyncio.create_task(provider.search_job(session))
+        await asyncio.wait_for(entered.wait(), 1)
+        with pytest.raises(WorkerSearchError, match="worker_search_deadline_exceeded") as caught:
+            await asyncio.wait_for(task, 1)
+        assert closed.is_set() and not release.is_set()
+        assert caught.value.identity["plan_id"] == session.plan_id
+        assert caught.value.identity["job_id"] == (None if held_path == "submit" else "job-00000001")
+        assert session.collection_timed_out and session.accepted_sources is None
+        before = len(manager.requests)
+        with pytest.raises(WorkerSearchError, match="worker_search_deadline_exceeded"):
+            await provider.search_job(session)
+        assert len(manager.requests) == before
+        release.set()
+        cancelled = await provider.cancel(session)
+        assert cancelled["state"] == "cancelled" and cancelled["job_id"] == "job-00000001"
+        assert manager.submit_calls == (2 if held_path == "submit" else 1) and len(manager.jobs) == 1
+        assert all(json.loads(request.content)["submit_key"] == session.submit["submit_key"]
+                   for request in manager.requests if request.url.path == "/jobs")
+        assert sum(request.url.path.endswith("/cancel") for request in manager.requests) == 1
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+def test_parent_cancellation_during_collection_is_not_a_deadline_or_permanent_intent(monkeypatch):
+    async def scenario():
+        _, manager, config, _, client = make_service(monkeypatch, worker_deadline_seconds=1)
+        provider = WorkerSearchProvider(config.web_search, client)
+        session = provider.new_session("public product release", "parent-cancel-plan")
+        entered, closed = asyncio.Event(), asyncio.Event()
+        async def handler(request):
+            response = manager(request)
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                closed.set()
+            return response
+        client._transport = httpx.MockTransport(handler)
+        task = asyncio.create_task(provider.search_job(session))
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert closed.is_set() and not session.collection_timed_out and not session.cancel_requested
+        assert session.accepted_sources is None
+        client._transport = httpx.MockTransport(manager)
+        assert await provider.search_job(session)
+        assert manager.submit_calls == 2 and len(manager.jobs) == 1
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stage", ["validated_view", "validated_envelope", "sanitizer"])
+def test_synchronous_collection_work_cannot_accept_after_absolute_deadline(monkeypatch, stage):
+    async def scenario():
+        clock = CollectionClock()
+        monkeypatch.setattr("packages.web_search_core.worker_provider.monotonic", clock)
+        service, manager, _, adapter, client = make_service(monkeypatch, worker_deadline_seconds=1)
+        provider = service._provider
+        sanitized = []
+        original_sanitize = provider._sanitizer.sanitize
+        def sanitizer(candidates):
+            sanitized.append(candidates)
+            sources = original_sanitize(candidates)
+            if stage == "sanitizer":
+                clock.now = 1002.0
+            return sources
+        monkeypatch.setattr(provider._sanitizer, "sanitize", sanitizer)
+        if stage == "validated_view":
+            original_validate = provider._validate_view
+            def validate(session, view):
+                original_validate(session, view)
+                if view["state"] == "completed":
+                    clock.now = 1002.0
+            monkeypatch.setattr(provider, "_validate_view", validate)
+        elif stage == "validated_envelope":
+            from packages.web_search_core.worker_provider import _Result
+            original_validate = _Result.model_validate
+            def validate(value):
+                result = original_validate(value)
+                clock.now = 1002.0
+                return result
+            monkeypatch.setattr(_Result, "model_validate", validate)
+        plan = await service.create_plan("public question")
+        with pytest.raises(WorkerSearchError, match="worker_search_deadline_exceeded"):
+            await service.search_for_chat("public question", plan["plan_id"])
+        record = service._plans[plan["plan_id"]]
+        assert len(sanitized) == (1 if stage == "sanitizer" else 0)
+        assert record.worker_session.accepted_sources is None and record.completed is None
+        assert adapter.extract_calls == adapter.final_calls == 0
+        before = len(manager.requests)
+        with pytest.raises(WorkerSearchError, match="worker_search_deadline_exceeded"):
+            await service.search_for_chat("public question", plan["plan_id"])
+        assert len(manager.requests) == before and manager.submit_calls == len(manager.jobs) == 1
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("invalid", ["identity", "budget", "pack"])
+def test_invalid_collection_is_never_accepted_for_deadline_free_reuse(monkeypatch, invalid):
+    async def scenario():
+        clock = CollectionClock()
+        monkeypatch.setattr("packages.web_search_core.worker_provider.monotonic", clock)
+        service, manager, _, adapter, client = make_service(monkeypatch, worker_deadline_seconds=1)
+        def mutate(result):
+            if invalid == "identity":
+                result["job_id"] = "wrong-job-0001"
+            elif invalid == "budget":
+                result["usage"]["search_requests"] = 3
+            else:
+                append_canonical_result_pack(result)
+                result["manifest"][0]["sha256"] = "0" * 64
+        manager.mutate_result = mutate
+        plan = await service.create_plan("public question")
+        with pytest.raises(WorkerSearchError, match="worker_result_invalid"):
+            await service.search_for_chat("public question", plan["plan_id"])
+        record = service._plans[plan["plan_id"]]
+        assert record.worker_session.accepted_sources is None and record.completed is None
+        manager.mutate_result = None
+        clock.now = 1002.0
+        before = len(manager.requests)
+        with pytest.raises(WorkerSearchError, match="worker_search_deadline_exceeded"):
+            await service.search_for_chat("public question", plan["plan_id"])
+        assert len(manager.requests) == before and adapter.extract_calls == adapter.final_calls == 0
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+def test_accepted_sources_are_cloned_and_reused_after_deadline_but_never_after_cancel(monkeypatch):
+    async def scenario():
+        clock = CollectionClock()
+        monkeypatch.setattr("packages.web_search_core.worker_provider.monotonic", clock)
+        _, manager, config, _, client = make_service(monkeypatch, worker_deadline_seconds=1)
+        provider = WorkerSearchProvider(config.web_search, client)
+        session = provider.new_session("public product release", "accepted-sources-plan")
+        first = await provider.search_job(session)
+        original = copy.deepcopy(first)
+        first[0]["title"] = "caller-mutated"
+        first.clear()
+        assert session.accepted_sources == original
+        before = len(manager.requests)
+        clock.now = 1002.0
+        for _ in range(2):
+            reused = await provider.search_job(session)
+            assert reused == original and reused is not session.accepted_sources
+            reused[0]["title"] = "another-mutation"
+        assert len(manager.requests) == before and not session.collection_timed_out
+        await provider.cancel(session)
+        with pytest.raises(WorkerSearchError, match="worker_search_cancelled"):
+            await provider.search_job(session)
+        assert manager.submit_calls == len(manager.jobs) == 1
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_ontime_collection_allows_claims_final_generation_and_cache_after_deadline(monkeypatch, stream):
+    async def scenario():
+        clock = CollectionClock()
+        monkeypatch.setattr("packages.web_search_core.worker_provider.monotonic", clock)
+        original_service, manager, config, _, manager_client = make_service(monkeypatch, worker_deadline_seconds=1)
+        class HeldClaimsAndFinal(HeldFinalAdapter):
+            def __init__(self):
+                super().__init__()
+                self.claims_entered, self.claims_release = asyncio.Event(), asyncio.Event()
+
+            async def create_chat_completion(self, *, model_config, request_payload):
+                if "isolated fact extractor" in str(request_payload.messages[0].content):
+                    self.claims_entered.set()
+                    await self.claims_release.wait()
+                return await super().create_chat_completion(model_config=model_config, request_payload=request_payload)
+        adapter = HeldClaimsAndFinal()
+        service = WebSearchService(config, adapter, original_service._provider)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                   "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            task = asyncio.create_task(client.post("/v1/chat/completions", json=payload))
+            await asyncio.wait_for(adapter.claims_entered.wait(), 1)
+            record = service._plans[plan["plan_id"]]
+            assert record.worker_session.accepted_sources and record.completed is None
+            requests = len(manager.requests)
+            clock.now = 1002.0
+            assert not task.done()
+            adapter.claims_release.set()
+            await asyncio.wait_for(adapter.entered.wait(), 1)
+            assert not task.done() and record.completed is not None
+            clock.now = 1004.0
+            adapter.release.set()
+            response = await asyncio.wait_for(task, 1)
+            assert response.status_code == 200
+            assert "late-stream-answer" in response.text if stream else "late-final-answer" in response.text
+            again = await client.post("/v1/chat/completions", json=payload)
+            assert again.status_code == 200 and len(manager.requests) == requests
+            assert adapter.extract_calls == 1 and adapter.final_calls == 2
+            assert record.active_turns == 0 and not record.worker_session.collection_timed_out
+            cancelled = await service.cancel_plan(plan["plan_id"])
+            assert cancelled["state"] == "cancelled"
+            after_cancel = await client.post("/v1/chat/completions", json=payload)
+            assert after_cancel.status_code == 502 and after_cancel.json()["detail"]["code"] == "worker_search_cancelled"
+            assert adapter.final_calls == 2
+        assert manager.submit_calls == len(manager.jobs) == 1
+        await manager_client.aclose()
+    asyncio.run(scenario())

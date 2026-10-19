@@ -8,7 +8,9 @@ import json
 import math
 import os
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -49,6 +51,9 @@ class WorkerSearchSession:
     cancel_requested: bool = False
     cancel_acknowledged: bool = False
     cancel_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    collection_deadline: float | None = None
+    collection_timed_out: bool = False
+    accepted_sources: list[dict] | None = None
 
     def identity(self) -> dict:
         return {"provider": "worker", "contract": "0.4", "plan_id": self.plan_id,
@@ -170,7 +175,8 @@ class WorkerSearchProvider:
                              "job_seconds": self._config.worker_deadline_seconds,
                              "request_seconds": min(self._config.worker_deadline_seconds, 120)},
                   "deadline_seconds": self._config.worker_deadline_seconds}
-        return WorkerSearchSession(plan_id, submit, _hash(job_input))
+        return WorkerSearchSession(plan_id, submit, _hash(job_input),
+                                   collection_deadline=monotonic() + submit["deadline_seconds"])
 
     async def _request(self, method: str, path: str, *, body: dict | None = None) -> dict:
         try:
@@ -194,6 +200,30 @@ class WorkerSearchProvider:
             raise
         except (httpx.HTTPError, ValueError, UnicodeDecodeError, TypeError):
             raise WorkerSearchError("worker_manager_unavailable") from None
+
+    @staticmethod
+    def _collection_remaining(session: WorkerSearchSession) -> float:
+        if session.collection_deadline is None:
+            session.collection_deadline = monotonic() + session.submit["deadline_seconds"]
+        remaining = session.collection_deadline - monotonic()
+        if session.collection_timed_out or remaining <= 0:
+            session.collection_timed_out = True
+            raise WorkerSearchError("worker_search_deadline_exceeded", session=session)
+        return remaining
+
+    async def _collection_request(self, session: WorkerSearchSession, method: str, path: str,
+                                  *, body: dict | None = None) -> dict:
+        deadline = asyncio.timeout(self._collection_remaining(session))
+        try:
+            async with deadline:
+                response = await self._request(method, path, body=body)
+        except TimeoutError:
+            if not deadline.expired():
+                raise WorkerSearchError("worker_manager_unavailable", session=session) from None
+            session.collection_timed_out = True
+            raise WorkerSearchError("worker_search_deadline_exceeded", session=session) from None
+        self._collection_remaining(session)
+        return response
 
     def _validate_view(self, session: WorkerSearchSession, view: dict) -> None:
         expected = session.submit
@@ -231,31 +261,40 @@ class WorkerSearchProvider:
 
     async def search_job(self, session: WorkerSearchSession) -> list[dict]:
         try:
+            await self._check_cancellation(session)
+            if session.accepted_sources is not None:
+                return deepcopy(session.accepted_sources)
+            self._collection_remaining(session)
             if session.job_id is None:
-                view = await self._request("POST", "/jobs", body=session.submit)
+                view = await self._collection_request(session, "POST", "/jobs", body=session.submit)
                 self._validate_view(session, view)
             await self._check_cancellation(session)
             end = asyncio.get_running_loop().time() + self._config.worker_wait_seconds
             while True:
                 await self._check_cancellation(session)
-                view = await self._request("GET", f"/jobs/{session.job_id}")
+                view = await self._collection_request(session, "GET", f"/jobs/{session.job_id}")
                 self._validate_view(session, view)
                 await self._check_cancellation(session)
                 if session.state == "completed":
                     sources = await self._completed(session, view)
                     await self._check_cancellation(session)
-                    return sources
+                    self._collection_remaining(session)
+                    session.accepted_sources = deepcopy(sources)
+                    return deepcopy(session.accepted_sources)
                 if session.state in {"partial", "failed", "cancelled", "lost"}:
                     raise WorkerSearchError("worker_search_failed", session=session)
                 remaining = end - asyncio.get_running_loop().time()
+                collection_remaining = self._collection_remaining(session)
                 if remaining <= 0:
                     raise WorkerSearchPending(session)
-                await asyncio.sleep(min(remaining, self._config.worker_poll_seconds))
+                await asyncio.sleep(min(remaining, collection_remaining, self._config.worker_poll_seconds))
         except WorkerSearchError as exc:
+            if exc.code == "worker_search_deadline_exceeded" and session.cancel_requested:
+                await self._check_cancellation(session)
             raise WorkerSearchError(exc.code, session=session) from None
 
     async def _completed(self, session: WorkerSearchSession, view: dict) -> list[dict]:
-        response = await self._request("GET", f"/jobs/{session.job_id}/result")
+        response = await self._collection_request(session, "GET", f"/jobs/{session.job_id}/result")
         try:
             result = _Result.model_validate(response.get("result"))
             expected_query = session.submit["input"]["queries"][0]
@@ -295,7 +334,10 @@ class WorkerSearchProvider:
                     raise ValueError()
         except (ValidationError, ValueError, TypeError, IndexError):
             raise WorkerSearchError("worker_result_invalid", session=session) from None
-        return self._sanitizer.sanitize([item.model_dump() for item in result.payload.candidates])
+        self._collection_remaining(session)
+        sources = self._sanitizer.sanitize([item.model_dump() for item in result.payload.candidates])
+        self._collection_remaining(session)
+        return sources
 
     async def cancel(self, session: WorkerSearchSession) -> dict:
         session.cancel_requested = True
