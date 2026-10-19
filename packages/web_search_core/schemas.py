@@ -7,6 +7,7 @@ class WebSearchPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
+    context: str | None = Field(default=None, strict=True, max_length=2400)
 
 
 class WebSearchApproveRequest(BaseModel):

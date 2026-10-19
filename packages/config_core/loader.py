@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Mapping
+from typing import Literal, Mapping
 from uuid import UUID
 
 import yaml
@@ -63,7 +63,7 @@ class WebSearchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    provider: str = "searxng"
+    provider: Literal["searxng", "worker"] = "searxng"
     base_url: str = "http://127.0.0.1:8888"
     engine: str = "duckduckgo"
     max_results: int = 5
@@ -73,6 +73,15 @@ class WebSearchConfig(BaseModel):
     max_query_chars: int = 240
     max_snippet_chars: int = 600
     max_context_chars: int = 4000
+    # Manager credentials are resolved from this environment variable only．
+    manager_url: str = "http://127.0.0.1:8321"
+    manager_credential_env: str = "EPHY_MANAGER_REQUESTER_CREDENTIAL"
+    target_worker_id: str = Field(default="worker-local", pattern=r"^[A-Za-z0-9._-]{1,128}$")
+    worker_wait_seconds: float = Field(default=8.0, ge=0, le=120)
+    worker_poll_seconds: float = Field(default=0.5, gt=0, le=30)
+    worker_deadline_seconds: float = Field(default=600, ge=1, le=3600)
+    worker_response_bytes: int = Field(default=2 * 1024 * 1024, ge=1024, le=8 * 1024 * 1024)
+    max_plans: int = Field(default=256, ge=1, le=4096)
 
 
 class EphyRuntimeConfig(BaseModel):

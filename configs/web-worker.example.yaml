@@ -1,0 +1,17 @@
+web_search:
+  enabled: true
+  provider: worker
+  manager_url: http://127.0.0.1:8321
+  manager_credential_env: EPHY_MANAGER_REQUESTER_CREDENTIAL
+  target_worker_id: worker-local
+  timeout_seconds: 8
+  worker_wait_seconds: 8
+  worker_poll_seconds: 0.5
+  worker_deadline_seconds: 600
+  worker_response_bytes: 2097152
+  plan_ttl_seconds: 300
+  max_plans: 256
+  max_results: 5
+  max_query_chars: 240
+  max_snippet_chars: 600
+  max_context_chars: 4000

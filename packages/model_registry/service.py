@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import fcntl
+import errno
 import hashlib
 import json
 import os
 import shutil
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Literal
@@ -14,6 +15,37 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+
+@contextmanager
+def _exclusive_file_lock(handle):
+    if os.name == "nt":
+        # A fixed byte is shared by every process; retry contention as flock(LOCK_EX) does．
+        while True:
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EDEADLK}:
+                    raise
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,95}$")]
@@ -156,7 +188,7 @@ def _read_yaml(path: Path, schema):
 def physical_memory_bytes() -> int | None:
     try:
         return int(os.sysconf("SC_PHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
-    except (OSError, ValueError, KeyError):
+    except (AttributeError, OSError, ValueError, KeyError):
         return None
 
 
@@ -171,9 +203,9 @@ class ModelRegistry:
     def _lock(self):
         lock = self.root / "data/runtime/model-registry.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
-        with lock.open("a") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            yield
+        with lock.open("a+b") as handle:
+            with _exclusive_file_lock(handle):
+                yield
 
     @contextmanager
     def selection_lease(self):

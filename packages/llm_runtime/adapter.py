@@ -20,8 +20,14 @@ class BackendStreamError(RuntimeError):
 class LlamaCppChatAdapter:
     _MAX_SSE_FRAME_BYTES = 256 * 1024
     _MAX_REASONING_BYTES = 128 * 1024
-    def __init__(self, timeout: float = 120.0) -> None:
+    def __init__(self, timeout: float = 120.0, *, stream_idle_timeout: float = 600.0) -> None:
         self._client = httpx.AsyncClient(timeout=timeout)
+        # Streaming has an inactivity limit, not an overall generation deadline．
+        self._stream_timeout = httpx.Timeout(connect=min(timeout, 10.0), read=stream_idle_timeout,
+                                            write=min(timeout, 30.0), pool=min(timeout, 30.0))
+        self._ordinary_stream_timeout = httpx.Timeout(
+            connect=min(timeout, 10.0), read=min(timeout, stream_idle_timeout),
+            write=min(timeout, 30.0), pool=min(timeout, 30.0))
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -83,6 +89,12 @@ class LlamaCppChatAdapter:
             raise RuntimeError(f"Model '{model_config.model}' is missing base_url")
 
         body = self._build_payload(model_config=model_config, request_payload=request_payload)
+        metadata = request_payload.metadata
+        planned_search = (
+            metadata is not None and metadata.web_search
+            and (metadata.source_scope or "").strip().lower() != "recorded_conversation"
+            and re.fullmatch(r"[0-9a-fA-F]{32}", metadata.web_search_plan_id or "") is not None
+        )
 
         try:
             async with self._client.stream(
@@ -90,9 +102,9 @@ class LlamaCppChatAdapter:
                 f"{model_config.base_url.rstrip('/')}/chat/completions",
                 json=body,
                 headers={"Accept": "text/event-stream"},
+                timeout=self._stream_timeout if planned_search else self._ordinary_stream_timeout,
             ) as response:
                 response.raise_for_status()
-                metadata = request_payload.metadata
                 observe_reasoning = metadata is not None and metadata.session_mode == "voice" and metadata.resolved_mode == "fast"
                 chunks = self._stream_with_reasoning_count(response, model_config) if observe_reasoning else response.aiter_bytes()
                 async for chunk in chunks:
