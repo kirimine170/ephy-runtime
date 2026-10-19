@@ -271,8 +271,22 @@ def build_router() -> APIRouter:
                 plan_id = (payload.metadata.web_search_plan_id or "").strip()
                 if not plan_id:
                     raise ValueError("web_search_plan_id is required when web_search is enabled")
+                prefer_async = any(
+                    preference.partition(";")[0].strip().lower() == "respond-async"
+                    for preference in request.headers.get("Prefer", "").split(",")
+                )
                 try:
-                    web_sources, web_context = await web_search_service.search_for_chat(query_text, plan_id)
+                    while True:
+                        try:
+                            web_sources, web_context = await web_search_service.search_for_chat(query_text, plan_id)
+                            break
+                        except WorkerSearchPending as exc:
+                            if prefer_async:
+                                return JSONResponse(status_code=202, content={"status": "pending", **exc.identity},
+                                                    headers={"Preference-Applied": "respond-async"})
+                            # Existing chat clients expect a completion or SSE, not JSON 202．
+                            # Resume the same approved job; its Manager deadline remains in force．
+                            await asyncio.sleep(min(request.app.state.app_config.web_search.worker_poll_seconds, 1.0))
                     web_search_status = {
                         "status": "completed",
                         "source_count": len(web_sources),
@@ -284,8 +298,6 @@ def build_router() -> APIRouter:
                             web_search_status.update(identity(plan_id))
                         except ValueError:
                             pass
-                except WorkerSearchPending as exc:
-                    return JSONResponse(status_code=202, content={"status": "pending", **exc.identity})
                 except WorkerSearchError as exc:
                     raise HTTPException(status_code=502, detail={"code": exc.code, **exc.identity}) from None
                 except RuntimeError as exc:

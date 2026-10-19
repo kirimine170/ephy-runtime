@@ -302,13 +302,15 @@ def test_gateway_returns_pending_then_grounded_final_and_explicit_failure(monkey
         app.state.model_router = ModelRouter(config)
         app.state.prompt_manager = PromptManager()
         app.state.rag_service = SimpleNamespace(search_grounding_sources=lambda **_: [])
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://runtime") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://runtime",
+                                     headers={"Prefer": "return=representation, ReSpOnD-AsYnC"}) as client:
             plan = (await client.post("/v1/web-search/plan", json={"query": "public release"})).json()
             payload = {"model": "fast", "messages": [{"role": "user", "content": "public release"}],
                        "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
             manager.state = "queued"
             response = await client.post("/v1/chat/completions", json=payload)
             assert response.status_code == 202
+            assert response.headers["Preference-Applied"] == "respond-async"
             assert response.json()["status"] == "pending"
             assert response.json()["plan_id"] == plan["plan_id"]
             assert adapter.final_calls == 0
@@ -357,7 +359,8 @@ def test_streaming_chat_pending_then_provenance_and_final_deltas(monkeypatch):
                             "model_router": ModelRouter(config), "prompt_manager": PromptManager(),
                             "rag_service": SimpleNamespace(search_grounding_sources=lambda **_: [])}.items():
             setattr(app.state, name, value)
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://runtime") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://runtime",
+                                     headers={"Prefer": "respond-async"}) as client:
             plan = (await client.post("/v1/web-search/plan", json={"query": "public release"})).json()
             payload = {"model": "fast", "stream": True, "messages": [{"role": "user", "content": "public release"}],
                        "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
@@ -375,5 +378,78 @@ def test_streaming_chat_pending_then_provenance_and_final_deltas(monkeypatch):
             assert '"finish_reason": "stop"' in response.text or '"finish_reason":"stop"' in response.text
             assert "data: [DONE]" in response.text
             assert manager.submit_calls == adapter.final_calls == 1
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("prefer", [None, "xrespond-async", "respond-async-extra"])
+def test_legacy_chat_waits_through_pending_without_changing_completion_format(monkeypatch, stream, prefer):
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch, worker_poll_seconds=0.001)
+        app = FastAPI()
+        app.include_router(build_router())
+        for name, value in {"app_config": config, "web_search_service": service, "chat_adapter": adapter,
+                            "model_router": ModelRouter(config), "prompt_manager": PromptManager(),
+                            "rag_service": SimpleNamespace(search_grounding_sources=lambda **_: [])}.items():
+            setattr(app.state, name, value)
+        manager.state = "queued"
+        polls = []
+        def complete_after_pending(view):
+            if manager.requests[-1].url.path != "/jobs" and view["state"] == "queued":
+                # The first GET still returns queued, forcing WorkerSearchPending．
+                polls.append(view["job_id"])
+                manager.state = "completed"
+        manager.mutate_view = complete_after_pending
+        headers = {"Prefer": prefer} if prefer else {}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://runtime", headers=headers) as client:
+            plan = (await client.post("/v1/web-search/plan", json={"query": "public release"})).json()
+            payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public release"}],
+                       "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+            response = await client.post("/v1/chat/completions", json=payload)
+            assert response.status_code == 200
+            assert "Preference-Applied" not in response.headers
+            if stream:
+                assert response.headers["content-type"].startswith("text/event-stream")
+                frames = response.text.split("\n\n")
+                status = next(json.loads(frame.split("data: ", 1)[1]) for frame in frames if frame.startswith("event: web_search_status"))
+                assert status["job_id"] == "job-00000001" and status["state"] == "completed"
+                assert "data: [DONE]" in response.text
+            else:
+                assert response.headers["content-type"].startswith("application/json")
+                assert response.json()["choices"][0]["message"]["content"].startswith("調べてみたところ")
+                assert response.json()["web_search_status"]["job_id"] == "job-00000001"
+            assert polls == ["job-00000001"]
+            assert manager.submit_calls == adapter.final_calls == 1
+            assert len(manager.jobs) == 1
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_legacy_pending_then_terminal_failure_never_becomes_completion(monkeypatch, stream):
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch, worker_poll_seconds=0.001)
+        app = FastAPI()
+        app.include_router(build_router())
+        for name, value in {"app_config": config, "web_search_service": service, "chat_adapter": adapter,
+                            "model_router": ModelRouter(config), "prompt_manager": PromptManager(),
+                            "rag_service": SimpleNamespace(search_grounding_sources=lambda **_: [])}.items():
+            setattr(app.state, name, value)
+        manager.state = "queued"
+        def fail_after_pending(view):
+            if manager.requests[-1].url.path != "/jobs" and view["state"] == "queued":
+                manager.state = "lost"
+        manager.mutate_view = fail_after_pending
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://runtime") as client:
+            plan = (await client.post("/v1/web-search/plan", json={"query": "public release"})).json()
+            payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public release"}],
+                       "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+            response = await client.post("/v1/chat/completions", json=payload)
+            assert response.status_code == 502
+            assert response.json()["detail"]["code"] == "worker_search_failed"
+            assert response.json()["detail"]["state"] == "lost"
+            assert manager.submit_calls == 1 and len(manager.jobs) == 1
+            assert adapter.final_calls == adapter.extract_calls == 0
         await manager_client.aclose()
     asyncio.run(scenario())

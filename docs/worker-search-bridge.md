@@ -46,15 +46,20 @@ Discord transport は承認 API を呼び出さない．
 }
 ```
 
-短い待機時間 `worker_wait_seconds` を超えると，HTTP 202 と
+通常の chat client は，検索が待機中でも同じ Gateway request 内で完了を待ち，
+従来どおりの JSON completion または SSE を受け取る．既存の Wails UI と
+Discord transport はこの経路を使い，ユーザーの追加返信は必要ない．
+
+非同期の再照会に対応した client が明示的に `Prefer: respond-async` ヘッダーを送ると，
+短い待機時間 `worker_wait_seconds` を超えた場合に HTTP 202 と
 `{ "status": "pending", "job_id": "...", "plan_id": "...", ... }` を返す．
-呼び出し側は同じ chat payload と plan を再送して自動的に完了を受け取る．
+呼び出し側は同じ chat payload，plan，ヘッダーを再送して自動的に完了を受け取る．
 ユーザーの追加返信を待つ必要はない．この待機時間は Job の中止条件ではない．
 Manager の `worker_deadline_seconds` が検索実行の予算を制限する．
 Manager が `partial`／`failed`／`cancelled`／`lost` を返した場合は HTTP 502 の
 `detail.code` と Job identity を返し，調査成功として会話を生成しない．
 
-`stream: true` の場合も，検索待機中は同じ HTTP 202 を返す．検索が終わると
+`stream: true` の場合も，HTTP 202 は `Prefer: respond-async` の指定時だけ返す．検索が終わると
 既存の SSE を使い，`web_search_status` と `sources` の後に回答 delta が続く．
 会話生成に全体の経過時間上限は設けず，モデルとの streaming 通信が 600 秒間
 途絶えた場合に失敗とする．検索計画と事実抽出の非 streaming 通信は従来の
