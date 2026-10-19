@@ -10,7 +10,7 @@ project:
 
 relations:
   parent: "ephy"
-  depends_on: []
+  depends_on: ["ephy-worker"]
   integrates_with: ["karte", "karte-renderer"]
   runs_on: []
 

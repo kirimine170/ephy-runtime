@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from packages.config_core.loader import AppConfig
@@ -14,6 +15,7 @@ from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage, Req
 from .provider import SearxngProvider
 from .schemas import ExtractedClaim, WebSearchPlanResponse
 from .security import SensitiveDataDetector, has_injection_markers, sanitize_plain_text
+from .worker_provider import WorkerSearchError, WorkerSearchProvider, WorkerSearchSession
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,9 @@ class PlanRecord:
     risk_categories: tuple[str, ...]
     approved: bool
     expires_at: datetime
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    worker_session: WorkerSearchSession | None = None
+    completed: tuple[list[dict], str] | None = None
 
 
 class EgressPlanner:
@@ -74,11 +79,13 @@ class WebSearchService:
         self,
         config: AppConfig,
         adapter: LlamaCppChatAdapter,
-        provider: SearxngProvider | None = None,
+        provider: SearxngProvider | WorkerSearchProvider | None = None,
     ) -> None:
         self._config = config
         self._adapter = adapter
-        self._provider = provider or SearxngProvider(config.web_search)
+        self._provider = provider or (WorkerSearchProvider(config.web_search)
+                                     if config.web_search.provider == "worker" and config.web_search.enabled
+                                     else SearxngProvider(config.web_search))
         self._planner = EgressPlanner(
             max_query_chars=config.web_search.max_query_chars,
             rewrite=self._rewrite_query,
@@ -88,11 +95,16 @@ class WebSearchService:
     async def create_plan(self, query: str) -> dict:
         now = datetime.now(timezone.utc)
         self._purge_expired(now)
+        if len(self._plans) >= self._config.web_search.max_plans:
+            raise RuntimeError("Web search plan capacity exceeded")
         expires_at = now + timedelta(seconds=self._config.web_search.plan_ttl_seconds)
         if not self._config.web_search.enabled:
             decision, outbound, categories = "block", "", ("web_search_disabled",)
         else:
             decision, outbound, categories = await self._planner.plan(query)
+        # Concurrent planners may finish after other callers filled the bounded store．
+        if len(self._plans) >= self._config.web_search.max_plans:
+            raise RuntimeError("Web search plan capacity exceeded")
         plan_id = uuid.uuid4().hex
         record = PlanRecord(
             plan_id=plan_id,
@@ -131,12 +143,38 @@ class WebSearchService:
             raise ValueError("Web search plan does not match the latest user prompt")
         if not record.approved:
             raise ValueError("Web search plan requires user approval")
-        del self._plans[plan_id]
-        sources = await self._provider.search(record.outbound_query)
-        claims = await self._extract_claims(record.outbound_query, sources)
-        if sources and not claims:
-            raise RuntimeError("Web results were rejected because no safe factual claims could be extracted")
-        return sources, self._build_claim_context(claims, sources)
+        async with record.lock:
+            if record.completed is not None:
+                return record.completed
+            if isinstance(self._provider, WorkerSearchProvider):
+                if record.worker_session is None:
+                    record.worker_session = self._provider.new_session(record.outbound_query, plan_id)
+                    # Approval is retained for this immutable job only; new jobs require a new plan．
+                    record.expires_at = datetime.now(timezone.utc) + timedelta(
+                        seconds=self._config.web_search.worker_deadline_seconds + self._config.web_search.plan_ttl_seconds)
+                sources = await self._provider.search_job(record.worker_session)
+            else:
+                # Preserve the existing one-use SearXNG plan contract．
+                self._plans.pop(plan_id, None)
+                sources = await self._provider.search(record.outbound_query)
+            claims = await self._extract_claims(record.outbound_query, sources)
+            if sources and not claims:
+                if record.worker_session:
+                    raise WorkerSearchError("worker_claims_rejected", session=record.worker_session)
+                raise RuntimeError("Web results were rejected because no safe factual claims could be extracted")
+            record.completed = sources, self._build_claim_context(claims, sources)
+            return record.completed
+
+    def search_identity(self, plan_id: str) -> dict:
+        record = self._get_plan(plan_id)
+        return record.worker_session.identity() if record.worker_session else {}
+
+    async def cancel_plan(self, plan_id: str) -> dict:
+        record = self._get_plan(plan_id)
+        if not isinstance(self._provider, WorkerSearchProvider) or record.worker_session is None:
+            raise ValueError("Web search worker job has not been submitted")
+        async with record.lock:
+            return await self._provider.cancel(record.worker_session)
 
     @staticmethod
     def prompt_hash(query: str) -> str:

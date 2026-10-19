@@ -20,8 +20,11 @@ class BackendStreamError(RuntimeError):
 class LlamaCppChatAdapter:
     _MAX_SSE_FRAME_BYTES = 256 * 1024
     _MAX_REASONING_BYTES = 128 * 1024
-    def __init__(self, timeout: float = 120.0) -> None:
+    def __init__(self, timeout: float = 120.0, *, stream_idle_timeout: float = 600.0) -> None:
         self._client = httpx.AsyncClient(timeout=timeout)
+        # Streaming has an inactivity limit, not an overall generation deadline．
+        self._stream_timeout = httpx.Timeout(connect=min(timeout, 10.0), read=stream_idle_timeout,
+                                            write=min(timeout, 30.0), pool=min(timeout, 30.0))
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -90,6 +93,7 @@ class LlamaCppChatAdapter:
                 f"{model_config.base_url.rstrip('/')}/chat/completions",
                 json=body,
                 headers={"Accept": "text/event-stream"},
+                timeout=self._stream_timeout,
             ) as response:
                 response.raise_for_status()
                 metadata = request_payload.metadata

@@ -31,7 +31,7 @@ WailsのChat画面で「こんにちは，自己紹介して」と送信し，st
 
 ## Repository relationships
 
-親projectは`ephy`であり，`karte`および`karte-renderer`と直接統合する．正本は[`.ephy/project.yaml`](.ephy/project.yaml)とし，下流consumer一覧は重複管理しない．
+親projectは`ephy`であり，`karte`および`karte-renderer`と直接統合する．Worker 検索を選択した構成では `ephy-worker` の Manager API に直接依存する．正本は[`.ephy/project.yaml`](.ephy/project.yaml)とし，下流consumer一覧は重複管理しない．
 
 ## Security and data handling
 
@@ -222,7 +222,9 @@ Chat 画面中央ペイン、または `Library > Import Documents` パネルに
 
 ## Secure Web Search
 
-Web検索は既定で無効で、Dockerを使わないローカルSearXNGを明示的にセットアップした場合だけ有効になる。
+Web検索は既定で無効で，ローカル SearXNG または独立した ephy-worker Manager への接続を明示的に設定した場合に有効になる．
+
+`provider: worker` は，承認済み検索語を Manager の契約 0.4 `web.collect` へ送り，結果を既存の隔離した事実抽出へ戻す．短い待機時間を超えた場合は Job ID 付き HTTP 202 を返し，同じ plan と chat request で重複投入せず再開できる．完了応答には Job provenance が付き，Worker の失敗は HTTP 502 で明示する．設定，Discord transport，制約は [Worker 検索接続](docs/worker-search-bridge.md) を参照．
 
 ```bash
 ./scripts/phase1.sh searxng-setup

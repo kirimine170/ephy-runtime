@@ -5,7 +5,7 @@ import json
 import httpx
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from packages.eval_core.api import EvalRunRequest
 from packages.eval_core.preference_schemas import (
@@ -26,6 +26,7 @@ from packages.llm_runtime.schemas import ChatCompletionRequest, ChatMessage, Emb
 from packages.rag_core.schemas import IndexBrowseRequest, IndexSourceRequest, IngestRequest, RAGQueryRequest, SearchRequest
 from packages.router_core.schemas import RouteDecision, RoutePlanResponse
 from packages.web_search_core.schemas import WebSearchApproveRequest, WebSearchPlanRequest
+from packages.web_search_core.worker_provider import WorkerSearchError, WorkerSearchPending
 from .resident_routes import resident_service
 
 
@@ -276,6 +277,17 @@ def build_router() -> APIRouter:
                         "status": "completed",
                         "source_count": len(web_sources),
                     }
+                    identity = getattr(web_search_service, "search_identity", None)
+                    if identity:
+                        # SearXNG consumes its plan; Worker plans survive pending and resume．
+                        try:
+                            web_search_status.update(identity(plan_id))
+                        except ValueError:
+                            pass
+                except WorkerSearchPending as exc:
+                    return JSONResponse(status_code=202, content={"status": "pending", **exc.identity})
+                except WorkerSearchError as exc:
+                    raise HTTPException(status_code=502, detail={"code": exc.code, **exc.identity}) from None
                 except RuntimeError as exc:
                     web_search_status = {
                         "status": "unavailable",
@@ -456,18 +468,32 @@ def build_router() -> APIRouter:
         except OSError as exc:
             raise HTTPException(status_code=503, detail="Karte outbox could not be read") from exc
 
+    @router.post("/v1/web-search/plan")
     @router.post("/v1/web/search/plan")
     async def web_search_plan(payload: WebSearchPlanRequest, request: Request) -> dict:
         if not payload.query.strip():
             raise HTTPException(status_code=400, detail="query is required")
-        return await request.app.state.web_search_service.create_plan(payload.query)
+        try:
+            return await request.app.state.web_search_service.create_plan(payload.query)
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="web_search_plan_capacity_exceeded") from None
 
+    @router.post("/v1/web-search/approve")
     @router.post("/v1/web/search/approve")
     async def web_search_approve(payload: WebSearchApproveRequest, request: Request) -> dict:
         try:
             return request.app.state.web_search_service.approve(payload.plan_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/v1/web-search/cancel")
+    async def web_search_cancel(payload: WebSearchApproveRequest, request: Request) -> dict:
+        try:
+            return await request.app.state.web_search_service.cancel_plan(payload.plan_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except WorkerSearchError as exc:
+            raise HTTPException(status_code=502, detail={"code": exc.code, **exc.identity}) from None
 
     @router.post("/v1/embeddings")
     async def embeddings(payload: EmbeddingRequest, request: Request) -> dict:
