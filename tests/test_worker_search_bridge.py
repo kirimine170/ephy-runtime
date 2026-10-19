@@ -814,8 +814,561 @@ def test_cancel_never_submits_a_sessionless_or_unapproved_plan(monkeypatch, ques
     async def scenario():
         service, manager, _, _, client = make_service(monkeypatch)
         plan = await service.create_plan(question)
+        if plan["decision"] == "allow":
+            cancellation = await service.cancel_plan(plan["plan_id"])
+            assert cancellation["state"] == "cancelled" and cancellation["job_id"] is None
+            with pytest.raises(WorkerSearchError, match="worker_search_cancelled"):
+                await service.search_for_chat(question, plan["plan_id"])
+        else:
+            with pytest.raises(ValueError, match="has not been submitted"):
+                await service.cancel_plan(plan["plan_id"])
+        assert manager.requests == []
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+def lifecycle_app(service, config, adapter):
+    app = FastAPI()
+    app.include_router(build_router())
+    for name, value in {"app_config": config, "web_search_service": service, "chat_adapter": adapter,
+                        "model_router": ModelRouter(config), "prompt_manager": PromptManager(),
+                        "rag_service": SimpleNamespace(search_grounding_sources=lambda **_: [])}.items():
+        setattr(app.state, name, value)
+    return app
+
+
+class HeldFinalAdapter(Adapter):
+    def __init__(self, *, stream_prefix=False):
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.closed = asyncio.Event()
+        self.stream_prefix = stream_prefix
+
+    async def create_chat_completion(self, *, model_config, request_payload):
+        system = str(request_payload.messages[0].content)
+        if "Rewrite the user text" in system or "isolated fact extractor" in system:
+            return await super().create_chat_completion(model_config=model_config, request_payload=request_payload)
+        self.final_calls += 1
+        self.entered.set()
+        try:
+            await self.release.wait()
+            return {"choices": [{"message": {"content": "late-final-answer"}}]}
+        finally:
+            self.closed.set()
+
+    async def stream_chat_completion(self, *, model_config, request_payload):
+        self.final_calls += 1
+        self.entered.set()
+        try:
+            if self.stream_prefix:
+                yield b'data: {"choices":[{"delta":{"content":"earlier-prefix"},"finish_reason":null}]}\n\n'
+            await self.release.wait()
+            yield b'data: {"choices":[{"delta":{"content":"late-stream-answer"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+        finally:
+            self.closed.set()
+
+
+@pytest.mark.parametrize("grounding", ["resident", "karte"])
+def test_turn_cancellation_before_worker_session_stops_grounding_and_never_submits(monkeypatch, grounding):
+    import threading
+
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch)
+        app = lifecycle_app(service, config, adapter)
+        entered, release = threading.Event(), threading.Event()
+        def hold_grounding(*args, **kwargs):
+            entered.set()
+            assert release.wait(5), "test grounding cleanup did not release its thread"
+        metadata = {"web_search": True}
+        if grounding == "resident":
+            metadata["resident_session_id"] = "fixture-resident"
+            app.state.resident_service = SimpleNamespace(state=hold_grounding)
+        else:
+            metadata["source_scope"] = "personal_context"
+            app.state.karte_context_client = SimpleNamespace(search_and_read=hold_grounding)
+        plan = await service.create_plan("public question")
+        metadata["web_search_plan_id"] = plan["plan_id"]
+        payload = {"model": "fast", "messages": [{"role": "user", "content": "public question"}], "metadata": metadata}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            chat = asyncio.create_task(client.post("/v1/chat/completions", json=payload))
+            try:
+                assert await asyncio.to_thread(entered.wait, 1)
+                assert service._plans[plan["plan_id"]].active_turns == 1
+                assert service._plans[plan["plan_id"]].worker_session is None
+                cancelled = await client.post("/v1/web-search/cancel", json={"plan_id": plan["plan_id"]})
+                assert cancelled.status_code == 200
+                assert cancelled.json()["job_id"] is None and cancelled.json()["state"] == "cancelled"
+                response = await asyncio.wait_for(chat, 1)
+                assert response.status_code == 502
+                assert response.json()["detail"]["code"] == "worker_search_cancelled"
+                assert response.json()["detail"]["plan_id"] == plan["plan_id"]
+                assert not release.is_set()
+                assert service._plans[plan["plan_id"]].active_turns == 0
+                again = await client.post("/v1/chat/completions", json=payload)
+                assert again.status_code == 502 and again.json()["detail"]["code"] == "worker_search_cancelled"
+                assert manager.requests == [] and manager.jobs == {}
+                assert adapter.extract_calls == adapter.final_calls == 0
+            finally:
+                release.set()
+                await asyncio.gather(chat, return_exceptions=True)
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("cancel_http_failure", [False, True])
+def test_whole_turn_cancel_closes_held_final_model_and_suppresses_late_success(monkeypatch, stream, cancel_http_failure):
+    async def scenario():
+        original_service, manager, config, _, manager_client = make_service(monkeypatch)
+        adapter = HeldFinalAdapter(stream_prefix=stream)
+        service = WebSearchService(config, adapter, original_service._provider)
+        if cancel_http_failure:
+            def handler(request):
+                if request.url.path.endswith("/cancel"):
+                    manager.requests.append(request)
+                    return httpx.Response(503, json={"detail": "fixture cancellation unavailable"})
+                return manager(request)
+            manager_client._transport = httpx.MockTransport(handler)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                   "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            chat = asyncio.create_task(client.post("/v1/chat/completions", json=payload))
+            try:
+                await asyncio.wait_for(adapter.entered.wait(), 1)
+                assert service._plans[plan["plan_id"]].active_turns == 1
+                cancelled = await client.post("/v1/web-search/cancel", json={"plan_id": plan["plan_id"]})
+                assert cancelled.status_code == (502 if cancel_http_failure else 200)
+                response = await asyncio.wait_for(chat, 1)
+                assert adapter.closed.is_set() and not adapter.release.is_set()
+                if stream:
+                    assert response.status_code == 200
+                    assert "event: error" in response.text and "worker_search_cancelled" in response.text
+                    assert plan["plan_id"] in response.text
+                    assert "late-stream-answer" not in response.text
+                    assert '"finish_reason":"stop"' not in response.text
+                    assert "[DONE]" not in response.text
+                else:
+                    assert response.status_code == 502
+                    assert response.json()["detail"]["code"] == "worker_search_cancelled"
+                    assert response.json()["detail"]["plan_id"] == plan["plan_id"]
+                    assert "late-final-answer" not in response.text and "sources" not in response.json()
+                assert service._plans[plan["plan_id"]].active_turns == 0
+                assert service._plans[plan["plan_id"]].completed is None
+                resumed = await client.post("/v1/chat/completions", json=payload)
+                assert resumed.status_code == 502 and resumed.json()["detail"]["code"] == "worker_search_cancelled"
+                assert adapter.final_calls == adapter.extract_calls == 1
+                assert len(manager.jobs) == manager.submit_calls == 1
+            finally:
+                adapter.release.set()
+                await asyncio.gather(chat, return_exceptions=True)
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+def test_active_turn_retains_expired_plan_for_cancel_and_releases_bounded_capacity(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    async def scenario():
+        original_service, manager, config, _, manager_client = make_service(monkeypatch, max_plans=1)
+        adapter = HeldFinalAdapter()
+        service = WebSearchService(config, adapter, original_service._provider)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        payload = {"model": "fast", "messages": [{"role": "user", "content": "public question"}],
+                   "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            chat = asyncio.create_task(client.post("/v1/chat/completions", json=payload))
+            try:
+                await asyncio.wait_for(adapter.entered.wait(), 1)
+                record = service._plans[plan["plan_id"]]
+                record.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                capacity = await client.post("/v1/web-search/plan", json={"query": "another public question"})
+                assert capacity.status_code == 503 and len(service._plans) == 1
+                cancelled = await client.post("/v1/web-search/cancel", json={"plan_id": plan["plan_id"]})
+                assert cancelled.status_code == 200
+                answer = await asyncio.wait_for(chat, 1)
+                assert answer.status_code == 502 and record.active_turns == 0
+                replacement = await client.post("/v1/web-search/plan", json={"query": "another public question"})
+                assert replacement.status_code == 200 and replacement.json()["plan_id"] != plan["plan_id"]
+                assert len(service._plans) == 1 and plan["plan_id"] not in service._plans
+                assert manager.submit_calls == len(manager.jobs) == 1
+            finally:
+                adapter.release.set()
+                await asyncio.gather(chat, return_exceptions=True)
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_disconnected_active_turn_closes_final_adapter_and_releases_handle(monkeypatch, stream):
+    async def scenario():
+        original_service, manager, config, _, manager_client = make_service(monkeypatch)
+        adapter = HeldFinalAdapter()
+        service = WebSearchService(config, adapter, original_service._provider)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                   "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            chat = asyncio.create_task(client.post("/v1/chat/completions", json=payload))
+            try:
+                await asyncio.wait_for(adapter.entered.wait(), 1)
+                chat.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await chat
+                assert adapter.closed.is_set() and not adapter.release.is_set()
+                assert service._plans[plan["plan_id"]].active_turns == 0
+                assert not service._plans[plan["plan_id"]].cancel_event.is_set()
+                assert not any(request.url.path.endswith("/cancel") for request in manager.requests)
+            finally:
+                adapter.release.set()
+                await asyncio.gather(chat, return_exceptions=True)
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+def test_turn_cancellation_wins_same_cycle_completion_and_concurrent_cancel_is_idempotent(monkeypatch):
+    async def scenario():
+        service, manager, _, _, client = make_service(monkeypatch)
+        plan = await service.create_plan("public question")
+        turn = service.begin_turn("public question", plan["plan_id"])
+        async def complete_and_cancel():
+            cancellations = await asyncio.gather(*(service.cancel_plan(plan["plan_id"]) for _ in range(3)))
+            assert all(item["state"] == "cancelled" and item["job_id"] is None for item in cancellations)
+            return "late-final-answer"
+        try:
+            with pytest.raises(WorkerSearchError, match="worker_search_cancelled"):
+                await turn.run(complete_and_cancel)
+            assert manager.requests == []
+            assert service._plans[plan["plan_id"]].active_turns == 1
+        finally:
+            turn.close()
+            turn.close()
+        assert service._plans[plan["plan_id"]].active_turns == 0
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("query", ["different public question", "alice@example.com public question"])
+def test_turn_validates_query_and_approval_before_any_grounding(monkeypatch, query):
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch)
+        app = lifecycle_app(service, config, adapter)
+        grounding_calls = []
+        app.state.rag_service = SimpleNamespace(search_grounding_sources=lambda **kwargs: grounding_calls.append(kwargs) or [])
+        plan = await service.create_plan("public question" if query.startswith("different") else query)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            response = await client.post("/v1/chat/completions", json={
+                "messages": [{"role": "user", "content": query}],
+                "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}})
+        assert response.status_code == 400
+        assert grounding_calls == [] and manager.requests == []
+        assert service._plans[plan["plan_id"]].active_turns == 0
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("outcome", "expected_status"), [
+    ("json", 200), ("sse", 200), ("pending", 202), ("failed", 502), ("invalid_routing", 400),
+])
+def test_turn_handle_cleanup_on_success_pending_and_failure_paths(monkeypatch, outcome, expected_status):
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch)
+        app = lifecycle_app(service, config, adapter)
+        if outcome in {"pending", "failed"}:
+            manager.state = "queued" if outcome == "pending" else "failed"
+        plan = await service.create_plan("public question")
+        metadata = {"web_search": True, "web_search_plan_id": plan["plan_id"]}
+        if outcome == "invalid_routing":
+            metadata["routing_message_count"] = 2
+        payload = {"model": "fast", "stream": outcome == "sse",
+                   "messages": [{"role": "user", "content": "public question"}], "metadata": metadata}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            response = await client.post("/v1/chat/completions", json=payload, headers={"Prefer": "respond-async"})
+        assert response.status_code == expected_status
+        record = service._plans[plan["plan_id"]]
+        assert record.active_turns == 0 and not record.cancel_event.is_set()
+        assert manager.submit_calls == len(manager.jobs) == 1
+        assert not any(request.url.path.endswith("/cancel") for request in manager.requests)
+        if outcome == "sse":
+            assert "data: [DONE]" in response.text
+        elif outcome == "json":
+            assert response.json()["choices"][0]["message"]["content"].startswith("調べてみたところ")
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_ordinary_chat_with_plan_metadata_does_not_acquire_worker_turn(monkeypatch, stream):
+    async def scenario():
+        original_service, manager, config, _, manager_client = make_service(monkeypatch)
+        adapter = HeldFinalAdapter()
+        adapter.release.set()
+        service = WebSearchService(config, adapter, original_service._provider)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+            response = await client.post("/v1/chat/completions", json={
+                "model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                "metadata": {"web_search": False, "web_search_plan_id": plan["plan_id"]}})
+        assert response.status_code == 200
+        assert "late-stream-answer" in response.text if stream else "late-final-answer" in response.text
+        assert service._plans[plan["plan_id"]].active_turns == 0
+        assert manager.requests == [] and adapter.final_calls == 1
+        await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+def test_only_explicitly_approved_worker_plan_can_be_locally_cancelled(monkeypatch):
+    async def scenario():
+        service, manager, _, _, client = make_service(monkeypatch)
+        question = "alice@example.com public question"
+        plan = await service.create_plan(question)
+        assert plan["decision"] == "confirm"
         with pytest.raises(ValueError, match="has not been submitted"):
             await service.cancel_plan(plan["plan_id"])
+        service.approve(plan["plan_id"])
+        assert (await service.cancel_plan(plan["plan_id"]))["state"] == "cancelled"
+        with pytest.raises(WorkerSearchError, match="worker_search_cancelled"):
+            service.begin_turn(question, plan["plan_id"])
+        nonworker = WebSearchService(service._config, Adapter(), provider=SimpleNamespace())
+        other_plan = await nonworker.create_plan("public question")
+        with pytest.raises(ValueError, match="has not been submitted"):
+            await nonworker.cancel_plan(other_plan["plan_id"])
+        assert nonworker.begin_turn("public question", other_plan["plan_id"]) is None
         assert manager.requests == []
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+class ASGIDisconnectRequest:
+    """Drive an actual ASGI receive disconnect without cancelling the app task．"""
+
+    def __init__(self, app, payload, *, spec_version="2.3"):
+        body = json.dumps(payload).encode()
+        self.incoming = asyncio.Queue()
+        self.incoming.put_nowait({"type": "http.request", "body": body, "more_body": False})
+        self.sent = []
+        self.active_receivers = 0
+        self.max_receivers = 0
+        self.disconnect_consumed = False
+        scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": spec_version},
+                 "http_version": "1.1", "method": "POST", "scheme": "http",
+                 "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions", "root_path": "",
+                 "query_string": b"", "server": ("127.0.0.1", 80), "client": ("127.0.0.1", 4567),
+                 "headers": [(b"host", b"127.0.0.1"), (b"content-type", b"application/json"),
+                             (b"content-length", str(len(body)).encode())]}
+        self.task = asyncio.create_task(app(scope, self.receive, self.send))
+
+    async def receive(self):
+        self.active_receivers += 1
+        self.max_receivers = max(self.max_receivers, self.active_receivers)
+        try:
+            message = await self.incoming.get()
+            if message["type"] == "http.disconnect":
+                self.disconnect_consumed = True
+            return message
+        finally:
+            self.active_receivers -= 1
+
+    async def send(self, message):
+        self.sent.append(message)
+
+    def disconnect(self):
+        self.incoming.put_nowait({"type": "http.disconnect"})
+
+    def body(self):
+        return b"".join(message.get("body", b"") for message in self.sent).decode()
+
+    async def cleanup(self):
+        if not self.task.done():
+            self.task.cancel()
+        await asyncio.gather(self.task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("spec_version", ["2.3", "2.4"])
+def test_asgi_disconnect_closes_held_final_work_without_permanent_cancel_and_resumes_same_job(monkeypatch, stream, spec_version):
+    async def scenario():
+        original_service, manager, config, _, manager_client = make_service(monkeypatch)
+        adapter = HeldFinalAdapter(stream_prefix=stream)
+        service = WebSearchService(config, adapter, original_service._provider)
+        app = lifecycle_app(service, config, adapter)
+        plan = await service.create_plan("public question")
+        payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                   "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"]}}
+        request = ASGIDisconnectRequest(app, payload, spec_version=spec_version)
+        try:
+            await asyncio.wait_for(adapter.entered.wait(), 1)
+            record = service._plans[plan["plan_id"]]
+            identity = service.search_identity(plan["plan_id"])
+            assert record.active_turns == 1
+            request.disconnect()
+            await asyncio.wait_for(asyncio.shield(request.task), 1)
+            assert request.disconnect_consumed
+            assert request.max_receivers == 1 and request.active_receivers == 0
+            assert adapter.closed.is_set() and not adapter.release.is_set()
+            assert record.active_turns == 0 and not record.cancel_event.is_set()
+            assert service.search_identity(plan["plan_id"]) == identity
+            assert not record.worker_session.cancel_requested
+            assert not any(item.url.path.endswith("/cancel") for item in manager.requests)
+            assert "late-final-answer" not in request.body() and "late-stream-answer" not in request.body()
+            assert "[DONE]" not in request.body()
+            if not stream:
+                assert next(item for item in request.sent if item["type"] == "http.response.start")["status"] == 499
+            adapter.release.set()
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+                resumed = await client.post("/v1/chat/completions", json=payload)
+            assert resumed.status_code == 200
+            assert "late-stream-answer" in resumed.text if stream else "late-final-answer" in resumed.text
+            assert record.active_turns == 0 and not record.cancel_event.is_set()
+            assert manager.submit_calls == len(manager.jobs) == 1
+            assert adapter.final_calls == 2
+        finally:
+            adapter.release.set()
+            await request.cleanup()
+            await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_asgi_disconnect_during_grounding_prevents_submission_and_same_payload_can_resume(monkeypatch, stream):
+    import threading
+
+    async def scenario():
+        service, manager, config, adapter, manager_client = make_service(monkeypatch)
+        app = lifecycle_app(service, config, adapter)
+        entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+        def hold_grounding(*args, **kwargs):
+            entered.set()
+            assert release.wait(5), "test grounding cleanup did not release its thread"
+            returned.set()
+            return SimpleNamespace(sources=[], read_count=0, read_failed_count=0,
+                                   search_response=SimpleNamespace(status="ok", results=[], diagnostics=[]))
+        app.state.karte_context_client = SimpleNamespace(search_and_read=hold_grounding)
+        plan = await service.create_plan("public question")
+        payload = {"model": "fast", "stream": stream, "messages": [{"role": "user", "content": "public question"}],
+                   "metadata": {"web_search": True, "web_search_plan_id": plan["plan_id"], "source_scope": "personal_context"}}
+        request = ASGIDisconnectRequest(app, payload)
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            record = service._plans[plan["plan_id"]]
+            assert record.active_turns == 1 and record.worker_session is None
+            request.disconnect()
+            await asyncio.wait_for(asyncio.shield(request.task), 1)
+            assert request.disconnect_consumed and request.max_receivers == 1 and request.active_receivers == 0
+            assert record.active_turns == 0 and not record.cancel_event.is_set()
+            assert record.worker_session is None and manager.requests == []
+            assert not release.is_set() and adapter.final_calls == adapter.extract_calls == 0
+            release.set()
+            assert await asyncio.to_thread(returned.wait, 1)
+            assert manager.requests == []
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
+                resumed = await client.post("/v1/chat/completions", json=payload)
+            assert resumed.status_code == 200
+            assert "data: [DONE]" in resumed.text if stream else "choices" in resumed.json()
+            assert manager.submit_calls == len(manager.jobs) == 1
+            assert record.active_turns == 0 and not record.cancel_event.is_set()
+        finally:
+            release.set()
+            await request.cleanup()
+            await manager_client.aclose()
+    asyncio.run(scenario())
+
+
+def test_consumed_disconnect_wins_stream_response_handoff_and_closes_abandoned_iterator_once(monkeypatch):
+    from fastapi.responses import StreamingResponse
+
+    from apps.gateway.routes import (
+        _close_worker_response,
+        _run_until_worker_disconnect,
+        _WorkerRequestDisconnected,
+    )
+
+    async def scenario():
+        service, manager, _, _, client = make_service(monkeypatch)
+        plan = await service.create_plan("public question")
+        turn = service.begin_turn("public question", plan["plan_id"])
+        ready = asyncio.Event()
+        class ClosingIterator:
+            closed = 0
+            def __aiter__(self):
+                return self
+            async def __anext__(self):
+                return b"late-stream-answer"
+            async def aclose(self):
+                self.closed += 1
+        iterator = ClosingIterator()
+        async def complete_response():
+            response = StreamingResponse(iterator)
+            ready.set()
+            return response
+        consumed = []
+        async def receive():
+            await ready.wait()
+            consumed.append("http.disconnect")
+            return {"type": "http.disconnect"}
+        try:
+            with pytest.raises(_WorkerRequestDisconnected):
+                await _run_until_worker_disconnect(receive, lambda: turn.run(
+                    complete_response, close_abandoned=_close_worker_response))
+            assert consumed == ["http.disconnect"]
+            assert iterator.closed == 1
+            assert not service._plans[plan["plan_id"]].cancel_event.is_set()
+            assert manager.requests == []
+        finally:
+            turn.close()
+        assert service._plans[plan["plan_id"]].active_turns == 0
+        await client.aclose()
+    asyncio.run(scenario())
+
+
+def test_turn_cancellation_during_completion_cleanup_closes_abandoned_response_once(monkeypatch):
+    from fastapi.responses import StreamingResponse
+
+    from apps.gateway.routes import _close_worker_response
+
+    async def scenario():
+        service, manager, _, _, client = make_service(monkeypatch)
+        plan = await service.create_plan("public question")
+        turn = service.begin_turn("public question", plan["plan_id"])
+        cleanup_started, hold_cleanup = asyncio.Event(), asyncio.Event()
+        class HeldCleanupEvent:
+            def is_set(self):
+                return False
+            async def wait(self):
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cleanup_started.set()
+                    await hold_cleanup.wait()
+        service._plans[plan["plan_id"]].cancel_event = HeldCleanupEvent()
+        class ClosingIterator:
+            closed = 0
+            def __aiter__(self):
+                return self
+            async def __anext__(self):
+                raise StopAsyncIteration
+            async def aclose(self):
+                self.closed += 1
+        iterator = ClosingIterator()
+        async def complete_response():
+            return StreamingResponse(iterator)
+        runner = asyncio.create_task(turn.run(complete_response, close_abandoned=_close_worker_response))
+        try:
+            await asyncio.wait_for(cleanup_started.wait(), 1)
+            runner.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await runner
+            assert iterator.closed == 1 and not hold_cleanup.is_set()
+            assert manager.requests == []
+        finally:
+            hold_cleanup.set()
+            await asyncio.gather(runner, return_exceptions=True)
+            turn.close()
+        assert service._plans[plan["plan_id"]].active_turns == 0
         await client.aclose()
     asyncio.run(scenario())

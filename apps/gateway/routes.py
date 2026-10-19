@@ -84,6 +84,85 @@ def _stream_error_event(exc: RuntimeError, model: str) -> bytes:
     return f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
+class _WorkerRequestDisconnected(Exception):
+    """A transport loss abandons local work without cancelling the approved plan．"""
+
+
+async def _close_worker_response(response):
+    if isinstance(response, StreamingResponse):
+        close = getattr(response.body_iterator, "aclose", None)
+        if close is not None:
+            await close()
+
+
+async def _run_until_worker_disconnect(receive, operation):
+    disconnected = False
+
+    async def watch_disconnect():
+        nonlocal disconnected
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                disconnected = True
+                return
+
+    work = asyncio.create_task(operation())
+    monitor = asyncio.create_task(watch_disconnect())
+    abandoned = True
+    try:
+        try:
+            await asyncio.wait({work, monitor}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (work, monitor):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(work, monitor, return_exceptions=True)
+        # Stop and await this receive owner before handing a response to StreamingResponse．
+        # A consumed disconnect wins even when completion became ready in the same cycle．
+        if disconnected:
+            raise _WorkerRequestDisconnected()
+        if not monitor.cancelled():
+            monitor.result()
+        response = work.result()
+        abandoned = False
+        return response
+    finally:
+        if abandoned and work.done() and not work.cancelled() and work.exception() is None:
+            await _close_worker_response(work.result())
+
+
+class _WorkerSearchStreamingResponse(StreamingResponse):
+    def __init__(self, response: StreamingResponse, turn) -> None:
+        self._turn = turn
+
+        async def guarded_stream():
+            try:
+                async for chunk in turn.iterate(response.body_iterator):
+                    yield chunk
+            except WorkerSearchError as exc:
+                payload = {"error": exc.code, "code": exc.code, "finish_reason": "cancelled", **exc.identity}
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n".encode()
+
+        super().__init__(guarded_stream(), status_code=response.status_code, headers=dict(response.headers),
+                         media_type=response.media_type, background=response.background)
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            try:
+                # Own exactly one receive monitor for either ASGI version．Some
+                # StreamingResponse versions otherwise rely only on a failed send．
+                await _run_until_worker_disconnect(receive, lambda: self.stream_response(send))
+            except (_WorkerRequestDisconnected, OSError):
+                pass
+        finally:
+            try:
+                await self.body_iterator.aclose()
+            finally:
+                self._turn.close()
+        if self.background is not None:
+            await self.background()
+
+
 def _mark_local_sources(sources: list[dict]) -> list[dict]:
     marked: list[dict] = []
     for index, source in enumerate(sources, start=1):
@@ -205,6 +284,37 @@ def build_router() -> APIRouter:
 
     @router.post("/v1/chat/completions")
     async def chat_completions(payload: ChatCompletionRequest, request: Request) -> dict:
+        turn = None
+        streaming = False
+        try:
+            if payload.metadata and payload.metadata.web_search:
+                plan_id = (payload.metadata.web_search_plan_id or "").strip()
+                if not plan_id:
+                    raise ValueError("web_search_plan_id is required when web_search is enabled")
+                begin = getattr(request.app.state.web_search_service, "begin_turn", None)
+                if begin is not None:
+                    turn = begin(_latest_user_message_text(payload.messages), plan_id)
+            if turn is None:
+                return await _chat_completions(payload, request)
+            response = await _run_until_worker_disconnect(
+                request.receive, lambda: turn.run(
+                    lambda: _chat_completions(payload, request, turn=turn), close_abandoned=_close_worker_response))
+            turn.check()
+            if isinstance(response, StreamingResponse):
+                response = _WorkerSearchStreamingResponse(response, turn)
+                streaming = True
+            return response
+        except WorkerSearchError as exc:
+            raise HTTPException(status_code=502, detail={"code": exc.code, **exc.identity}) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except _WorkerRequestDisconnected:
+            raise HTTPException(status_code=499, detail="client_disconnected") from None
+        finally:
+            if turn is not None and not streaming:
+                turn.close()
+
+    async def _chat_completions(payload: ChatCompletionRequest, request: Request, *, turn=None) -> dict:
         router_service = request.app.state.model_router
         adapter = request.app.state.chat_adapter
         prompt_manager = request.app.state.prompt_manager
@@ -379,14 +489,20 @@ def build_router() -> APIRouter:
                         yield f"event: karte_context_status\ndata: {json.dumps(karte_context_status, ensure_ascii=False)}\n\n".encode("utf-8")
                     if sources:
                         yield f"event: sources\ndata: {json.dumps({'sources': sources}, ensure_ascii=False)}\n\n".encode("utf-8")
+                    stream = adapter.stream_chat_completion(
+                        model_config=decision.selected_model,
+                        request_payload=effective_payload,
+                    )
                     try:
-                        async for chunk in adapter.stream_chat_completion(
-                            model_config=decision.selected_model,
-                            request_payload=effective_payload,
-                        ):
+                        async for chunk in stream:
                             yield chunk
                     except RuntimeError as exc:
                         yield _stream_error_event(exc, decision.selected_model.model)
+                    finally:
+                        if turn is not None:
+                            close = getattr(stream, "aclose", None)
+                            if close is not None:
+                                await close()
 
                 return StreamingResponse(
                     generate_chat_stream(),

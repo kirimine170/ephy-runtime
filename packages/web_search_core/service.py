@@ -39,6 +39,65 @@ class PlanRecord:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     worker_session: WorkerSearchSession | None = None
     completed: tuple[list[dict], str] | None = None
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    active_turns: int = 0
+
+
+class WorkerSearchTurn:
+    """Keep one approved plan cancellable through grounding and final generation．"""
+
+    def __init__(self, record: PlanRecord, check_cancelled) -> None:
+        self._record = record
+        self._check_cancelled = check_cancelled
+        self._closed = False
+        record.active_turns += 1
+
+    def check(self) -> None:
+        self._check_cancelled(self._record)
+
+    async def run(self, operation, *, close_abandoned=None):
+        self.check()
+        work = asyncio.ensure_future(operation())
+        cancellation = asyncio.create_task(self._record.cancel_event.wait())
+        abandoned = True
+        try:
+            try:
+                await asyncio.wait({work, cancellation}, return_when=asyncio.FIRST_COMPLETED)
+                # Cancellation takes priority if completion and cancellation became ready together．
+                self.check()
+                result = work.result()
+            finally:
+                for task in (work, cancellation):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(work, cancellation, return_exceptions=True)
+            # Keep ownership until cleanup has finished; it may itself be cancelled．
+            self.check()
+            abandoned = False
+            return result
+        finally:
+            if abandoned and close_abandoned is not None and work.done() and not work.cancelled() and work.exception() is None:
+                await close_abandoned(work.result())
+
+    async def iterate(self, source):
+        iterator = source.__aiter__()
+        try:
+            while True:
+                try:
+                    chunk = await self.run(lambda: anext(iterator))
+                except StopAsyncIteration:
+                    break
+                self.check()
+                yield chunk
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                await close()
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._record.active_turns -= 1
 
 
 class EgressPlanner:
@@ -144,12 +203,23 @@ class WebSearchService:
         record.approved = True
         return {"plan_id": plan_id, "status": "approved", "expires_at": record.expires_at.isoformat()}
 
-    async def search_for_chat(self, query: str, plan_id: str) -> tuple[list[dict], str]:
+    def begin_turn(self, query: str, plan_id: str) -> WorkerSearchTurn | None:
+        if not isinstance(self._provider, WorkerSearchProvider):
+            return None
         record = self._get_plan(plan_id)
+        self._validate_chat_plan(record, query)
+        self._check_cancelled(record)
+        return WorkerSearchTurn(record, self._check_cancelled)
+
+    def _validate_chat_plan(self, record: PlanRecord, query: str) -> None:
         if record.prompt_hash != self.prompt_hash(query):
             raise ValueError("Web search plan does not match the latest user prompt")
         if not record.approved:
             raise ValueError("Web search plan requires user approval")
+
+    async def search_for_chat(self, query: str, plan_id: str) -> tuple[list[dict], str]:
+        record = self._get_plan(plan_id)
+        self._validate_chat_plan(record, query)
         async with record.lock:
             self._check_cancelled(record)
             if record.completed is not None:
@@ -181,14 +251,24 @@ class WebSearchService:
 
     async def cancel_plan(self, plan_id: str) -> dict:
         record = self._get_plan(plan_id)
-        if not record.approved or not isinstance(self._provider, WorkerSearchProvider) or record.worker_session is None:
+        if not record.approved or not isinstance(self._provider, WorkerSearchProvider):
             raise ValueError("Web search worker job has not been submitted")
+        # The approved turn may still be grounding before its first Manager request．
+        # Retain local intent without creating a job merely to cancel it．
+        record.cancel_event.set()
+        record.completed = None
+        if record.worker_session is None:
+            return {"provider": "worker", "contract": "0.4", "plan_id": record.plan_id,
+                    "job_id": None, "state": "cancelled"}
         return await self._provider.cancel(record.worker_session)
 
     @staticmethod
     def _check_cancelled(record: PlanRecord) -> None:
-        if record.worker_session is not None and record.worker_session.cancel_requested:
-            raise WorkerSearchError("worker_search_cancelled", session=record.worker_session)
+        if record.cancel_event.is_set() or (record.worker_session is not None and record.worker_session.cancel_requested):
+            error = WorkerSearchError("worker_search_cancelled", session=record.worker_session)
+            if record.worker_session is None:
+                error.identity.update(plan_id=record.plan_id, job_id=None, state="cancelled")
+            raise error
 
     @staticmethod
     def prompt_hash(query: str) -> str:
@@ -206,7 +286,7 @@ class WebSearchService:
         return record
 
     def _purge_expired(self, now: datetime) -> None:
-        self._plans = {key: value for key, value in self._plans.items() if value.expires_at > now}
+        self._plans = {key: value for key, value in self._plans.items() if value.active_turns or value.expires_at > now}
 
     async def _rewrite_query(self, redacted_query: str, *, context: str | None = None) -> RewriteResult:
         model = self._config.models.get("fast")

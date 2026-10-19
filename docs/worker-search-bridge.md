@@ -100,6 +100,18 @@ cancel API だけで承認または投入しない．取消は best effort で�
 取消は進行中の検索 poll の lock を待たずに送る．初回の投入応答が未着の場合も取消意図を保持し，
 同じ承認済み Job の idempotency key で ID を回復してから取り消す．新しい key の Job は作らない．
 取消を要求した計画からは，その後の事実抽出や成功回答を生成しない．
+承認済み Worker 計画の chat は，最初のローカル grounding から最終回答まで同じ取消状態に結び付く．
+Worker へ未投入でも，cancel API は HTTP 200 の `state: cancelled` と `job_id: null` を返し，
+Manager へ通信せずにその後の投入を止める．未承認の確認待ち計画，blocked 計画，SearXNG 計画は取り消せない．
+最終生成中の取消はモデルへの待機を閉じ，JSON では成功回答を返さない．SSE では既に送った文章は戻せないが，
+以降の回答 delta と正常終了を送らず，`worker_search_cancelled` の error event で終了する．
+実行中の chat は元の plan TTL を超えても取消可能な状態を保持し，成功，失敗，切断時にその保持を解放する．
+保持中も計画件数の上限を維持する．通信切断だけでは Manager Job を自動取消せず，同じ plan の再照会を維持する．
+実際の HTTP 切断は，grounding や JSON 生成の待機中も ASGI の切断通知で検出し，
+そのリクエストのローカル処理とモデル接続を閉じて保持を解放する．取消意図は plan に残さない．
+SSE への移行前に受信監視を終了し，移行後は streaming 応答だけが切断通知を受け取る．
+再接続は同じ plan と Job を再利用できる．切断済みの未応答リクエストは内部的に
+`499 client_disconnected` で終え，調査完了の回答として扱わない．
 
 ## 結果と信頼境界
 
