@@ -8,7 +8,7 @@ import json
 import math
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -46,6 +46,9 @@ class WorkerSearchSession:
     input_hash: str
     job_id: str | None = None
     state: str = "queued"
+    cancel_requested: bool = False
+    cancel_acknowledged: bool = False
+    cancel_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def identity(self) -> dict:
         return {"provider": "worker", "contract": "0.4", "plan_id": self.plan_id,
@@ -222,19 +225,26 @@ class WorkerSearchProvider:
             raise WorkerSearchError("worker_job_invalid_response", session=session)
         if not math.isclose(view["deadline_at"] - view["created_at"], expected["deadline_seconds"], abs_tol=0.01):
             raise WorkerSearchError("worker_job_identity_mismatch", session=session)
-        session.job_id, session.state = job_id, state
+        session.job_id = job_id
+        if not session.cancel_acknowledged:
+            session.state = state
 
     async def search_job(self, session: WorkerSearchSession) -> list[dict]:
         try:
             if session.job_id is None:
                 view = await self._request("POST", "/jobs", body=session.submit)
                 self._validate_view(session, view)
+            await self._check_cancellation(session)
             end = asyncio.get_running_loop().time() + self._config.worker_wait_seconds
             while True:
+                await self._check_cancellation(session)
                 view = await self._request("GET", f"/jobs/{session.job_id}")
                 self._validate_view(session, view)
+                await self._check_cancellation(session)
                 if session.state == "completed":
-                    return await self._completed(session, view)
+                    sources = await self._completed(session, view)
+                    await self._check_cancellation(session)
+                    return sources
                 if session.state in {"partial", "failed", "cancelled", "lost"}:
                     raise WorkerSearchError("worker_search_failed", session=session)
                 remaining = end - asyncio.get_running_loop().time()
@@ -269,11 +279,26 @@ class WorkerSearchProvider:
         return self._sanitizer.sanitize([item.model_dump() for item in result.payload.candidates])
 
     async def cancel(self, session: WorkerSearchSession) -> dict:
-        if session.job_id is None:
-            raise WorkerSearchError("worker_job_not_submitted", session=session)
-        view = await self._request("POST", f"/jobs/{session.job_id}/cancel")
-        self._validate_view(session, view)
-        return session.identity()
+        session.cancel_requested = True
+        # Polling may hold the plan lock for seconds．Only cancellation requests
+        # share this lock, so a known job can be cancelled independently．
+        async with session.cancel_lock:
+            if session.cancel_acknowledged:
+                return session.identity()
+            if session.job_id is None:
+                # The first POST may be in flight or its reply lost．Recover the
+                # same approved job using its original Manager idempotency key．
+                view = await self._request("POST", "/jobs", body=session.submit)
+                self._validate_view(session, view)
+            view = await self._request("POST", f"/jobs/{session.job_id}/cancel")
+            self._validate_view(session, view)
+            session.cancel_acknowledged = True
+            return session.identity()
+
+    async def _check_cancellation(self, session: WorkerSearchSession) -> None:
+        if session.cancel_requested:
+            await self.cancel(session)
+            raise WorkerSearchError("worker_search_cancelled", session=session)
 
     async def aclose(self) -> None:
         if self._owns_client:

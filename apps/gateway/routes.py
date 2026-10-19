@@ -486,7 +486,10 @@ def build_router() -> APIRouter:
         if not payload.query.strip():
             raise HTTPException(status_code=400, detail="query is required")
         try:
-            return await request.app.state.web_search_service.create_plan(payload.query)
+            service = request.app.state.web_search_service
+            if payload.context is None:
+                return await service.create_plan(payload.query)
+            return await service.create_plan(payload.query, context=payload.context)
         except RuntimeError:
             raise HTTPException(status_code=503, detail="web_search_plan_capacity_exceeded") from None
 

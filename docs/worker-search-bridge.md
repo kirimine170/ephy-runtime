@@ -35,6 +35,16 @@ Worker の検索 provider は Worker 側で設定する．この adapter は有�
 承認 UI からのみ `POST /v1/web-search/approve` に `{ "plan_id": "..." }` を送れる．
 Discord transport は承認 API を呼び出さない．
 
+自分の回答への追加質問では，新しい質問を `query`，前の回答を任意の `context` に分けて送る．
+`context` は文字列または null で，最大 2400 文字とする．Discord 側はさらに 1200 UTF-16 code unit
+までに制限し，同じユーザーと channel で公開した直近の回答だけを使う．`query` だけの呼び出しも維持する．
+Runtime は新しい質問へ従来の秘密情報検査を適用し，前の回答は機微な値を伏せてから，
+命令や Tool 権限を持たない引用データとしてローカルの検索語書き換えにだけ渡す．
+前の回答のコード例，公開連絡先，パス表記だけで新しい質問を確認待ちにはしないが，
+書き換え後の外部送信語には同じ秘密情報検査と承認を必ず適用する．
+生の `context` は Manager へ送らず，計画の hash は新しい `query` だけに結び付く．
+chat の最新 user message も同じ新しい質問にする．
+
 `allow` または明示的承認の後，同じ最新 user message を含む
 `POST /v1/chat/completions` に metadata を付ける．
 
@@ -63,7 +73,10 @@ Manager が `partial`／`failed`／`cancelled`／`lost` を返した場合は HT
 `stream: true` の場合も，HTTP 202 は `Prefer: respond-async` の指定時だけ返す．検索が終わると
 既存の SSE を使い，`web_search_status` と `sources` の後に回答 delta が続く．
 会話生成に全体の経過時間上限は設けず，モデルとの streaming 通信が 600 秒間
-途絶えた場合に失敗とする．検索計画と事実抽出の非 streaming 通信は従来の
+途絶えた場合に失敗とする．600 秒は `web_search: true` と正しい形式の 32 桁 plan ID を持つ
+検索回答にだけ適用し，通常の streaming は従来の 120 秒の read timeout を維持する．
+形式の検証は待機方針の選択だけであり，plan の承認は Gateway が別途検証する．
+検索計画と事実抽出の非 streaming 通信は従来の
 120 秒の read timeout を維持する．
 
 同じ plan は不変の検索語と `submit_key` に結び付ける．同時呼び出しも直列化し，
@@ -84,6 +97,9 @@ HTTP 全体と InteractionEngine の LLM stage の経過時間制限を使わず
 通信失敗，EOF，deadline 超過，成功時，未指定または不正な plan ID では自動取消をしないため，
 一時的な接続障害の後も同じ plan を再利用できる．Runtime は Worker session が未投入の plan を
 cancel API だけで承認または投入しない．取消は best effort で，Manager 上の実際の状態は別途確認できる．
+取消は進行中の検索 poll の lock を待たずに送る．初回の投入応答が未着の場合も取消意図を保持し，
+同じ承認済み Job の idempotency key で ID を回復してから取り消す．新しい key の Job は作らない．
+取消を要求した計画からは，その後の事実抽出や成功回答を生成しない．
 
 ## 結果と信頼境界
 

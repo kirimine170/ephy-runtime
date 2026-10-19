@@ -60,6 +60,7 @@ func TestWorkerSearchHTTPJSONAndSSEOutliveOrdinaryClientAllowance(t *testing.T) 
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprint("stream=", stream), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
 				select {
 				case <-r.Context().Done():
 					return
@@ -152,6 +153,7 @@ func TestWorkerSearchExplicitCancellationReachesPlanOnce(t *testing.T) {
 						fmt.Fprint(w, `{}`)
 						return
 					}
+					_, _ = io.Copy(io.Discard, r.Body)
 					if stream {
 						w.Header().Set("Content-Type", "text/event-stream")
 						fmt.Fprint(w, ": waiting\n\n")
@@ -205,6 +207,7 @@ func TestWorkerSearchTransportFailuresAndInvalidPlansDoNotCancel(t *testing.T) {
 					fmt.Fprint(w, `{}`)
 					return
 				}
+				_, _ = io.Copy(io.Discard, r.Body)
 				entered <- struct{}{}
 				switch kind {
 				case "network":
