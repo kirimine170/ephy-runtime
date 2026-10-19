@@ -54,7 +54,7 @@ func conversationMessages(request ChatRequest) ([]GatewayMessage, error) {
 	return append(messages, GatewayMessage{Role: "user", Content: request.Prompt}), nil
 }
 
-func (a *App) postJSONContext(ctx context.Context, path string, payload any, out any) error {
+func (a *App) postJSONContext(ctx context.Context, path string, payload any, out any) (result error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -64,7 +64,11 @@ func (a *App) postJSONContext(ctx context.Context, path string, payload any, out
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	response, err := a.clientForPath(path).Do(request)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	defer func() { a.cancelWorkerSearchOnCallerCancel(ctx, path, payload, result) }()
+	response, err := a.clientForPayload(path, payload).Do(request)
 	if err != nil {
 		return err
 	}

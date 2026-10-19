@@ -5,9 +5,10 @@ import (
 	"time"
 )
 
-// Reasoning and continued answers share one finite generation allowance．
+// Ordinary reasoning and continued answers share one finite generation allowance．
 // Ordinary control requests keep their shorter timeout．Cancellation still
-// closes the active request immediately through its context．
+// closes the active request immediately through its context．Explicit planned
+// web searches select their context-only policy in clientForPayload．
 const generationTimeout = 10 * time.Minute
 
 func (a *App) clientForPath(path string) *http.Client {

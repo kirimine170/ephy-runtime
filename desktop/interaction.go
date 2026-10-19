@@ -50,7 +50,7 @@ type ResponsePlan struct {
 	Interruptible bool      `json:"interruptible"`
 }
 type InteractionSnapshot struct {
-	Sources            []SearchItem                  `json:"sources"`
+	Sources            []SearchItem                   `json:"sources"`
 	MemoryIDs          []string                       `json:"memory_ids,omitempty"`
 	ModelID            string                         `json:"model_id,omitempty"`
 	VoiceID            string                         `json:"voice_id,omitempty"`
@@ -406,6 +406,12 @@ func runInteractionStage[T any](ctx context.Context, timeout time.Duration, work
 	}
 	stage, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	return runInteractionContext(stage, work)
+}
+
+// A context-only generation still returns promptly when an adapter ignores
+// cancellation．Ordinary stages keep the finite wrapper above．
+func runInteractionContext[T any](stage context.Context, work func(context.Context) (T, error)) (T, error) {
 	type result struct {
 		value T
 		err   error
@@ -625,7 +631,7 @@ func (e *InteractionEngine) runGeneration(t *interactionTurn, prefix string) {
 			units++
 		}
 	}()
-	response, err := runInteractionStage(ctx, e.Timeouts.LLM, func(llmCtx context.Context) (*ChatResponse, error) {
+	response, err := runGenerationStage(ctx, e.Timeouts.LLM, req, func(llmCtx context.Context) (*ChatResponse, error) {
 		defer close(speech)
 		llmCtx = context.WithValue(llmCtx, interactionChatEventKey{}, func(chatEvent ChatStreamEvent) {
 			// Voice needs the same citation identity as typed answers. Keep

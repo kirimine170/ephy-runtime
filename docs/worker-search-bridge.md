@@ -47,13 +47,14 @@ Discord transport は承認 API を呼び出さない．
 ```
 
 通常の chat client は，検索が待機中でも同じ Gateway request 内で完了を待ち，
-従来どおりの JSON completion または SSE を受け取る．既存の Wails UI と
-Discord transport はこの経路を使い，ユーザーの追加返信は必要ない．
+従来どおりの JSON completion または SSE を受け取る．既存の Wails UI は
+この経路を使い，ユーザーの追加返信は必要ない．
 
 非同期の再照会に対応した client が明示的に `Prefer: respond-async` ヘッダーを送ると，
 短い待機時間 `worker_wait_seconds` を超えた場合に HTTP 202 と
 `{ "status": "pending", "job_id": "...", "plan_id": "...", ... }` を返す．
-呼び出し側は同じ chat payload，plan，ヘッダーを再送して自動的に完了を受け取る．
+新しい Discord transport はこのヘッダーを送り，同じ chat payload，plan，ヘッダーを
+再送して自動的に完了を受け取る．
 ユーザーの追加返信を待つ必要はない．この待機時間は Job の中止条件ではない．
 Manager の `worker_deadline_seconds` が検索実行の予算を制限する．
 Manager が `partial`／`failed`／`cancelled`／`lost` を返した場合は HTTP 502 の
@@ -71,6 +72,18 @@ plan はメモリ内の有限キャッシュで，未着手は `plan_ttl_seconds
 開始済み plan は検索 deadline と再照会猶予分だけ保持する．Gateway 再起動／設定 reload 後の
 自動再開は実装していない．Manager の Job は残るため，必要なら Manager から状態を照会する．
 `POST /v1/web-search/cancel` に `{ "plan_id": "..." }` を送ると，紐付く Job のキャンセルを要求できる．
+
+Wails の chat は，`web_search: true` と 32 桁の hexadecimal plan ID を指定した場合だけ，
+HTTP 全体と InteractionEngine の LLM stage の経過時間制限を使わず完了を待つ．
+これは通信の待機方針の選択であり，承認の証明ではない．plan の承認は常に Runtime が検証する．
+通常の chat，検索計画，音声処理などの有限 timeout は維持する．Manager の検索 deadline と
+モデルの streaming idle timeout も維持する．
+
+開始済みの上記 chat をユーザーが明示的にキャンセルした場合，Wails は同じ plan の cancel API を
+独立した 3 秒上限の context で 1 回だけ試みる．取消通信の失敗によって元のキャンセル結果を変えない．
+通信失敗，EOF，deadline 超過，成功時，未指定または不正な plan ID では自動取消をしないため，
+一時的な接続障害の後も同じ plan を再利用できる．Runtime は Worker session が未投入の plan を
+cancel API だけで承認または投入しない．取消は best effort で，Manager 上の実際の状態は別途確認できる．
 
 ## 結果と信頼境界
 
