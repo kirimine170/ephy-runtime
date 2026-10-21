@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from time import monotonic
@@ -55,6 +56,7 @@ class WorkerSearchSession:
     collection_timed_out: bool = False
     accepted_sources: list[dict] | None = None
     assigned_worker_id: str | None = None
+    progress_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
 
     def identity(self) -> dict:
         identity = {"provider": "worker", "contract": "0.4", "plan_id": self.plan_id,
@@ -230,6 +232,7 @@ class WorkerSearchProvider:
         return response
 
     def _validate_view(self, session: WorkerSearchSession, view: dict) -> None:
+        previous_progress = (session.job_id, session.state, session.assigned_worker_id)
         expected = session.submit
         job_id = view.get("job_id")
         if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", job_id):
@@ -256,8 +259,10 @@ class WorkerSearchProvider:
             if (state in {"running", "cancel_requested", "completed", "partial"} and actual_worker is None
                     or session.assigned_worker_id is not None and actual_worker != session.assigned_worker_id):
                 raise WorkerSearchError("worker_job_identity_mismatch", session=session)
-        elif state in {"running", "cancel_requested", "completed"} and actual_worker != expected["target_worker_id"]:
-            raise WorkerSearchError("worker_job_identity_mismatch", session=session)
+        elif state in {"running", "cancel_requested", "completed", "partial"} and actual_worker != expected["target_worker_id"]:
+            # Public search never accepts partial results; preserve its terminal failure code．
+            code = "worker_search_failed" if state == "partial" and expected["kind"] == "web.collect" else "worker_job_identity_mismatch"
+            raise WorkerSearchError(code, session=session)
         try:
             valid_times = all(type(view.get(key)) in {int, float} and math.isfinite(view[key])
                               for key in ("created_at", "deadline_at"))
@@ -272,6 +277,9 @@ class WorkerSearchProvider:
             session.assigned_worker_id = actual_worker
         if not session.cancel_acknowledged:
             session.state = state
+        if (session.progress_callback is not None
+                and previous_progress != (session.job_id, session.state, session.assigned_worker_id)):
+            session.progress_callback()
 
     async def search_job(self, session: WorkerSearchSession) -> list[dict]:
         try:

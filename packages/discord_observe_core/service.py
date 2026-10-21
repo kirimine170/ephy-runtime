@@ -7,6 +7,8 @@ import ipaddress
 import json
 import re
 from collections import Counter
+from collections.abc import Callable
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -32,6 +34,8 @@ from packages.web_search_core.worker_provider import WorkerSearchPending, _hash
 
 from .provider import DiscordObserveProvider, ObserveSession
 from .schemas import ObservePayload, ObserveRequest
+
+_model_progress: ContextVar[Callable[[], None] | None] = ContextVar("discord_observe_model_progress", default=None)
 
 
 class LocalObservationAdapter(LlamaCppChatAdapter):
@@ -74,6 +78,12 @@ class LocalObservationAdapter(LlamaCppChatAdapter):
                             if not isinstance(piece, str) or finished:
                                 raise ValueError("discord_analysis_stream_invalid")
                             content += piece
+                        delta = choice.get("delta", {})
+                        if (piece or any(isinstance(delta.get(key), str) and delta[key]
+                                         for key in ("reasoning_content", "reasoning"))):
+                            callback = _model_progress.get()
+                            if callback is not None:
+                                callback()
                         reason = choice.get("finish_reason")
                         if reason is not None:
                             if reason != "stop":
@@ -123,6 +133,23 @@ class ObservationRecord:
     response: dict | None = None
     active: int = 0
     task: asyncio.Task | None = None
+    progress_seq: int = 0
+    phase: str = "submitting"
+
+    def advance(self):
+        self.progress_seq += 1
+
+    def set_phase(self, phase):
+        if self.phase != phase:
+            self.phase = phase
+            self.advance()
+
+    def manager_progress(self):
+        self.phase = "collecting"
+        self.advance()
+
+    def progress_identity(self):
+        return {"progress_seq": self.progress_seq, "phase": self.phase}
 
 
 INSTRUCTIONS = """Discordのコミュニティ観測を日本語で要約します．一人称は「わたし」です．
@@ -192,6 +219,7 @@ class DiscordObserveService:
             raise ValueError("discord_observe_capacity_exceeded")
         record = ObservationRecord(request_hash, self._provider.new_observation(request),
             now + self._settings.worker_deadline_seconds + self._settings.plan_ttl_seconds)
+        record.session.progress_callback = record.manager_progress
         self._records[request.request_id] = record
         return record
 
@@ -209,19 +237,23 @@ class DiscordObserveService:
                 task.result()
                 if record.response is not None:
                     return 200, deepcopy(record.response)
-            return 202, {"discord_observe_status": {"status": "pending", **record.session.identity()}}
+            return 202, {"discord_observe_status": {"status": "pending", **record.session.identity(),
+                                                   **record.progress_identity()}}
 
     async def _run(self, record, request):
         record.active += 1
+        progress_token = _model_progress.set(record.advance)
         try:
             try:
                 payload = await self._provider.observe_job(record.session)
             except WorkerSearchPending:
                 return
             selected, omitted = self._select(payload, request.period_days)
+            record.set_phase("analyzing")
             analysis = await self._analyze(request, payload, selected)
+            record.set_phase("rendering")
             text = self._render(request, payload, selected, omitted, analysis)
-            status = {**record.session.identity(),
+            status = {**record.session.identity(), **record.progress_identity(),
                 "status": "completed" if payload.coverage.status == "complete" else "partial",
                 "analysis_status": "verified" if analysis is not None else "unverified",
                 "selected_messages": len(selected), "omitted_messages": omitted,
@@ -231,6 +263,7 @@ class DiscordObserveService:
                 "discord_observe_status": status}
             record.expires = monotonic() + self._settings.plan_ttl_seconds
         finally:
+            _model_progress.reset(progress_token)
             record.active -= 1
 
     def _select(self, payload, days):

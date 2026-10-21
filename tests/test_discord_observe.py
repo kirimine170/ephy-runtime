@@ -182,6 +182,23 @@ def test_pending_partial_resume_and_restart_input_stability(monkeypatch):
     asyncio.run(run())
 
 
+def test_explicit_partial_wrong_worker_never_reaches_private_analysis(monkeypatch):
+    async def run():
+        _, manager, adapter, _, service, client = setup(monkeypatch, target_worker_id="worker-explicit")
+        manager.state = "partial"
+        manager.actual_worker = "worker-other"
+        with pytest.raises(WorkerSearchError, match="worker_job_identity_mismatch"):
+            await service.observe(request())
+        assert not adapter.calls
+        assert service._records[REQUEST_ID].session.accepted_payload is None
+        manager.actual_worker = "worker-explicit"
+        status, response = await service.observe(request())
+        assert status == 200 and response["discord_observe_status"]["status"] == "partial"
+        assert len(adapter.calls) == len(manager.submissions) == 1
+        await client.aclose()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("mutation", [
     lambda data: data["messages"][0].update(permalink="https://example.com/unrelated"),
     lambda data: data["messages"][0].update(channel_id="99"),
@@ -455,6 +472,7 @@ def test_generation_remains_pending_without_an_overall_collection_deadline(monke
             polled_status, polled_body = await service.observe(request())
             polled = polled_body["discord_observe_status"]
             assert polled_status == 202 and polled["input_hash"] == pending["input_hash"]
+            assert polled["progress_seq"] == pending["progress_seq"] and polled["phase"] == "analyzing"
             assert record.task is not None and not record.task.done()
         release.set()
         await record.task
@@ -489,4 +507,109 @@ def test_local_adapter_consumes_sse_with_idle_timeout_and_requires_completion(co
             with pytest.raises(ValueError, match="stream_incomplete"):
                 await call
         await adapter.aclose()
+    asyncio.run(run())
+
+
+def test_streamed_progress_is_real_private_and_isolated_between_requests(monkeypatch):
+    async def run():
+        from packages.discord_observe_core import service as service_module
+        from packages.discord_observe_core.schemas import ObservePayload
+
+        _, _, _, real_provider, service, manager_client = setup(monkeypatch)
+        clock = [0.0]
+        monkeypatch.setattr(service_module, "monotonic", lambda: clock[0])
+        class Provider:
+            def new_observation(self, req):
+                return real_provider.new_observation(req)
+
+            async def observe_job(self, session):
+                if session.job_id is None:
+                    session.job_id = "job-progress-" + session.plan_id
+                    session.state = "completed"
+                    session.assigned_worker_id = "worker-a"
+                    session.progress_callback()
+                return ObservePayload.model_validate(payload(session.submit["input"]))
+
+            async def aclose(self):
+                pass
+        service._provider = Provider()
+        adapter = LocalObservationAdapter()
+        await adapter._client.aclose()
+        queues = {name: asyncio.Queue() for name in ("request-a", "request-b")}
+        class Stream(httpx.AsyncByteStream):
+            def __init__(self, queue):
+                self.queue = queue
+
+            async def __aiter__(self):
+                while True:
+                    item = await self.queue.get()
+                    if item is None:
+                        return
+                    chunk, acknowledged = item
+                    yield chunk
+                    acknowledged.set()
+        def respond(req):
+            body = json.loads(req.content)
+            query = json.loads(body["messages"][-1]["content"])["query"]
+            return httpx.Response(200, stream=Stream(queues[query]), headers={"content-type": "text/event-stream"})
+        adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False, follow_redirects=False)
+        service._adapter = adapter
+        service._owns_adapter = True
+        req_a = request(query="request-a")
+        req_b = req_a.model_copy(update={"request_id": str(int(REQUEST_ID) + 1), "query": "request-b"})
+        async def emit(name, delta=None, *, tail=False, comment=False):
+            if comment:
+                raw = b": heartbeat\n\n"
+            else:
+                event = {"choices": [{"delta": delta or {}, "finish_reason": "stop" if tail else None}]}
+                raw = ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n").encode()
+                if tail:
+                    raw += b"data: [DONE]\n\n"
+            acknowledged = asyncio.Event()
+            await queues[name].put((raw, acknowledged))
+            await acknowledged.wait()
+        try:
+            code_a, first_a = await service.observe(req_a)
+            code_b, first_b = await service.observe(req_b)
+            assert code_a == code_b == 202
+            record_a = service._records[req_a.request_id]
+            record_b = service._records[req_b.request_id]
+            first_a = first_a["discord_observe_status"]
+            first_b = first_b["discord_observe_status"]
+            assert first_a["phase"] == first_b["phase"] == "analyzing"
+            assert isinstance(first_a["progress_seq"], int) and first_a["progress_seq"] >= 0
+            await emit("request-b", {"content": "", "reasoning_content": ""})
+            await emit("request-b", comment=True)
+            assert record_b.progress_seq == first_b["progress_seq"]
+            clock[0] = 1200  # Total time exceeds the 600s idle window; actual work still advances．
+            await emit("request-a", {"reasoning_content": "private reasoning must never be returned"})
+            assert record_a.progress_seq > first_a["progress_seq"]
+            assert record_b.progress_seq == first_b["progress_seq"]
+            seq_a = record_a.progress_seq
+            await emit("request-b", {"reasoning": "private alternative reasoning field"})
+            assert record_b.progress_seq > first_b["progress_seq"] and record_a.progress_seq == seq_a
+            answer = json.dumps({"items": [], "opinion": "根拠を一緒に確認すると判断しやすいと思います．",
+                                 "proposal": "議論と合意を分けて整理するとよさそうです．"}, ensure_ascii=False)
+            clock[0] = 2400
+            await emit("request-a", {"content": answer})
+            assert record_a.progress_seq > seq_a
+            pending_code, pending = await service.observe(req_a)
+            assert pending_code == 202 and pending["discord_observe_status"]["phase"] == "analyzing"
+            assert pending["discord_observe_status"]["progress_seq"] == record_a.progress_seq
+            await emit("request-a", tail=True)
+            await queues["request-a"].put(None)
+            await record_a.task
+            await emit("request-b", {"content": answer})
+            await emit("request-b", tail=True)
+            await queues["request-b"].put(None)
+            await record_b.task
+            for req in (req_a, req_b):
+                code, response = await service.observe(req)
+                assert code == 200 and response["discord_observe_status"]["phase"] == "rendering"
+                assert response["discord_observe_status"]["analysis_status"] == "verified"
+                assert "private reasoning" not in json.dumps(response)
+                assert "private alternative" not in json.dumps(response)
+        finally:
+            await service.aclose()
+            await manager_client.aclose()
     asyncio.run(run())

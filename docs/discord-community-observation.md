@@ -17,3 +17,5 @@ Runtimeは設定したDiscordの範囲を`discord.observe` Jobで取得し，ロ
 回答は日本語，一人称「わたし」で，測定事実，議論の要点，確認した決定・task，推測，意見，提案を区別する．本文分析を検証できない場合も，実測値と慎重な見方・次の整理案を返す．履歴の欠損，本文の未取得，省略，期間，取得時点，スレッド対象外を示す．投稿件数は観測できた範囲の値で，コミュニティ全体の完全な活動量ではない．
 
 Runtimeはraw投稿をdiskへ保存せず，件数を制限した一時的なsession/cacheだけを持つ．Managerの共有保存と30日retentionが収集データの正本であり，Workerのローカル履歴には依存しない．サーバーmetadataと投稿集計の高度な分析，個人の専門性推定，Karte保存，管理操作は将来の別scopeである．
+
+202の`discord_observe_status`には非負整数の`progress_seq`と，`submitting`／`collecting`／`analyzing`／`rendering`の`phase`を付ける．番号が進むのは，検証したManagerのJob ID・状態・実Workerの変更，処理phaseの変更，または実際に届いた空でないローカルモデルの本文・reasoning deltaだけである．再照会や通信heartbeatだけでは番号を進めない．reasoningの本文は回答やprovenanceへ含めず，requestごとのcallbackをtask contextで分離する．Bridgeは既存の読み取りidle時間だけ進捗が止まれば明示的に失敗し，実際の生成が続く間は回答全体の時間や再照会回数を制限しない．明示的なWorker指定では，partial結果についても同じWorker IDであることを確認する．
