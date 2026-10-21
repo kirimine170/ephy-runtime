@@ -10,7 +10,9 @@ Runtimeは設定したDiscordの範囲を`discord.observe` Jobで取得し，ロ
 
 結果の型はWorkerのadditive contract 0.4 `ObservePayload`と対応する．schema参照SHA-256は`c3fc81f07a02fbc14573828a7b00e50385a33dceedab7355de0e85ea6377f02d`である．入力，Job，attempt，実Worker，usage，結果packのcanonical bytesとSHA-256，期間とscopeを検証する．`snapshot.channels`はguildのチャンネルmetadata全体で，本文の取得範囲は設定したsource channelだけである．
 
-推論はliteral loopback HTTP `/v1`の`llama_cpp`だけを許可し，環境proxyとredirectを使わない専用接続でSSEを読む．既存のmodelやprofile，ロード状態は変更しない．全体の生成timeoutは追加せず，600秒の読み取りidle timeoutを使う．生成中も202への再照会ができ，InferenceGateの保持によりmodel切替と競合させない．質問・投稿・前の回答は非信頼データであり，toolや新しい通信の権限にならない．
+推論はliteral loopback HTTP `/v1`の`llama_cpp`だけを許可し，環境proxyとredirectを使わない専用接続でSSEを読む．既存のmodelやprofile，ロード状態は変更しない．全体の生成timeoutは追加せず，600秒の読み取りidle timeoutと，実際の空でない本文・reasoning deltaから測る単調時計のidle監視を使う．コメント，空delta，usage，未完のSSE frameなどの受信だけでは実進捗の期限を延ばさない．実進捗が続く限り，合計の生成時間は制限しない．idle時はストリームを閉じ，InferenceGateとrequest taskを解放する．生成中も202への再照会ができ，InferenceGateの保持によりmodel切替と競合させない．質問・投稿・前の回答は非信頼データであり，toolや新しい通信の権限にならない．
+
+モデルのidle・通信失敗は，200で取得済みの測定事実・慎重な見方・提案を含む部分回答を返す．`discord_observe_status`は`status: partial`，`analysis_status: unverified`，`analysis_outcome: failed`とし，`analysis_error.code`に`discord_analysis_idle_timeout`，`llm_timeout`，`llm_transport_eof`，`backend_unavailable`の固定値を返す．収集自体の状態は`coverage.status`に保持する．本文にも分析失敗と部分回答である旨を明示し，backendの詳細やreasoning本文は返さない．同じrequestへの再照会はこの結果を返し，Jobや推論を重複実行しない．モデル設定の不適合や根拠・出力形式を検証できない場合は，従来の`unverified`として扱う．
 
 本文は新しい順に，設定した件数・文字数内の全文を選ぶ．欠損または途中省略された本文は分析へ使わず，省略件数を回答に示す．要約の根拠は既知の投稿IDと完全一致する引用へ結び付ける．これは参照整合性の検証であり，要約の意味の正確性を証明するものではない．明示的な決定・taskにだけ確認表現を要求し，担当者・期限は根拠の引用に完全一致する場合に限る．未回答・未完了は観測範囲の推測として示す．
 

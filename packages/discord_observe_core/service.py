@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from packages.llm_runtime.adapter import LlamaCppChatAdapter
+from packages.llm_runtime.adapter import BackendStreamError, LlamaCppChatAdapter
 from packages.llm_runtime.schemas import (
     ChatCompletionRequest,
     ChatMessage,
@@ -39,6 +39,8 @@ _model_progress: ContextVar[Callable[[], None] | None] = ContextVar("discord_obs
 
 
 class LocalObservationAdapter(LlamaCppChatAdapter):
+    _REAL_DELTA_IDLE_SECONDS = 600
+
     def __init__(self):
         # No redirects or environment proxies can move private inference off loopback．
         self._stream_timeout = httpx.Timeout(connect=10, read=600, write=30, pool=30)
@@ -51,8 +53,22 @@ class LocalObservationAdapter(LlamaCppChatAdapter):
         decoder = codecs.getincrementaldecoder("utf-8")()
         buffer, content, finished, done = "", "", False, False
         stream = self.stream_chat_completion(model_config=model_config, request_payload=request_payload)
+        deadline = monotonic() + self._REAL_DELTA_IDLE_SECONDS
         try:
-            async for chunk in stream:
+            while True:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise BackendStreamError("discord_analysis_idle_timeout", "timeout")
+                try:
+                    async with asyncio.timeout(remaining):
+                        chunk = await anext(stream)
+                except StopAsyncIteration:
+                    break
+                except TimeoutError as exc:
+                    raise BackendStreamError("discord_analysis_idle_timeout", "timeout") from exc
+                # Receiving bytes alone must not renew an inactive model's lease．
+                if monotonic() >= deadline:
+                    raise BackendStreamError("discord_analysis_idle_timeout", "timeout")
                 buffer += decoder.decode(chunk)
                 buffer = buffer.replace("\r\n", "\n")
                 while "\n\n" in buffer:
@@ -81,6 +97,7 @@ class LocalObservationAdapter(LlamaCppChatAdapter):
                         delta = choice.get("delta", {})
                         if (piece or any(isinstance(delta.get(key), str) and delta[key]
                                          for key in ("reasoning_content", "reasoning"))):
+                            deadline = monotonic() + self._REAL_DELTA_IDLE_SECONDS
                             callback = _model_progress.get()
                             if callback is not None:
                                 callback()
@@ -250,14 +267,29 @@ class DiscordObserveService:
                 return
             selected, omitted = self._select(payload, request.period_days)
             record.set_phase("analyzing")
-            analysis = await self._analyze(request, payload, selected)
+            analysis_error = None
+            try:
+                analysis = await self._analyze(request, payload, selected)
+            except BackendStreamError as exc:
+                analysis = None
+                analysis_error = exc.code if exc.code in {
+                    "discord_analysis_idle_timeout", "llm_timeout", "llm_transport_eof", "backend_unavailable"
+                } else "backend_unavailable"
             record.set_phase("rendering")
             text = self._render(request, payload, selected, omitted, analysis)
+            if analysis_error:
+                reason = ("ローカルモデルの出力が一定時間進まなかったため" if analysis_error in {
+                    "discord_analysis_idle_timeout", "llm_timeout"
+                } else "ローカルモデルとの通信に失敗したため")
+                text += (f"\n\n{reason}，本文の分析に失敗しました．取得できた測定事実と，"
+                         "それに基づくわたしの見方・提案を部分回答として返しています．")
             status = {**record.session.identity(), **record.progress_identity(),
-                "status": "completed" if payload.coverage.status == "complete" else "partial",
+                "status": "completed" if payload.coverage.status == "complete" and not analysis_error else "partial",
                 "analysis_status": "verified" if analysis is not None else "unverified",
                 "selected_messages": len(selected), "omitted_messages": omitted,
                 "coverage": payload.coverage.model_dump(mode="json")}
+            if analysis_error:
+                status.update(analysis_outcome="failed", analysis_error={"code": analysis_error})
             record.response = {"object": "chat.completion", "choices": [{"index": 0,
                 "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
                 "discord_observe_status": status}
@@ -342,6 +374,8 @@ class DiscordObserveService:
             analysis.opinion = safe_prose(analysis.opinion)
             analysis.proposal = safe_prose(analysis.proposal)
             return analysis
+        except BackendStreamError:
+            raise
         except (ValueError, ValidationError, RuntimeError, KeyError, IndexError, TypeError):
             return None
 

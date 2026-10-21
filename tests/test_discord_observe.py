@@ -581,13 +581,18 @@ def test_streamed_progress_is_real_private_and_isolated_between_requests(monkeyp
             await emit("request-b", {"content": "", "reasoning_content": ""})
             await emit("request-b", comment=True)
             assert record_b.progress_seq == first_b["progress_seq"]
-            clock[0] = 1200  # Total time exceeds the 600s idle window; actual work still advances．
+            clock[0] = 500
             await emit("request-a", {"reasoning_content": "private reasoning must never be returned"})
             assert record_a.progress_seq > first_a["progress_seq"]
             assert record_b.progress_seq == first_b["progress_seq"]
             seq_a = record_a.progress_seq
             await emit("request-b", {"reasoning": "private alternative reasoning field"})
             assert record_b.progress_seq > first_b["progress_seq"] and record_a.progress_seq == seq_a
+            # Real deltas arrive within each idle window，over many total windows．
+            for moment in (1000, 1500, 2000):
+                clock[0] = moment
+                await emit("request-a", {"reasoning_content": "private reasoning"})
+                await emit("request-b", {"reasoning": "private alternative reasoning"})
             answer = json.dumps({"items": [], "opinion": "根拠を一緒に確認すると判断しやすいと思います．",
                                  "proposal": "議論と合意を分けて整理するとよさそうです．"}, ensure_ascii=False)
             clock[0] = 2400
@@ -609,6 +614,83 @@ def test_streamed_progress_is_real_private_and_isolated_between_requests(monkeyp
                 assert response["discord_observe_status"]["analysis_status"] == "verified"
                 assert "private reasoning" not in json.dumps(response)
                 assert "private alternative" not in json.dumps(response)
+        finally:
+            await service.aclose()
+            await manager_client.aclose()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(("failure", "expected_code"), [
+    ("comment", "discord_analysis_idle_timeout"),
+    ("empty_delta", "discord_analysis_idle_timeout"),
+    ("usage", "discord_analysis_idle_timeout"),
+    ("partial_frame", "discord_analysis_idle_timeout"),
+    ("no_bytes", "discord_analysis_idle_timeout"),
+    ("read_timeout", "llm_timeout"),
+    ("transport_eof", "llm_transport_eof"),
+])
+def test_failed_stream_returns_measured_partial_facts_and_releases_gate(monkeypatch, failure, expected_code):
+    async def run():
+        from packages.discord_observe_core import service as service_module
+
+        _, manager, _, _, service, manager_client = setup(monkeypatch)
+        clock = [0.0]
+        monkeypatch.setattr(service_module, "monotonic", lambda: clock[0])
+        service._gate = InferenceGate()
+        adapter = LocalObservationAdapter()
+        await adapter._client.aclose()
+        if failure == "no_bytes":
+            adapter._REAL_DELTA_IDLE_SECONDS = 0.01
+        calls, closed, sequences = [], [], []
+        class Stream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                if failure == "no_bytes":
+                    await asyncio.Event().wait()
+                if failure == "read_timeout":
+                    raise httpx.ReadTimeout("private backend diagnostic")
+                if failure == "transport_eof":
+                    raise httpx.RemoteProtocolError("private backend diagnostic")
+                chunk = {
+                    "comment": b": heartbeat\n\n",
+                    "empty_delta": b'data: {"choices":[{"delta":{"content":"","reasoning_content":"","reasoning":""}}]}\n\n',
+                    "usage": b'data: {"choices":[],"usage":{"completion_tokens":3}}\n\n',
+                    "partial_frame": b": incomplete heartbeat",
+                }[failure]
+                for moment in (200, 400, 601):
+                    clock[0] = moment
+                    sequences.append(service._records[REQUEST_ID].progress_seq)
+                    yield chunk
+                    await asyncio.sleep(0)
+                pytest.fail("bytes without real deltas must not keep inference alive")
+
+            async def aclose(self):
+                closed.append(True)
+        def respond(req):
+            calls.append(req)
+            return httpx.Response(200, stream=Stream(), headers={"content-type": "text/event-stream"})
+        adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False, follow_redirects=False)
+        service._adapter, service._owns_adapter = adapter, True
+        try:
+            code, response = await service.observe(request())
+            record = service._records[REQUEST_ID]
+            if code == 202:
+                await asyncio.wait_for(record.task, timeout=2)
+                code, response = await service.observe(request())
+            status = response["discord_observe_status"]
+            text = response["choices"][0]["message"]["content"]
+            assert code == 200 and status["status"] == "partial"
+            assert status["coverage"]["status"] == "complete"
+            assert status["analysis_status"] == "unverified" and status["analysis_outcome"] == "failed"
+            assert status["analysis_error"] == {"code": expected_code}
+            assert "分析に失敗" in text and "部分回答" in text and "投稿2件" in text
+            assert "わたしの見方" in text and "進め方の提案" in text and "private backend" not in json.dumps(response)
+            assert closed and service._gate.active == record.active == 0
+            assert record.task is None or record.task.done()
+            assert not sequences or len(set(sequences)) == 1
+            transition = service._gate.begin()
+            service._gate.end(transition)
+            assert await service.observe(request()) == (code, response)
+            assert len(manager.submissions) == len(calls) == 1
         finally:
             await service.aclose()
             await manager_client.aclose()
