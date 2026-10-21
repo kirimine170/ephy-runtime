@@ -6,8 +6,7 @@ from typing import Literal, Mapping
 from uuid import UUID
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT_DIR / "configs"
@@ -84,6 +83,32 @@ class WebSearchConfig(BaseModel):
     max_plans: int = Field(default=256, ge=1, le=4096)
 
 
+class DiscordObserveConfig(WebSearchConfig):
+    """Opt-in private Discord observation; credentials never live in YAML．"""
+
+    target_worker_id: str = Field(default="auto", pattern=r"^[A-Za-z0-9._-]{1,128}$")
+    worker_response_bytes: int = Field(default=8 * 1024 * 1024, ge=1024, le=8 * 1024 * 1024)
+    guild_id: str = Field(default="", pattern=r"^(|[1-9][0-9]{0,19})$")
+    channel_ids: list[str] = Field(default_factory=list, max_length=30)
+    max_messages_per_channel: int = Field(default=1000, ge=1, le=1000)
+    answer_model: Literal["fast", "work"] = "work"
+    selection_messages: int = Field(default=80, ge=1, le=200)
+    selection_chars: int = Field(default=24000, ge=1000, le=64000)
+
+    @model_validator(mode="after")
+    def validate_scope(self):
+        ids = [self.guild_id, *self.channel_ids]
+        if any(value and (not value.isascii() or not value.isdecimal() or value.startswith("0")
+                         or int(value) > 2**64 - 1) for value in ids):
+            raise ValueError("discord_observe_invalid_scope")
+        if (len(self.channel_ids) != len(set(self.channel_ids)) or any(not value for value in self.channel_ids)
+                or len(self.channel_ids) * self.max_messages_per_channel > 2000):
+            raise ValueError("discord_observe_invalid_scope")
+        if self.enabled and (not self.guild_id or not self.channel_ids):
+            raise ValueError("discord_observe_scope_required")
+        return self
+
+
 class EphyRuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +140,7 @@ class AppConfig(BaseModel):
     rag: RagConfig = Field(default_factory=RagConfig)
     vector_db: VectorDBConfig = Field(default_factory=VectorDBConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    discord_observe: DiscordObserveConfig = Field(default_factory=DiscordObserveConfig)
     ephy: EphyRuntimeConfig = Field(default_factory=EphyRuntimeConfig)
 
 
@@ -174,6 +200,7 @@ def load_app_config() -> AppConfig:
     rag_payload = _load_yaml_with_optional_local("rag")
     web_payload = _load_optional_yaml_with_optional_local("web")
     ephy_payload = _load_optional_yaml_with_optional_local("ephy")
+    discord_payload = _load_optional_yaml_with_optional_local("discord-observe")
     if os.getenv("LOCAL_LLM_WORKBENCH_DISABLE_LOCAL_CONFIG") != "1":
         from packages.model_registry.service import ModelRegistry
 
@@ -187,6 +214,7 @@ def load_app_config() -> AppConfig:
         vector_db=rag_payload.get("vector_db", {}),
         web_search=web_payload.get("web_search", {}),
         ephy=ephy_payload.get("ephy", {}),
+        discord_observe=discord_payload.get("discord_observe", {}),
     )
 
 

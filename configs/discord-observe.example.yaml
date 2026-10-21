@@ -1,0 +1,14 @@
+discord_observe:
+  enabled: false
+  manager_url: http://127.0.0.1:8321
+  manager_credential_env: EPHY_MANAGER_REQUESTER_CREDENTIAL
+  target_worker_id: auto
+  # Synthetic examples; replace with the configured guild and source channels．
+  guild_id: "100000000000000001"
+  channel_ids: ["100000000000000002", "100000000000000003"]
+  max_messages_per_channel: 1000
+  worker_wait_seconds: 8
+  worker_deadline_seconds: 600
+  answer_model: work
+  selection_messages: 80
+  selection_chars: 24000

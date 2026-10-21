@@ -1,28 +1,31 @@
-from contextlib import asynccontextmanager
 import hashlib
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 
 from packages.config_core.loader import load_app_config, reload_app_config
-from packages.eval_core.runner import EvalRunner
-from packages.eval_core.preference_store import PreferenceStore
+from packages.discord_observe_core.service import DiscordObserveService
 from packages.eval_core.preference_service import PreferenceService
+from packages.eval_core.preference_store import PreferenceStore
 from packages.eval_core.resident_service import ResidentService
-from packages.llm_runtime.adapter import LlamaCppChatAdapter
+from packages.eval_core.runner import EvalRunner
 from packages.identity_core.service import IdentityService
-from packages.karte_core.conversation import KarteConversationService
 from packages.karte_core.context import KarteContextClient
-from packages.prompt_core.loader import PromptManager
+from packages.karte_core.conversation import KarteConversationService
+from packages.llm_runtime.adapter import LlamaCppChatAdapter
 from packages.profile_core.runtime import load_ephy_context
+from packages.prompt_core.loader import PromptManager
 from packages.rag_core.service import RagService
 from packages.router_core.router import ModelRouter
 from packages.web_search_core.service import WebSearchService
-from .routes import build_router
-from .resident_routes import ResidentPrivacyMiddleware, resident_router
-from .resident_participation import participation_router
+
+from .discord_observe_routes import discord_observe_router
 from .model_transition import InferenceGate, InferenceGateMiddleware, transition_router
+from .resident_participation import participation_router
+from .resident_routes import ResidentPrivacyMiddleware, resident_router
+from .routes import build_router
 
 
 def initialize_app_state(app: FastAPI, config) -> None:
@@ -47,6 +50,9 @@ def initialize_app_state(app: FastAPI, config) -> None:
             adapter=app.state.chat_adapter,
         ),
         "web_search_service": WebSearchService(config=config, adapter=app.state.chat_adapter),
+        "discord_observe_service": (DiscordObserveService(config, prompt_manager=prompt_manager,
+                                                         inference_gate=app.state.inference_gate)
+                                    if config.discord_observe.enabled else None),
         "karte_conversation_service": KarteConversationService.from_environment(
             context_client=karte_context_client,
         ),
@@ -69,10 +75,13 @@ def initialize_app_state(app: FastAPI, config) -> None:
 
 async def reload_gateway_state(app: FastAPI) -> None:
     existing = getattr(app.state, "web_search_service", None)
+    previous_observe = getattr(app.state, "discord_observe_service", None)
     config = reload_app_config()
     initialize_app_state(app, config)
     if existing is not None:
         await existing.aclose()
+    if previous_observe is not None:
+        await previous_observe.aclose()
 
 
 @asynccontextmanager
@@ -82,6 +91,7 @@ async def lifespan(app: FastAPI):
     app.state.ephy_context = None
     app.state.inference_gate = InferenceGate()
     app.state.web_search_service = None
+    app.state.discord_observe_service = None
     try:
         initialize_app_state(app, load_app_config())
         app.state.reload_gateway_state = lambda: reload_gateway_state(app)
@@ -89,11 +99,14 @@ async def lifespan(app: FastAPI):
     finally:
         if app.state.web_search_service is not None:
             await app.state.web_search_service.aclose()
+        if app.state.discord_observe_service is not None:
+            await app.state.discord_observe_service.aclose()
         await adapter.aclose()
 
 
 app = FastAPI(title="Local LLM Workbench Gateway", version="0.1.0", lifespan=lifespan)
 app.include_router(build_router())
+app.include_router(discord_observe_router)
 app.include_router(resident_router)
 app.include_router(participation_router)
 app.include_router(transition_router)

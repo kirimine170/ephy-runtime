@@ -54,11 +54,15 @@ class WorkerSearchSession:
     collection_deadline: float | None = None
     collection_timed_out: bool = False
     accepted_sources: list[dict] | None = None
+    assigned_worker_id: str | None = None
 
     def identity(self) -> dict:
-        return {"provider": "worker", "contract": "0.4", "plan_id": self.plan_id,
+        identity = {"provider": "worker", "contract": "0.4", "plan_id": self.plan_id,
                 "job_id": self.job_id, "worker_id": self.submit["target_worker_id"],
                 "input_hash": self.input_hash, "state": self.state}
+        if self.submit["target_worker_id"] == "auto":
+            identity.update(target_worker_id="auto", worker_id=self.assigned_worker_id)
+        return identity
 
 
 class _Wire(BaseModel):
@@ -238,13 +242,21 @@ class WorkerSearchProvider:
         budget = view.get("budget")
         if not isinstance(budget, dict) or any(budget.get(key) != value for key, value in expected["budget"].items()):
             raise WorkerSearchError("worker_job_identity_mismatch", session=session)
-        if (view.get("mode") != "search" or view.get("input_hash") != session.input_hash
+        if (view.get("mode") != expected["input"]["mode"] or view.get("input_hash") != session.input_hash
                 or _hash(view["input"]) != session.input_hash):
             raise WorkerSearchError("worker_job_identity_mismatch", session=session)
         state = view.get("state")
         if state not in {"queued", "running", "cancel_requested", "completed", "partial", "failed", "cancelled", "lost"}:
             raise WorkerSearchError("worker_job_invalid_state", session=session)
-        if state in {"running", "cancel_requested", "completed"} and view.get("worker_id") != expected["target_worker_id"]:
+        actual_worker = view.get("worker_id")
+        if expected["target_worker_id"] == "auto":
+            if (actual_worker is not None and (not isinstance(actual_worker, str)
+                    or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", actual_worker) or actual_worker == "auto")):
+                raise WorkerSearchError("worker_job_identity_mismatch", session=session)
+            if (state in {"running", "cancel_requested", "completed", "partial"} and actual_worker is None
+                    or session.assigned_worker_id is not None and actual_worker != session.assigned_worker_id):
+                raise WorkerSearchError("worker_job_identity_mismatch", session=session)
+        elif state in {"running", "cancel_requested", "completed"} and actual_worker != expected["target_worker_id"]:
             raise WorkerSearchError("worker_job_identity_mismatch", session=session)
         try:
             valid_times = all(type(view.get(key)) in {int, float} and math.isfinite(view[key])
@@ -256,6 +268,8 @@ class WorkerSearchProvider:
         if not math.isclose(view["deadline_at"] - view["created_at"], expected["deadline_seconds"], abs_tol=0.01):
             raise WorkerSearchError("worker_job_identity_mismatch", session=session)
         session.job_id = job_id
+        if expected["target_worker_id"] == "auto" and actual_worker is not None:
+            session.assigned_worker_id = actual_worker
         if not session.cancel_acknowledged:
             session.state = state
 
